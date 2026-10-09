@@ -4,7 +4,15 @@
 CC      = $(HOME)/opt/amiga/bin/m68k-amigaos-gcc
 CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -Wall -Wno-pointer-sign
 
-all: test
+all: CTerm test
+
+CTerm: src/main.c src/vt.c src/vt.h src/boxtable.h
+	$(CC) $(CFLAGS) src/main.c src/vt.c -o CTerm
+
+# Onto the A1200, through Wasabi.
+deploy: CTerm
+	wasabi mkdir Work:Utils/CTerm 2>/dev/null || true
+	wasabi put CTerm Work:Utils/CTerm/CTerm
 
 # The core on the PC, against pyte (needs: python3 -m venv .venv &&
 # .venv/bin/pip install pyte).
