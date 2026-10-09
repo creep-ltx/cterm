@@ -35,6 +35,8 @@
 #include <proto/asl.h>
 #include <proto/diskfont.h>
 #include <proto/ttengine.h>
+#include <cybergraphx/cybergraphics.h>
+#include <proto/cybergraphics.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -46,8 +48,9 @@
 
 #include "vt.h"
 #include "boxtable.h"
+#include "console.h"
 
-static const char version[] = "$VER: CTerm 0.2b1 (9.10.2026)";
+static const char version[] = "$VER: CTerm 0.3b1 (10.10.2026)";
 
 struct Library *SocketBase;
 struct Library *KeymapBase;
@@ -55,6 +58,7 @@ struct Library *GadToolsBase;
 struct Library *AslBase;
 struct Library *DiskfontBase;
 struct Library *TTEngineBase;
+struct Library *CyberGfxBase;
 
 void __chkabort(void) {}
 
@@ -109,7 +113,7 @@ static int scrmode = SCR_WB, owndepth = 8;
 static BOOL fullscreen, scrollbar = TRUE;
 static struct Screen *ownscr, *scr;
 static struct DrawInfo *dri;
-static struct Window *win;
+struct Window *win;                     /* console.c hands it to More/Ed */
 static struct RastPort *rp;
 static struct TextFont *font, *ownfont;
 static char fontname[48];
@@ -131,6 +135,10 @@ static int want_mode, want_depth;
 static BOOL want_full, want_bar;
 
 static Vt *vt;
+static BOOL local = TRUE;               /* the Amiga Shell, not the PC */
+static LONG want_cols = 80, want_rows = 25; /* the first window, in cells */
+static BOOL quitting;
+static BOOL owed;                       /* drawing owed: a frame timer runs */
 static int back;                        /* lines scrolled back */
 static int curx = -1, cury = -1;        /* where the cursor was drawn */
 
@@ -179,12 +187,24 @@ static void release_pens(void)
 }
 
 /* What a cell's colours come to, as RGB. */
+/* Amiga programs mean Workbench pens by colours 0-7 (Ed's text is pen 1,
+ * "black"): in the local Shell they follow the window's own colours -
+ * background, text, highlight, accent - not ANSI's. */
+static ULONG pen_rgb(int i)
+{
+    static const ULONG wb[8] = { 0, 0, 0xFFFFFF, 0x88C0D0, 0x4C566A,
+                                 0xB48EAD, 0xA3BE8C, 0xEBCB8B };
+    if (local && i < 8)
+        return i == 0 ? defbg : i == 1 ? deffg : wb[i];
+    return index_rgb(i);
+}
+
 static void cell_rgb(const VtCell *c, ULONG *fg, ULONG *bg)
 {
     ULONG f = c->fg == VT_DEFAULT ? deffg : VT_IS_INDEX(c->fg)
-            ? index_rgb(c->fg & 255) : c->fg & 0xFFFFFF;
+            ? pen_rgb(c->fg & 255) : c->fg & 0xFFFFFF;
     ULONG b = c->bg == VT_DEFAULT ? defbg : VT_IS_INDEX(c->bg)
-            ? index_rgb(c->bg & 255) : c->bg & 0xFFFFFF;
+            ? pen_rgb(c->bg & 255) : c->bg & 0xFFFFFF;
     BOOL inv = (c->attr & VT_INVERSE) != 0;
     if (vt_reverse_video(vt))
         inv = !inv;
@@ -203,14 +223,47 @@ static void cell_rgb(const VtCell *c, ULONG *fg, ULONG *bg)
 
 /* ---- characters a bitmap font does not have -------------------------- */
 
+/* Drawing either into the window, or into a cell picture in memory (the
+ * painter's letter cache): the shapes below draw through these two. */
+static BOOL painter;                    /* rows built in memory (RTG) */
+static ULONG *cellbuf;                  /* non-NULL: painting a cell */
+static int cellw;                       /* its row length in pixels */
+static ULONG cellcol;
+
+static void RF(int x0, int y0, int x1, int y1)
+{
+    int x, y;
+    if (!cellbuf) {
+        RectFill(rp, x0, y0, x1, y1);
+        return;
+    }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= cellw) x1 = cellw - 1;
+    if (y1 >= ch) y1 = ch - 1;
+    for (y = y0; y <= y1; y++) {
+        ULONG *p = cellbuf + y * cellw + x0;
+        for (x = x0; x <= x1; x++)
+            *p++ = cellcol;
+    }
+}
+
+static void SETCOL(ULONG rgb)
+{
+    if (cellbuf)
+        cellcol = rgb;
+    else
+        SetAPen(rp, pen_for(rgb));
+}
+
 static void hline(int x0, int x1, int y, int th)
 {
-    RectFill(rp, x0, y, x1, y + th - 1);
+    RF(x0, y, x1, y + th - 1);
 }
 
 static void vline(int x, int y0, int y1, int th)
 {
-    RectFill(rp, x, y0, x + th - 1, y1);
+    RF(x, y0, x + th - 1, y1);
 }
 
 /* Box drawing: four arms from the middle of the cell to its edges -
@@ -238,12 +291,12 @@ static void draw_box(UBYTE arms, int x, int y)
         for (k = 0; k < n; k++) {
             int o = off[k];
             switch (i) {
-            case 0: RectFill(rp, cx + o, y, cx + o + th - 1, cy + reach); break;
-            case 2: RectFill(rp, cx + o, cy - reach, cx + o + th - 1,
+            case 0: RF(cx + o, y, cx + o + th - 1, cy + reach); break;
+            case 2: RF(cx + o, cy - reach, cx + o + th - 1,
                              y + ch - 1); break;
-            case 1: RectFill(rp, cx - reach, cy + o, x + cw - 1,
+            case 1: RF(cx - reach, cy + o, x + cw - 1,
                              cy + o + th - 1); break;
-            case 3: RectFill(rp, x, cy + o, cx + reach, cy + o + th - 1); break;
+            case 3: RF(x, cy + o, cx + reach, cy + o + th - 1); break;
             }
         }
     }
@@ -256,32 +309,32 @@ static void draw_block(ULONG cp, int x, int y, ULONG fg, ULONG bg)
     static const UBYTE quads[16] = {     /* 2596..259F: UL UR LL LR bits */
         2, 1, 8, 8 | 2 | 1, 8 | 1, 8 | 4 | 2, 8 | 4 | 1, 4, 4 | 2, 4 | 2 | 1
     };
-    if (cp == 0x2580) { RectFill(rp, x, y, x + cw - 1, y + hh - 1); return; }
+    if (cp == 0x2580) { RF(x, y, x + cw - 1, y + hh - 1); return; }
     if (cp >= 0x2581 && cp <= 0x2588) {          /* lower eighths */
         i = (cp - 0x2580) * ch / 8;
-        RectFill(rp, x, y + ch - i, x + cw - 1, y + ch - 1);
+        RF(x, y + ch - i, x + cw - 1, y + ch - 1);
         return;
     }
     if (cp >= 0x2589 && cp <= 0x258F) {          /* left eighths */
         i = (0x2590 - cp) * cw / 8;
-        RectFill(rp, x, y, x + i - 1, y + ch - 1);
+        RF(x, y, x + i - 1, y + ch - 1);
         return;
     }
-    if (cp == 0x2590) { RectFill(rp, x + hw, y, x + cw - 1, y + ch - 1); return; }
+    if (cp == 0x2590) { RF(x + hw, y, x + cw - 1, y + ch - 1); return; }
     if (cp >= 0x2591 && cp <= 0x2593) {          /* shades: blended */
-        SetAPen(rp, pen_for(mix(bg, fg, (int)(cp - 0x2590) * 25)));
-        RectFill(rp, x, y, x + cw - 1, y + ch - 1);
+        SETCOL(mix(bg, fg, (int)(cp - 0x2590) * 25));
+        RF(x, y, x + cw - 1, y + ch - 1);
         return;
     }
-    if (cp == 0x2594) { RectFill(rp, x, y, x + cw - 1, y + ch / 8); return; }
-    if (cp == 0x2595) { RectFill(rp, x + cw - cw / 8 - 1, y, x + cw - 1,
+    if (cp == 0x2594) { RF(x, y, x + cw - 1, y + ch / 8); return; }
+    if (cp == 0x2595) { RF(x + cw - cw / 8 - 1, y, x + cw - 1,
                                  y + ch - 1); return; }
     if (cp >= 0x2596) {
         UBYTE q = quads[cp - 0x2596];          /* 8 UL, 4 UR, 2 LL, 1 LR */
-        if (q & 8) RectFill(rp, x, y, x + hw - 1, y + hh - 1);
-        if (q & 4) RectFill(rp, x + hw, y, x + cw - 1, y + hh - 1);
-        if (q & 2) RectFill(rp, x, y + hh, x + hw - 1, y + ch - 1);
-        if (q & 1) RectFill(rp, x + hw, y + hh, x + cw - 1, y + ch - 1);
+        if (q & 8) RF(x, y, x + hw - 1, y + hh - 1);
+        if (q & 4) RF(x + hw, y, x + cw - 1, y + hh - 1);
+        if (q & 2) RF(x, y + hh, x + hw - 1, y + ch - 1);
+        if (q & 1) RF(x + hw, y + hh, x + cw - 1, y + ch - 1);
     }
 }
 
@@ -292,7 +345,7 @@ static void disc(int cx, int cy, int r, BOOL leftonly)
         int dx = 0;
         while ((dx + 1) * (dx + 1) + dy * dy <= r * r + r)
             dx++;
-        RectFill(rp, cx - dx, cy + dy, leftonly ? cx : cx + dx, cy + dy);
+        RF(cx - dx, cy + dy, leftonly ? cx : cx + dx, cy + dy);
     }
 }
 
@@ -306,51 +359,50 @@ static BOOL draw_shape(ULONG cp, int x, int y)
         return TRUE;
     case 0x25D0: case 0x25D1: case 0x25D2: case 0x25D3:  /* ◐ spinner */
         disc(cx, cy, r, TRUE);
-        Move(rp, cx + r, cy);
         return TRUE;
     case 0x25CB: case 0x25EF:                            /* ○ */
         disc(cx, cy, r, FALSE);
         return TRUE;
     case 0x25B6: case 0x23F5: case 0x25B8: case 0x25BA:  /* ▶ ⏵ */
         for (i = 0; i <= r; i++)
-            RectFill(rp, cx - r / 2, cy - (r - i), cx - r / 2 + i, cy + (r - i));
+            RF(cx - r / 2, cy - (r - i), cx - r / 2 + i, cy + (r - i));
         return TRUE;
     case 0x276F: case 0x203A: case 0x276D:               /* ❯ */
         for (i = 0; i <= r; i++) {
-            RectFill(rp, cx - r / 2 + i, cy - r + i, cx - r / 2 + i + 1,
+            RF(cx - r / 2 + i, cy - r + i, cx - r / 2 + i + 1,
                      cy - r + i);
-            RectFill(rp, cx - r / 2 + i, cy + r - i, cx - r / 2 + i + 1,
+            RF(cx - r / 2 + i, cy + r - i, cx - r / 2 + i + 1,
                      cy + r - i);
         }
         return TRUE;
     case 0x2026:                                         /* … */
         for (i = 0; i < 3; i++)
-            RectFill(rp, x + 1 + i * (cw - 2) / 3, y + cbase - 1,
+            RF(x + 1 + i * (cw - 2) / 3, y + cbase - 1,
                      x + 1 + i * (cw - 2) / 3, y + cbase - 1);
         return TRUE;
     case 0x2193: case 0x2191:                            /* ↓ ↑ */
         vline(cx, y + 1, y + ch - 2, 1);
         for (i = 1; i <= r; i++) {
             int yy = cp == 0x2193 ? y + ch - 2 - i : y + 1 + i;
-            RectFill(rp, cx - i, yy, cx + i, yy);
+            RF(cx - i, yy, cx + i, yy);
         }
         return TRUE;
     case 0x2192: case 0x2190:                            /* → ← */
         hline(x + 1, x + cw - 2, cy, 1);
         for (i = 1; i <= r; i++) {
             int xx = cp == 0x2192 ? x + cw - 2 - i : x + 1 + i;
-            RectFill(rp, xx, cy - i, xx, cy + i);
+            RF(xx, cy - i, xx, cy + i);
         }
         return TRUE;
     case 0x23BF:                                         /* ⎿ like └ */
         draw_box(0x50, x, y);
         return TRUE;
     case 0x25A0: case 0x25AA: case 0x25FC:               /* ■ */
-        RectFill(rp, cx - r, cy - r, cx + r, cy + r);
+        RF(cx - r, cy - r, cx + r, cy + r);
         return TRUE;
     case 0x25C6: case 0x2666:                            /* ◆ */
         for (i = -r; i <= r; i++)
-            RectFill(rp, cx - (r - abs(i)), cy + i, cx + (r - abs(i)), cy + i);
+            RF(cx - (r - abs(i)), cy + i, cx + (r - abs(i)), cy + i);
         return TRUE;
     }
     return FALSE;
@@ -539,16 +591,48 @@ static void draw_cells(int r, int x0, int x1)
     SetSoftStyle(rp, 0, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
 }
 
+/* The text area's edges: the margin left of column 0 and whatever is
+ * right of the last column. TrueType letters can reach a pixel into the
+ * margin (a "y" at the start of a line), so a row clears its edges too. */
+static int area_right(void)
+{
+    return win->Width - win->BorderRight - 1 - (fullscreen ? POSBAR + 2 : 0);
+}
+
+static void paint_row(int r);
+
 static void draw_row(int r)
 {
-    if (r >= 0 && r < rows)
-        draw_cells(r, 0, cols - 1);
+    if (r < 0 || r >= rows)
+        return;
+    if (painter) {
+        paint_row(r);                   /* the cursor comes with the row */
+        return;
+    }
+    draw_cells(r, 0, cols - 1);
+    SetAPen(rp, pen_for(defbg));
+    RectFill(rp, win->BorderLeft, oy + r * ch, ox - 1, oy + r * ch + ch - 1);
+    if (ox + cols * cw <= area_right())
+        RectFill(rp, ox + cols * cw, oy + r * ch, area_right(),
+                 oy + r * ch + ch - 1);
 }
 
 static void draw_cursor(BOOL on)
 {
     int x, y, vis;
     vt_cursor(vt, &x, &y, &vis);
+    if (painter) {
+        /* the rows carry the cursor: repaint where it was and where it is */
+        if (!on)
+            return;
+        if (cury >= 0 && cury < rows && cury != y)
+            paint_row(cury);
+        if (y < rows)
+            paint_row(y);
+        curx = x;
+        cury = y;
+        return;
+    }
     if (curx >= 0 && cury >= 0 && cury < rows && curx < cols) {
         draw_cells(cury, curx, curx);       /* where it was: plain again */
         curx = cury = -1;
@@ -584,6 +668,260 @@ static void draw_cursor(BOOL on)
         curx = x;
         cury = y;
     }
+}
+
+/* ======================================================================
+ * The painter: rows built in fast memory, one WritePixelArray each
+ *
+ * On an RTG screen with 15 bits or more, graphics.library's ScrollRaster
+ * reads video memory back and costs ~10 ms a line on the A1200 (Emu68,
+ * VideoCore), while writing a ready row costs ~0.03 ms. So here nothing
+ * is ever scrolled or read: every cell (a letter in its colours and
+ * style, a table line, a block) is drawn once into a small picture - the
+ * cell cache - and rows are put together from those pictures and written
+ * in one go. Measured, and CCON found the same: see Knowledge/amiga/
+ * graphics-and-performance.md, "RTG on PiStorm/Emu68".
+ * ==================================================================== */
+
+static ULONG *rowbuf;                   /* one text row: cols*cw x ch */
+static LONG rowbuf_n;
+
+#define CSIZE 4096                      /* cache entries (a power of 2) */
+struct CEntry {
+    ULONG cp, fg, bg;
+    UWORD attr;
+    UBYTE wide, used;
+    ULONG *pix;
+};
+static struct CEntry *ccache;
+static ULONG *cpool;
+static LONG cell_longs;                 /* per entry: 2*cw x ch */
+
+static void cache_free(void)
+{
+    if (ccache) { FreeVec(ccache); ccache = NULL; }
+    if (cpool) { FreeVec(cpool); cpool = NULL; }
+}
+
+static BOOL cache_alloc(void)
+{
+    int i;
+    cache_free();
+    cell_longs = 2 * cw * ch;
+    ccache = AllocVec(CSIZE * sizeof *ccache, MEMF_ANY | MEMF_CLEAR);
+    cpool = AllocVec(CSIZE * cell_longs * 4, MEMF_ANY);
+    if (!ccache || !cpool) {
+        cache_free();
+        return FALSE;
+    }
+    for (i = 0; i < CSIZE; i++)
+        ccache[i].pix = cpool + i * cell_longs;
+    return TRUE;
+}
+
+/* A letter of the bitmap font, from its own bits (no window needed). */
+static void cell_bitmap_glyph(UBYTE c, ULONG fg, UWORD attr)
+{
+    struct TextFont *f = font;
+    int lo = f->tf_LoChar, hi = f->tf_HiChar, y, b, w, off;
+    ULONG loc;
+    if (c < lo || c > hi)
+        c = hi + 1 - lo + lo;           /* the font's "missing" glyph */
+    loc = ((ULONG *)f->tf_CharLoc)[c - lo];
+    off = loc >> 16;
+    w = loc & 0xFFFF;
+    if (w > cw)
+        w = cw;
+    for (y = 0; y < f->tf_YSize && y < ch; y++) {
+        const UBYTE *row = (const UBYTE *)f->tf_CharData + y * f->tf_Modulo;
+        ULONG *dst = cellbuf + y * cellw;
+        int shift = attr & VT_ITALIC ? (f->tf_Baseline - y) / 2 : 0;
+        for (b = 0; b < w; b++) {
+            int bit = off + b;
+            if (row[bit >> 3] & (0x80 >> (bit & 7))) {
+                int x = b + shift;
+                if (x >= 0 && x < cellw)
+                    dst[x] = fg;
+                if ((attr & VT_BOLD) && x + 1 < cellw)
+                    dst[x + 1] = fg;    /* the bold smear */
+            }
+        }
+    }
+}
+
+/* A TrueType letter: ttengine's greyscale picture, blended. */
+static void cell_tt_glyph(ULONG cp, ULONG fg, ULONG bg, UWORD attr, int w)
+{
+    struct TT_Pixmap *pm;
+    ULONG u = cp;
+    int x, y, ph, pw;
+    pm = TT_GetPixmap(tt_for(attr), (APTR)&u, 1, TT_Encoding,
+                      TT_Encoding_UTF32_BE, TT_Antialias, TT_Antialias_On,
+                      TAG_END);
+    if (!pm)
+        return;
+    ph = pm->ttp_Height < (ULONG)ch ? (int)pm->ttp_Height : ch;
+    pw = pm->ttp_Width < (ULONG)w ? (int)pm->ttp_Width : w;
+    for (y = 0; y < ph; y++) {
+        const UBYTE *a = pm->ttp_Data + y * pm->ttp_Width;
+        ULONG *dst = cellbuf + y * cellw;
+        for (x = 0; x < pw; x++) {
+            int k = a[x];
+            if (k == 0)
+                continue;
+            if (k == 255)
+                dst[x] = fg;
+            else {
+                ULONG out = 0;
+                int sh;
+                for (sh = 0; sh <= 16; sh += 8) {
+                    int f2 = (fg >> sh) & 255, b2 = (bg >> sh) & 255;
+                    out |= (ULONG)(b2 + ((f2 - b2) * k) / 255) << sh;
+                }
+                dst[x] = out;
+            }
+        }
+    }
+    TT_FreePixmap(pm);
+}
+
+/* Draw one cell picture into an entry. */
+static void make_cell(struct CEntry *e)
+{
+    ULONG cp = e->cp;
+    int w = e->wide ? 2 * cw : cw;
+    cellbuf = e->pix;
+    cellw = w;
+    SETCOL(e->bg);
+    RF(0, 0, w - 1, ch - 1);
+    SETCOL(e->fg);
+    if (cp >= 0x2500 && cp <= 0x257F && boxarms[cp - 0x2500]) {
+        draw_box(boxarms[cp - 0x2500], 0, 0);
+    } else if (cp >= 0x2571 && cp <= 0x2573) {
+        int i;                          /* the diagonals, by hand */
+        for (i = 0; i < cw; i++) {
+            int y1 = (ch - 1) - i * (ch - 1) / (cw > 1 ? cw - 1 : 1);
+            if (cp != 0x2572) RF(i, y1, i, y1);
+            if (cp != 0x2571) RF(i, ch - 1 - y1, i, ch - 1 - y1);
+        }
+    } else if (cp >= 0x2580 && cp <= 0x259F) {
+        draw_block(cp, 0, 0, e->fg, e->bg);
+    } else if (cp > ' ' && cp != 0xA0) {
+        if (usett)
+            cell_tt_glyph(cp, e->fg, e->bg, e->attr, w);
+        else if (cp <= 0xFF || !draw_shape(cp, 0, 0))
+            cell_bitmap_glyph(cp <= 0xFF ? (UBYTE)cp : fallback(cp), e->fg,
+                              e->attr);
+    }
+    if (e->attr & VT_UNDERLINE) {
+        int uy = cbase + 1 < ch ? cbase + 1 : ch - 1;
+        RF(0, uy, w - 1, uy);
+    }
+    if (e->attr & VT_STRIKE)
+        RF(0, ch / 2, w - 1, ch / 2);
+    cellbuf = NULL;
+}
+
+static struct CEntry *cell_get(ULONG cp, ULONG fg, ULONG bg, UWORD attr,
+                               UBYTE wide)
+{
+    ULONG h = (cp * 2654435761UL) ^ (fg * 0x9E37UL) ^ (bg * 0x85EBUL) ^
+              ((ULONG)attr << 7) ^ wide;
+    int i, k;
+    attr &= VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE;
+    for (k = 0; k < 8; k++) {
+        struct CEntry *e = &ccache[(h + k) & (CSIZE - 1)];
+        if (e->used && e->cp == cp && e->fg == fg && e->bg == bg &&
+            e->attr == attr && e->wide == wide)
+            return e;
+        if (!e->used) {
+            e->cp = cp; e->fg = fg; e->bg = bg; e->attr = attr;
+            e->wide = wide; e->used = 1;
+            make_cell(e);
+            return e;
+        }
+    }
+    i = h & (CSIZE - 1);                /* full there: replace the first */
+    ccache[i].cp = cp; ccache[i].fg = fg; ccache[i].bg = bg;
+    ccache[i].attr = attr; ccache[i].wide = wide; ccache[i].used = 1;
+    make_cell(&ccache[i]);
+    return &ccache[i];
+}
+
+/* One text row: put together from cell pictures, written in one go. */
+static void paint_row(int r)
+{
+    static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
+    int w, x, cx = -1, cy = -1, vis = 0, rw = cols * cw;
+    const VtCell *line = vt_line(vt, r, back, &w);
+    if (r < 0 || r >= rows)
+        return;
+    vt_cursor(vt, &cx, &cy, &vis);
+    if (!vis || back > 0)
+        cy = -1;
+    for (x = 0; x < cols; x++) {
+        const VtCell *c = x < w && line ? &line[x] : &empty;
+        ULONG fg, bg, cp = c->cp;
+        UBYTE wide = 0;
+        struct CEntry *e;
+        int y, n;
+        ULONG *src, *dst;
+        if (cp == VT_WIDE_TAIL)
+            continue;                   /* drawn with its left half */
+        if (x + 1 < cols && x + 1 < w && line && line[x + 1].cp == VT_WIDE_TAIL)
+            wide = 1;
+        cell_rgb(c, &fg, &bg);
+        if (r == cy && x == cx) {       /* the cursor: the cell reversed */
+            ULONG t = fg; fg = bg; bg = t;
+        }
+        if (usett)
+            cp = tt_stand_in(cp);
+        if (cp < ' ')
+            cp = ' ';
+        e = cell_get(cp, fg, bg, c->attr, wide);
+        n = wide ? 2 * cw : cw;
+        if (x * cw + n > rw)
+            n = rw - x * cw;
+        src = e->pix;
+        dst = rowbuf + x * cw;
+        for (y = 0; y < ch; y++) {
+            ULONG *s2 = src, *d2 = dst;
+            int k = n;
+            while (k-- > 0)             /* a few longs: no call overhead */
+                *d2++ = *s2++;
+            src += wide ? 2 * cw : cw;
+            dst += rw;
+        }
+    }
+    WritePixelArray(rowbuf, 0, 0, rw * 4, rp, ox, oy + r * ch, rw, ch,
+                    RECTFMT_ARGB);
+}
+
+/* Use the painter on this screen? And the buffers it needs. */
+static void painter_setup(void)
+{
+    struct BitMap *bm = scr->RastPort.BitMap;
+    LONG need = (LONG)cols * cw * ch;
+    painter = FALSE;
+    if (!CyberGfxBase || !GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX) ||
+        GetCyberMapAttr(bm, CYBRMATTR_DEPTH) < 15)
+        return;
+    if (!ccache && !cache_alloc())
+        return;
+    if (need > rowbuf_n) {
+        if (rowbuf) FreeVec(rowbuf);
+        rowbuf = AllocVec(need * 4, MEMF_ANY);
+        rowbuf_n = rowbuf ? need : 0;
+    }
+    painter = rowbuf != NULL;
+}
+
+/* After a font or colour change the pictures are out of date. */
+static void painter_forget(void)
+{
+    cache_free();
+    if (win)
+        painter_setup();
 }
 
 /* ---- the scroll bar (from AmiClaude: see intuition-border-gadgets.md) - */
@@ -732,14 +1070,21 @@ static void refresh(void)
     if (!vt_take_changes(vt, &chg))
         return;
     draw_cursor(FALSE);
-    if (chg.all || back > 0) {
+    if (painter) {
+        /* nothing is ever scrolled on screen: the rows a scroll moved
+         * are painted again (cheap), the rest only if they changed */
+        int y0 = chg.scroll_n ? chg.scroll_top : rows, y1 = chg.scroll_bottom;
+        for (r = 0; r < rows; r++)
+            if (chg.all || back > 0 || chg.dirty[r] || (r >= y0 && r <= y1))
+                paint_row(r);
+    } else if (chg.all || back > 0) {
         for (r = 0; r < rows; r++)
             draw_row(r);
     } else {
         if (chg.scroll_n) {
             SetBPen(rp, pen_for(defbg));
-            ScrollRaster(rp, 0, chg.scroll_n * ch, ox,
-                         oy + chg.scroll_top * ch, ox + cols * cw - 1,
+            ScrollRaster(rp, 0, chg.scroll_n * ch, win->BorderLeft,
+                         oy + chg.scroll_top * ch, area_right(),
                          oy + (chg.scroll_bottom + 1) * ch - 1);
         }
         for (r = 0; r < rows; r++)
@@ -748,6 +1093,33 @@ static void refresh(void)
     }
     draw_cursor(TRUE);
     update_knob();
+}
+
+/* ---- for console.c ------------------------------------------------- */
+
+void term_write(const UBYTE *b, LONG n) { vt_write(vt, b, n); }
+int term_cols(void) { return cols; }
+int term_rows(void) { return rows; }
+int term_cursor_x(void) { int x, y, v; vt_cursor(vt, &x, &y, &v); return x; }
+int term_cursor_y(void) { int x, y, v; vt_cursor(vt, &x, &y, &v); return y; }
+
+void term_flush(void)
+{
+    owed = FALSE;
+    if (win)
+        refresh();
+}
+
+/* Draw within a frame: writes that keep coming meanwhile are drawn with
+ * it, so a flood costs one draw per frame, not per write. A timer request
+ * says when the frame is up - no clock is read here: on the A1200 (Emu68,
+ * PiStorm) reading the system time is costly, and this runs per write. */
+void term_render_soon(void)
+{
+    if (owed)
+        return;
+    owed = TRUE;
+    con_arm_render();
 }
 
 static void scroll_view(int to)
@@ -971,6 +1343,31 @@ static void key(struct IntuiMessage *m)
 
     if (code & IECODE_UP_PREFIX)
         return;
+    if (local) {
+        /* the Amiga Shell: the keymap's own bytes, as CON: gives them;
+         * only the scrollback keys stay CTerm's */
+        if (code == 0x7A) { scroll_view(back + 3); return; }
+        if (code == 0x7B) { scroll_view(back - 3); return; }
+        if (shift && (code == 0x4C || code == 0x4D)) {
+            scroll_view(back + (code == 0x4C ? rows - 1 : -(rows - 1)));
+            return;
+        }
+        {
+            struct InputEvent ie;
+            memset(&ie, 0, sizeof ie);
+            ie.ie_Class = IECLASS_RAWKEY;
+            ie.ie_Code = code;
+            ie.ie_Qualifier = q;
+            ie.ie_EventAddress = m->IAddress ? *((APTR *)m->IAddress) : NULL;
+            n = MapRawKey(&ie, (STRPTR)buf, sizeof buf, NULL);
+        }
+        if (n > 0) {
+            if (back)
+                scroll_view(0);
+            con_keys((UBYTE *)buf, n);
+        }
+        return;
+    }
     switch (code) {
     case 0x7A: scroll_view(back + 3); return;           /* the wheel */
     case 0x7B: scroll_view(back - 3); return;
@@ -1370,7 +1767,10 @@ static BOOL open_display(void)
             WA_NewLookMenus, TRUE, WA_IDCMP, idcmp, TAG_END);
     } else {
         int top0 = scr->BarHeight + 1;
-        int w = 80 * cw + 40, h = 25 * ch + 40;
+        /* the window for want_cols x want_rows cells, frame included */
+        int w = want_cols * cw + 4 + scr->WBorLeft + 22 + 2,
+            h = want_rows * ch + 2 + scr->WBorTop + scr->Font->ta_YSize + 1 +
+                scr->WBorBottom + 2;
         if (w > scr->Width) w = scr->Width;
         if (h > scr->Height - top0) h = scr->Height - top0;
         win = OpenWindowTags(NULL,
@@ -1394,6 +1794,7 @@ static BOOL open_display(void)
     if (!fullscreen && scrollbar)
         add_scroller();
     layout_and_resize();
+    painter_setup();
     redraw_all();
     return TRUE;
 }
@@ -1448,6 +1849,7 @@ static void font_changed(void)
     SetFont(rp, font);
     tt_attach();
     layout_and_resize();
+    painter_forget();
     redraw_all();
     if (sock >= 0)
         send_naws();
@@ -1505,6 +1907,109 @@ static void tt_size(int d)
     save_prefs();
 }
 
+/* The drawing tools themselves, in microseconds each: what a painter
+ * should be built from on this machine. */
+static LONG us_since(const struct timeval *a)
+{
+    struct timeval b;
+    term_now(&b);
+    return (LONG)(b.tv_secs - a->tv_secs) * 1000000 +
+           ((LONG)b.tv_micro - (LONG)a->tv_micro);
+}
+
+static void bench_line(const char *what, LONG us, LONG n)
+{
+    char l[100];
+    strcpy(l, "  ");
+    strcat(l, what);
+    while (strlen(l) < 34)
+        strcat(l, " ");
+    numstr_cat(l, n ? us / n : 0);
+    strcat(l, " us each\r\n");
+    say(l);
+}
+
+static void bench_primitives(void)
+{
+    struct timeval a;
+    int i, x1 = ox + cols * cw - 1, y1 = oy + rows * ch - 1;
+    static UBYTE row[256];
+    ULONG *argb = NULL;
+    LONG w = cols * cw, h = ch;
+    for (i = 0; i < (int)sizeof row; i++)
+        row[i] = 'A' + i % 26;
+    say("\r\n\x1b[1m[the drawing tools, timed]\x1b[0m\r\n");
+    refresh();
+
+    SetBPen(rp, pen_for(defbg));
+    term_now(&a);
+    for (i = 0; i < 50; i++)
+        ScrollRaster(rp, 0, ch, ox, oy, x1, y1);
+    bench_line("ScrollRaster, a line", us_since(&a), 50);
+
+    term_now(&a);
+    for (i = 0; i < 50; i++)
+        ScrollRaster(rp, 0, ch * (rows / 4), ox, oy, x1, y1);
+    bench_line("ScrollRaster, a quarter", us_since(&a), 50);
+
+    SetAPen(rp, pen_for(defbg));
+    term_now(&a);
+    for (i = 0; i < 50; i++)
+        RectFill(rp, ox, oy, x1, y1);
+    bench_line("RectFill, the whole area", us_since(&a), 50);
+
+    term_now(&a);
+    for (i = 0; i < 200; i++)
+        RectFill(rp, ox, oy, x1, oy + ch - 1);
+    bench_line("RectFill, one row", us_since(&a), 200);
+
+    SetFont(rp, font);
+    SetAPen(rp, pen_for(deffg));
+    SetBPen(rp, pen_for(defbg));
+    SetDrMd(rp, JAM2);
+    term_now(&a);
+    for (i = 0; i < 200; i++) {
+        Move(rp, ox, oy + font->tf_Baseline);
+        Text(rp, (STRPTR)row, cols);
+    }
+    bench_line("Text, a row (Amiga font)", us_since(&a), 200);
+
+    if (usett && ttface[0]) {
+        static ULONG u[256];
+        for (i = 0; i < 256; i++)
+            u[i] = 'A' + i % 26;
+        SetDrMd(rp, JAM1);
+        term_now(&a);
+        for (i = 0; i < 200; i++) {
+            Move(rp, ox, oy + cbase);
+            TT_Text(rp, (APTR)u, cols);
+        }
+        bench_line("TT_Text, a row (TrueType)", us_since(&a), 200);
+        SetDrMd(rp, JAM2);
+    }
+
+    if (CyberGfxBase)
+        argb = AllocVec(w * h * 4, MEMF_ANY);
+    if (argb) {
+        for (i = 0; i < w * h; i++)
+            argb[i] = (i & 8) ? 0x00D8DEE9 : 0x001A1D23;
+        term_now(&a);
+        for (i = 0; i < 200; i++)
+            WritePixelArray(argb, 0, 0, w * 4, rp, ox, oy, w, h, RECTFMT_ARGB);
+        bench_line("WritePixelArray, a row (ARGB)", us_since(&a), 200);
+        term_now(&a);
+        for (i = 0; i < 200; i++) {
+            int k;                      /* the CPU building a row */
+            for (k = 0; k < w * h; k++)
+                argb[k] = (k & 8) ? 0x00D8DEE9 : 0x001A1D23;
+        }
+        bench_line("filling a row in memory (CPU)", us_since(&a), 200);
+        FreeVec(argb);
+    } else
+        say("  (no cybergraphics: no WritePixelArray)\r\n");
+    redraw_all();
+}
+
 /* Full redraws of a busy screen, timed: how fast this font draws here. */
 static void speed_test(void)
 {
@@ -1549,6 +2054,7 @@ static void speed_test(void)
     strcat(line, " ms each]\x1b[0m\r\n");
     (void)num;
     say(line);
+    bench_primitives();
 }
 
 static void ask_font(void)
@@ -1615,6 +2121,22 @@ static BOOL menu_pick(ULONG id)
     return TRUE;
 }
 
+/* A raw input event report, for an Amiga program that asked (CSI n{). */
+static void raw_report(int cls, int code, int qual)
+{
+    char r[64];
+    UBYTE *p;
+    if (!local || !(vt_raw_events(vt) & (1UL << cls)))
+        return;
+    r[0] = (char)0x9B;
+    r[1] = 0;
+    numstr_cat(r, cls); strcat(r, ";0;");
+    numstr_cat(r, code); strcat(r, ";");
+    numstr_cat(r, qual); strcat(r, ";0;0;0;0|");
+    p = (UBYTE *)r;
+    con_reply(p, strlen(r));
+}
+
 static BOOL window_events(void)
 {
     struct IntuiMessage *m;
@@ -1629,13 +2151,23 @@ static BOOL window_events(void)
         }
         ReplyMsg((struct Message *)m);
         switch (copy.Class) {
-        case IDCMP_CLOSEWINDOW: go = FALSE; break;
+        case IDCMP_CLOSEWINDOW:
+            if (local) {
+                if (vt_raw_events(vt) & (1UL << 11))
+                    raw_report(11, 0, 0);
+                else
+                    con_close_gadget();
+            } else
+                go = FALSE;
+            break;
         case IDCMP_NEWSIZE:
             layout_and_resize();
+            painter_setup();
             redraw_all();
             RefreshWindowFrame(win);
             if (sock >= 0)
                 send_naws();
+            raw_report(12, 0, 0);
             break;
         case IDCMP_REFRESHWINDOW:
             BeginRefresh(win);
@@ -1644,6 +2176,11 @@ static BOOL window_events(void)
             break;
         case IDCMP_MENUPICK: {
             UWORD code = copy.Code;
+            if (win->MenuStrip != menu) {
+                /* Ed's own menus on our window: its business */
+                raw_report(10, code, copy.Qualifier);
+                break;
+            }
             while (code != MENUNULL && go && !want_switch) {
                 struct MenuItem *it = ItemAddress(menu, code);
                 if (!it) break;
@@ -1723,28 +2260,99 @@ static void title_update(void)
 static void run(void)
 {
     static UBYTE buf[16384];
-    lfd = listen_on();
-    if (lfd < 0)
-        say("\x1b[1;31mCTerm cannot listen on its port - is it already "
-            "running?\x1b[0m\r\n");
-    else
-        say("\x1b[1mCTerm\x1b[0m - waiting for the PC (cterm-relay)...\r\n");
+    if (local) {
+        BPTR l = Lock((STRPTR)"S:Shell-Startup", ACCESS_READ);
+        if (l)
+            UnLock(l);
+        if (!con_start(l ? "S:Shell-Startup" : NULL)) {
+            /* no Shell: say so and wait for the window to be closed -
+             * never fall into the network loop, there is no network */
+            say("CTerm could not start a Shell.\r\n");
+            refresh();
+            for (;;) {
+                struct IntuiMessage *m;
+                BOOL done = FALSE;
+                WaitPort(win->UserPort);
+                while ((m = (struct IntuiMessage *)GetMsg(win->UserPort))) {
+                    if (m->Class == IDCMP_CLOSEWINDOW)
+                        done = TRUE;
+                    ReplyMsg((struct Message *)m);
+                }
+                if (done)
+                    return;
+            }
+        }
+    } else {
+        lfd = listen_on();
+        if (lfd < 0)
+            say("\x1b[1;31mCTerm cannot listen on its port - is it already "
+                "running?\x1b[0m\r\n");
+        else
+            say("\x1b[1mCTerm\x1b[0m - waiting for the PC (cterm-relay)..."
+                "\r\n");
+    }
     refresh();
 
     for (;;) {
         fd_set rd;
-        LONG fd = sock >= 0 ? sock : lfd, n;
+        LONG fd = sock >= 0 ? sock : lfd, n, wait = -1, c;
         ULONG winsig = 1UL << win->UserPort->mp_SigBit;
-        ULONG sigs = winsig | SIGBREAKF_CTRL_C;
+        ULONG sigs = winsig | SIGBREAKF_CTRL_C | (local ? con_sigmask() : 0);
+        struct timeval tv;
         FD_ZERO(&rd);
         if (fd >= 0)
             FD_SET(fd, &rd);
-        n = WaitSelect(fd >= 0 ? fd + 1 : 0, fd >= 0 ? &rd : NULL, NULL,
-                       NULL, NULL, &sigs);
-        if (sigs & SIGBREAKF_CTRL_C)
-            break;
-        if ((sigs & winsig) && !window_events())
-            break;
+        (void)c;
+        if (local) {
+            /* no network here: the plain Amiga wait, and the timer for
+             * what is due - the socket library's WaitSelect costs far
+             * more per round, and a flood of tiny writes is all rounds */
+            /* the frame timer and WaitForChar's timer signal the timer
+             * port, whose bit con_sigmask() includes */
+            sigs = Wait(sigs);
+            n = 0;
+        } else {
+            if (wait >= 0) {
+                tv.tv_sec = wait / 1000;
+                tv.tv_usec = (wait % 1000) * 1000;
+            }
+            n = WaitSelect(fd >= 0 ? fd + 1 : 0, fd >= 0 ? &rd : NULL, NULL,
+                           NULL, wait >= 0 ? &tv : NULL, &sigs);
+        }
+        if (sigs & SIGBREAKF_CTRL_C) {
+            if (!local)
+                break;
+            quitting = TRUE;
+            con_stop();
+        }
+        if ((sigs & winsig) && !window_events()) {
+            if (!local)
+                break;
+            quitting = TRUE;            /* end the Shell, then us */
+            con_stop();
+        }
+        if (local) {
+            char r[256];
+            int k;
+            con_handle(sigs);
+            k = vt_take_reply(vt, r, sizeof r);
+            if (k > 0)
+                con_reply((UBYTE *)r, k);
+            if (vt_take_bell(vt))
+                DisplayBeep(scr);
+            title_update();
+            if (win && !win->MenuStrip && menu)
+                SetMenuStrip(win, menu);        /* Ed has gone */
+            if (con_render_due() && owed)
+                term_flush();
+            if (!con_alive())
+                break;                          /* the Shell ended */
+            if (want_switch)
+                switch_display();
+            if (!win)
+                break;
+            continue;
+        }
         if (want_switch)
             switch_display();
         if (!win)
@@ -1795,31 +2403,46 @@ int main(int argc, char **argv)
     (void)version;
     (void)argv;
     if (argc > 0) {
-        LONG args[2] = { 0, 0 };
-        struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S", args, NULL);
+        LONG args[5] = { 0, 0, 0, 0, 0 };
+        struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N",
+                                      args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
             return RETURN_FAIL;
         }
         if (args[0]) port = *(LONG *)args[0];
         if (args[1]) utf8 = FALSE;
+        if (args[2]) local = FALSE;     /* wait for the PC's relay */
+        if (args[3]) want_cols = *(LONG *)args[3];
+        if (args[4]) want_rows = *(LONG *)args[4];
         FreeArgs(rda);
     }
-    SocketBase = OpenLibrary("bsdsocket.library", 4);
+    /* the network only when there is one to talk to: the local Shell
+     * needs no TCP/IP stack at all */
+    if (!local)
+        SocketBase = OpenLibrary("bsdsocket.library", 4);
     KeymapBase = OpenLibrary("keymap.library", 37);
     GadToolsBase = OpenLibrary("gadtools.library", 37);
     AslBase = OpenLibrary("asl.library", 38);
     DiskfontBase = OpenLibrary("diskfont.library", 36);
     TTEngineBase = OpenLibrary("ttengine.library", 6);
+    CyberGfxBase = OpenLibrary("cybergraphics.library", 40);
     load_prefs();
     /* first start: TrueType if it is installed (DejaVu Sans Mono) */
     if (!hadprefs)
         usett = TTEngineBase && file_exists(ttfile);
+    con_timer_init();
     vt = vt_new(80, 25, SCROLLBACK);
-    if (vt)
+    if (vt) {
         vt_set_utf8(vt, utf8);
+        if (local)
+            vt_set_amiga(vt, 1);        /* the Amiga console's ways */
+    }
     want_bar = scrollbar;
-    if (!vt || !KeymapBase || !GadToolsBase || !SocketBase ||
+    if (!local && !SocketBase) {
+        PutStr("CTerm LISTEN needs a TCP/IP stack (bsdsocket.library)\n");
+        rc = RETURN_FAIL;
+    } else if (!vt || !KeymapBase || !GadToolsBase ||
         !open_display()) {
         rc = RETURN_FAIL;
     } else {
@@ -1827,10 +2450,23 @@ int main(int argc, char **argv)
     }
     if (win)
         save_prefs();
+    if (local) {
+        /* nothing may still be open on our port when it goes */
+        while (con_alive()) {
+            ULONG sg = con_sigmask();
+            Wait(sg);
+            con_handle(sg);
+        }
+        con_free();
+    }
     close_display(FALSE);
     if (ownfont) CloseFont(ownfont);
+    cache_free();
+    if (rowbuf) FreeVec(rowbuf);
     close_tt();
     if (TTEngineBase) CloseLibrary(TTEngineBase);
+    if (CyberGfxBase) CloseLibrary(CyberGfxBase);
+    con_timer_free();
     vt_free(vt);
     if (DiskfontBase) CloseLibrary(DiskfontBase);
     if (AslBase) CloseLibrary(AslBase);

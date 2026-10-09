@@ -25,7 +25,9 @@ typedef struct {
 
 struct Vt {
     int cols, rows;
-    VtCell *grid[2], *cur;          /* main, alternate; the one in use */
+    /* each screen is a list of rows, so a scroll moves pointers, not cells
+     * (a whole-screen memmove per new line cost ~190 KB at 127x92) */
+    VtCell **lines[2], **cur;       /* main, alternate; the one in use */
     int alt;
 
     /* scrollback: a ring of lines, each as wide as the screen then was */
@@ -39,6 +41,9 @@ struct Vt {
     int top, bot;                   /* the scroll region, inclusive */
     int autowrap, origin, insert, lnm, cursor_on, app_cursor, app_keypad;
     int bracketed, reverse, utf8;
+    int amigamode;                  /* the Amiga console's ways (local) */
+    unsigned long rawev;            /* raw event classes asked for: CSI n{ */
+    int winbg;                      /* CSI >n m: the window's own colour */
     char g[2];                      /* G0, G1: 'B' ASCII, '0' DEC lines */
     int gl;
     uint8_t *tabs;
@@ -47,7 +52,7 @@ struct Vt {
 
     int state;
     int param[MAXPARAM], nparam, have_digit;
-    char priv, inter;
+    char priv, priv2, inter;        /* priv2: a second one, as in Ed's >? */
     char osc[OSCMAX];
     int osclen;
     uint32_t uacc;
@@ -83,7 +88,7 @@ static void fill(VtCell *p, int n, VtCell c)
 
 static VtCell *row(Vt *v, int y)
 {
-    return v->cur + y * v->cols;
+    return v->cur[y];
 }
 
 static void reply(Vt *v, const char *s)
@@ -136,6 +141,36 @@ static const uint16_t decgfx[31] = {
 };
 
 /* ---- scrolling --------------------------------------------------------- */
+
+/* The row leaving the top becomes the newest history line, and the
+ * oldest history line's buffer (when it fits) becomes the new row: no
+ * copy, no allocation. FALSE: no history - the row is simply reused. */
+static int swap_into_history(Vt *v, VtCell **pline)
+{
+    int slot;
+    VtCell *old, *fresh;
+    if (v->hist_cap <= 0)
+        return 0;
+    if (v->hist_len < v->hist_cap)
+        slot = (v->hist_head + v->hist_len) % v->hist_cap;
+    else
+        slot = v->hist_head;
+    old = v->hist[slot];
+    fresh = old && v->hist_w[slot] == v->cols ? old
+          : malloc(v->cols * sizeof(VtCell));
+    if (!fresh)
+        return 0;
+    if (fresh != old)
+        free(old);
+    if (v->hist_len < v->hist_cap)
+        v->hist_len++;
+    else
+        v->hist_head = (v->hist_head + 1) % v->hist_cap;
+    v->hist[slot] = *pline;
+    v->hist_w[slot] = v->cols;
+    *pline = fresh;
+    return 1;
+}
 
 static void push_history(Vt *v, const VtCell *line)
 {
@@ -202,13 +237,20 @@ static void scroll_up(Vt *v, int top, int bot, int n)
         n = h;
     if (n <= 0)
         return;
-    if (!v->alt && top == 0) {
-        int i;
-        for (i = 0; i < n; i++)
-            push_history(v, row(v, i));
+    {
+        VtCell *gone[1024];
+        int i, k = n < 1024 ? n : 1024;
+        for (i = 0; i < k; i++) {
+            gone[i] = v->cur[top + i];
+            if (!v->alt && top == 0)
+                swap_into_history(v, &gone[i]);
+        }
+        memmove(&v->cur[top], &v->cur[top + k], (h - k) * sizeof(VtCell *));
+        for (i = 0; i < k; i++) {
+            v->cur[bot - k + 1 + i] = gone[i];
+            fill(gone[i], v->cols, b);
+        }
     }
-    memmove(row(v, top), row(v, top + n), (h - n) * v->cols * sizeof(VtCell));
-    fill(row(v, bot - n + 1), n * v->cols, b);
     note_scroll(v, top, bot, n);
 }
 
@@ -220,8 +262,17 @@ static void scroll_down(Vt *v, int top, int bot, int n)
         n = h;
     if (n <= 0)
         return;
-    memmove(row(v, top + n), row(v, top), (h - n) * v->cols * sizeof(VtCell));
-    fill(row(v, top), n * v->cols, b);
+    {
+        VtCell *gone[1024];
+        int i, k = n < 1024 ? n : 1024;
+        for (i = 0; i < k; i++)
+            gone[i] = v->cur[bot - k + 1 + i];
+        memmove(&v->cur[top + k], &v->cur[top], (h - k) * sizeof(VtCell *));
+        for (i = 0; i < k; i++) {
+            v->cur[top + i] = gone[i];
+            fill(gone[i], v->cols, b);
+        }
+    }
     note_scroll(v, top, bot, -n);
 }
 
@@ -410,9 +461,12 @@ static void use_alt(Vt *v, int on, int clear)
     if (on == v->alt)
         return;
     v->alt = on;
-    v->cur = v->grid[on];
-    if (on && clear)
-        fill(v->cur, v->cols * v->rows, blank_of(v));
+    v->cur = v->lines[on];
+    if (on && clear) {
+        int y;
+        for (y = 0; y < v->rows; y++)
+            fill(v->cur[y], v->cols, blank_of(v));
+    }
     dirty_all(v);
 }
 
@@ -438,13 +492,17 @@ static void full_reset(Vt *v)
     int i;
     reset_pen(v);
     use_alt(v, 0, 0);
-    for (i = 0; i < 2; i++)
-        fill(v->grid[i], v->cols * v->rows, blank_of(v));
+    for (i = 0; i < 2; i++) {
+        int y;
+        for (y = 0; y < v->rows; y++)
+            fill(v->lines[i][y], v->cols, blank_of(v));
+    }
     v->x = v->y = v->pending = 0;
     v->top = 0;
     v->bot = v->rows - 1;
     v->autowrap = 1;
-    v->origin = v->insert = v->lnm = 0;
+    v->origin = v->insert = 0;
+    v->lnm = v->amigamode;                  /* the Amiga: LF is a new line */
     v->cursor_on = 1;
     v->app_cursor = v->app_keypad = v->bracketed = v->reverse = 0;
     v->g[0] = v->g[1] = 'B';
@@ -575,6 +633,42 @@ static void csi(Vt *v, int final)
     char buf[48];
     int n = P(0, 1), i;
 
+    if (v->priv2)                       /* Ed's CSI >?NN v/l/h/w: private */
+        return;
+    if (v->amigamode) {
+        /* the Amiga console's own sequences (console.device) */
+        if (v->priv == '>' && final == 'm') {   /* the window's colour */
+            v->winbg = P(0, 0);
+            dirty_all(v);
+            return;
+        }
+        if (v->inter == ' ' && final == 'q') {  /* window bounds report */
+            sprintf(buf, "\x9b" "1;1;%d;%d r", v->rows, v->cols);
+            reply(v, buf);
+            return;
+        }
+        if (v->inter == ' ' && final == 'p') {  /* cursor on/off */
+            v->cursor_on = v->nparam > 0 && v->param[0] == 0 ? 0 : 1;
+            v->any_dirty = 1;
+            return;
+        }
+        if (!v->inter && !v->priv && (final == '{' || final == '}')) {
+            for (i = 0; i < v->nparam; i++)     /* raw event classes */
+                if (v->param[i] >= 0 && v->param[i] < 32) {
+                    if (final == '{') v->rawev |= 1UL << v->param[i];
+                    else v->rawev &= ~(1UL << v->param[i]);
+                }
+            return;
+        }
+        if (!v->inter && !v->priv &&
+            (final == 't' || final == 'u' || final == 'x' || final == 'y'))
+            return;             /* page/line length, offsets: the window's */
+        if (!v->priv && final == 'n' && P(0, 0) == 6) {
+            sprintf(buf, "\x9b%d;%dR", v->y + 1, v->x + 1);
+            reply(v, buf);
+            return;
+        }
+    }
     if (v->priv == '>' || v->priv == '<' || v->priv == '=') {
         if (final == 'c' && v->priv == '>')
             reply(v, "\x1b[>1;10;0c");          /* DA2: a VT220-ish */
@@ -772,7 +866,23 @@ static void control(Vt *v, int c)
         if (v->x >= v->cols) v->x = v->cols - 1;
         v->pending = 0;
         break;
-    case 10: case 11: case 12:
+    case 11:
+        if (v->amigamode) {                 /* the Amiga's VT: one line up */
+            if (v->y > 0) v->y--;
+            v->pending = 0;
+            break;
+        }
+        /* fall through */
+    case 10:
+        linefeed(v);
+        if (v->lnm) v->x = 0;
+        break;
+    case 12:
+        if (v->amigamode) {                 /* the Amiga's FF: a clear page */
+            erase_display(v, 2);
+            v->x = v->y = v->pending = 0;
+            break;
+        }
         linefeed(v);
         if (v->lnm) v->x = 0;
         break;
@@ -797,7 +907,7 @@ static int c1(Vt *v, int c)
         v->nparam = 0;
         v->have_digit = 0;
         v->param[0] = -1;
-        v->priv = v->inter = 0;
+        v->priv = v->priv2 = v->inter = 0;
         return 1;
     case 0x9D: v->state = S_OSC; v->osclen = 0; return 1;
     case 0x98: case 0x9E: case 0x9F: v->state = S_STR; return 1;
@@ -899,7 +1009,10 @@ static void byte(Vt *v, int c)
             return;
         }
         if (c >= '<' && c <= '?') {
-            v->priv = (char)c;
+            if (v->priv)
+                v->priv2 = (char)c;
+            else
+                v->priv = (char)c;
             return;
         }
         if (c >= 0x20 && c <= 0x2F) {
@@ -963,6 +1076,30 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
 
 /* ---- life and size --------------------------------------------------- */
 
+static void free_screen(VtCell **l, int rows)
+{
+    int y;
+    if (!l)
+        return;
+    for (y = 0; y < rows; y++)
+        free(l[y]);
+    free(l);
+}
+
+static VtCell **alloc_screen(int cols, int rows)
+{
+    VtCell **l = calloc(rows, sizeof *l);
+    int y;
+    if (!l)
+        return NULL;
+    for (y = 0; y < rows; y++)
+        if (!(l[y] = calloc(cols, sizeof(VtCell)))) {
+            free_screen(l, rows);
+            return NULL;
+        }
+    return l;
+}
+
 Vt *vt_new(int cols, int rows, int scrollback)
 {
     Vt *v = calloc(1, sizeof *v);
@@ -970,8 +1107,8 @@ Vt *vt_new(int cols, int rows, int scrollback)
         return NULL;
     v->cols = cols;
     v->rows = rows;
-    v->grid[0] = calloc(cols * rows, sizeof(VtCell));
-    v->grid[1] = calloc(cols * rows, sizeof(VtCell));
+    v->lines[0] = alloc_screen(cols, rows);
+    v->lines[1] = alloc_screen(cols, rows);
     v->tabs = calloc(cols, 1);
     v->dirty = calloc(rows, 1);
     v->hist_cap = scrollback;
@@ -979,12 +1116,12 @@ Vt *vt_new(int cols, int rows, int scrollback)
         v->hist = calloc(scrollback, sizeof *v->hist);
         v->hist_w = calloc(scrollback, sizeof *v->hist_w);
     }
-    if (!v->grid[0] || !v->grid[1] || !v->tabs || !v->dirty ||
+    if (!v->lines[0] || !v->lines[1] || !v->tabs || !v->dirty ||
         (scrollback > 0 && (!v->hist || !v->hist_w))) {
         vt_free(v);
         return NULL;
     }
-    v->cur = v->grid[0];
+    v->cur = v->lines[0];
     v->utf8 = 1;
     full_reset(v);
     return v;
@@ -999,8 +1136,8 @@ void vt_free(Vt *v)
         free(v->hist[i]);
     free(v->hist);
     free(v->hist_w);
-    free(v->grid[0]);
-    free(v->grid[1]);
+    free_screen(v->lines[0], v->rows);
+    free_screen(v->lines[1], v->rows);
     free(v->tabs);
     free(v->dirty);
     free(v);
@@ -1008,7 +1145,7 @@ void vt_free(Vt *v)
 
 void vt_resize(Vt *v, int cols, int rows)
 {
-    VtCell *ng[2];
+    VtCell **ng[2];
     uint8_t *nt, *nd;
     int i, y, shift = 0, w;
 
@@ -1016,12 +1153,13 @@ void vt_resize(Vt *v, int cols, int rows)
         return;
     if (cols < 2) cols = 2;
     if (rows < 2) rows = 2;
-    ng[0] = calloc(cols * rows, sizeof(VtCell));
-    ng[1] = calloc(cols * rows, sizeof(VtCell));
+    ng[0] = alloc_screen(cols, rows);
+    ng[1] = alloc_screen(cols, rows);
     nt = calloc(cols, 1);
     nd = calloc(rows, 1);
     if (!ng[0] || !ng[1] || !nt || !nd) {
-        free(ng[0]); free(ng[1]); free(nt); free(nd);
+        free_screen(ng[0], rows); free_screen(ng[1], rows);
+        free(nt); free(nd);
         return;
     }
     /* fewer rows: lines above the cursor go to the history first, so the
@@ -1030,18 +1168,14 @@ void vt_resize(Vt *v, int cols, int rows)
         shift = v->y - rows + 1;
         if (!v->alt)
             for (i = 0; i < shift; i++)
-                push_history(v, v->grid[0] + i * v->cols);
+                push_history(v, v->lines[0][i]);
     }
     w = cols < v->cols ? cols : v->cols;
     for (i = 0; i < 2; i++) {
-        VtCell b;
-        memset(&b, 0, sizeof b);
-        fill(ng[i], cols * rows, b);
         for (y = 0; y < rows && y + shift < v->rows; y++)
-            memcpy(ng[i] + y * cols, v->grid[i] + (y + shift) * v->cols,
-                   w * sizeof(VtCell));
-        free(v->grid[i]);
-        v->grid[i] = ng[i];
+            memcpy(ng[i][y], v->lines[i][y + shift], w * sizeof(VtCell));
+        free_screen(v->lines[i], v->rows);
+        v->lines[i] = ng[i];
     }
     free(v->tabs);
     free(v->dirty);
@@ -1049,7 +1183,7 @@ void vt_resize(Vt *v, int cols, int rows)
     v->dirty = nd;
     v->cols = cols;
     v->rows = rows;
-    v->cur = v->grid[v->alt];
+    v->cur = v->lines[v->alt];
     reset_tabs(v);
     v->y -= shift;
     if (v->x >= cols) v->x = cols - 1;
@@ -1068,6 +1202,23 @@ void vt_resize(Vt *v, int cols, int rows)
 /* ---- for the display ------------------------------------------------- */
 
 void vt_set_utf8(Vt *v, int on) { v->utf8 = on; v->uneed = 0; }
+
+/* The Amiga console's ways, for the local Shell: Latin-1 with 0x9B as
+ * CSI, LF as a new line, FF a clear page, VT a line up, and its own
+ * sequences (window bounds report, cursor rendition, raw events). */
+void vt_set_amiga(Vt *v, int on)
+{
+    v->amigamode = on;
+    if (on) {
+        v->utf8 = 0;
+        v->uneed = 0;
+        v->lnm = 1;
+    } else
+        v->lnm = 0;
+}
+
+unsigned long vt_raw_events(const Vt *v) { return v->rawev; }
+int vt_window_bg(const Vt *v) { return v->winbg; }
 int vt_cols(const Vt *v) { return v->cols; }
 int vt_rows(const Vt *v) { return v->rows; }
 int vt_history(const Vt *v) { return v->hist_len; }
@@ -1096,7 +1247,7 @@ const VtCell *vt_line(const Vt *v, int r, int back, int *width)
     if (idx < 0)
         idx = 0;
     *width = v->cols;
-    return v->cur + idx * v->cols;
+    return v->cur[idx];
 }
 
 void vt_cursor(const Vt *v, int *x, int *y, int *visible)

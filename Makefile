@@ -6,8 +6,8 @@ CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -Wall -Wno-pointer-sign -Ii
 
 all: CTerm test
 
-CTerm: src/main.c src/vt.c src/vt.h src/boxtable.h
-	$(CC) $(CFLAGS) src/main.c src/vt.c -o CTerm
+CTerm: src/main.c src/vt.c src/vt.h src/boxtable.h src/console.c src/console.h
+	$(CC) $(CFLAGS) src/main.c src/vt.c src/console.c -o CTerm
 
 # Onto the A1200, through Wasabi.
 deploy: CTerm
@@ -19,8 +19,12 @@ deploy: CTerm
 tests/vtdump: tests/vtdump.c src/vt.c src/vt.h
 	gcc -O2 -Wall -Wextra -o $@ tests/vtdump.c src/vt.c
 
-test: tests/vtdump
+tests/amiga_test: tests/amiga_test.c src/vt.c src/vt.h
+	gcc -O2 -Wall -o $@ tests/amiga_test.c src/vt.c
+
+test: tests/vtdump tests/amiga_test
 	.venv/bin/python tests/compare.py
+	tests/amiga_test
 
 clean:
 	rm -f tests/vtdump CTerm

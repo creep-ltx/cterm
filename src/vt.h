@@ -50,6 +50,12 @@ void vt_write(Vt *vt, const uint8_t *buf, int len);
 /* Input encoding: 1 = UTF-8 (default), 0 = Latin-1 (0x9B is CSI). */
 void vt_set_utf8(Vt *vt, int on);
 
+/* The Amiga console's ways (Latin-1, 0x9B CSI, LF = new line, FF = clear
+ * page, window bounds report...), for the local Shell. */
+void vt_set_amiga(Vt *vt, int on);
+unsigned long vt_raw_events(const Vt *vt);  /* classes from CSI n{ */
+int vt_window_bg(const Vt *vt);             /* CSI >n m, 0 = default */
+
 int vt_cols(const Vt *vt);
 int vt_rows(const Vt *vt);
 
