@@ -22,7 +22,7 @@ void con_free(void);                    /* after con_alive() is FALSE */
 void con_timer_init(void);              /* the clock, for either mode */
 void con_timer_free(void);
 void term_now(struct timeval *tv);
-void con_arm_render(void);              /* a frame from now: signal */
+void con_arm_render(LONG us);           /* that long from now: signal */
 BOOL con_render_due(void);              /* the frame is up */
 
 /* What console.c needs from the rest of CTerm (main.c). */

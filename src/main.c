@@ -139,6 +139,30 @@ static BOOL local = TRUE;               /* the Amiga Shell, not the PC */
 static LONG want_cols = 80, want_rows = 25; /* the first window, in cells */
 static BOOL quitting;
 static BOOL owed;                       /* drawing owed: a frame timer runs */
+static BOOL flood;                      /* the last draw was a scroll */
+
+#ifdef PROFILE
+/* A profiling build (make PROFILE=1): Emu68's free-running 54 MHz counter
+ * (MOVEC $e1, as Wasabi's health.c reads it), ticks per part. */
+#define MOVEC_D0(rc, out) \
+    asm volatile(".short 0x4e7a, %c1\n\tmove.l %%d0,%0" \
+                 : "=g"(out) : "i"(rc) : "d0")
+static ULONG ticks(void)
+{
+    ULONG lo;
+    APTR ssp = SuperState();
+    MOVEC_D0(0xe1, lo);
+    if (ssp)
+        UserState(ssp);
+    return lo;
+}
+static ULONG pf_vt, pf_draw, pf_pkt, pf_wait, pf_all0, pf_writes, pf_draws;
+#define PF_START(v) ULONG v = ticks()
+#define PF_ADD(acc, v) (acc += ticks() - (v))
+#else
+#define PF_START(v)
+#define PF_ADD(acc, v)
+#endif
 static int back;                        /* lines scrolled back */
 static int curx = -1, cury = -1;        /* where the cursor was drawn */
 
@@ -848,17 +872,53 @@ static struct CEntry *cell_get(ULONG cp, ULONG fg, ULONG bg, UWORD attr,
     return &ccache[i];
 }
 
+/* What each screen row shows now: a blank row painted blank need not be
+ * painted again (CCON's blank-scroll skip: a flood of empty lines then
+ * costs nothing on screen). Cleared whenever the window is redrawn. */
+static UBYTE shown_blank[1024];
+
+static void forget_shown(void)
+{
+    memset(shown_blank, 0, sizeof shown_blank);
+}
+
 /* One text row: put together from cell pictures, written in one go. */
 static void paint_row(int r)
 {
     static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
     int w, x, cx = -1, cy = -1, vis = 0, rw = cols * cw;
     const VtCell *line = vt_line(vt, r, back, &w);
+    const VtCell *prev = NULL;
+    ULONG pfg = 0, pbg = 0;
+    struct CEntry *pe = NULL;
     if (r < 0 || r >= rows)
         return;
     vt_cursor(vt, &cx, &cy, &vis);
     if (!vis || back > 0)
         cy = -1;
+    /* a blank row (all default spaces, no cursor): one fill, or nothing */
+    if (r != cy && !vt_reverse_video(vt)) {
+        int blank = 1;
+        for (x = 0; x < w && x < cols && line; x++) {
+            const VtCell *c = &line[x];
+            if ((c->cp && c->cp != ' ') || c->fg != VT_DEFAULT ||
+                c->bg != VT_DEFAULT || c->attr) {
+                blank = 0;
+                break;
+            }
+        }
+        if (blank) {
+            if (r < (int)sizeof shown_blank && shown_blank[r])
+                return;
+            SetAPen(rp, pen_for(defbg));
+            RectFill(rp, ox, oy + r * ch, ox + rw - 1, oy + r * ch + ch - 1);
+            if (r < (int)sizeof shown_blank)
+                shown_blank[r] = 1;
+            return;
+        }
+    }
+    if (r < (int)sizeof shown_blank)
+        shown_blank[r] = 0;
     for (x = 0; x < cols; x++) {
         const VtCell *c = x < w && line ? &line[x] : &empty;
         ULONG fg, bg, cp = c->cp;
@@ -870,15 +930,32 @@ static void paint_row(int r)
             continue;                   /* drawn with its left half */
         if (x + 1 < cols && x + 1 < w && line && line[x + 1].cp == VT_WIDE_TAIL)
             wide = 1;
-        cell_rgb(c, &fg, &bg);
+        /* neighbours mostly share colours: work them out once a run */
+        if (prev && c->fg == prev->fg && c->bg == prev->bg &&
+            c->attr == prev->attr) {
+            fg = pfg;
+            bg = pbg;
+        } else {
+            cell_rgb(c, &fg, &bg);
+            pfg = fg;
+            pbg = bg;
+            pe = NULL;
+        }
+        prev = c;
         if (r == cy && x == cx) {       /* the cursor: the cell reversed */
             ULONG t = fg; fg = bg; bg = t;
+            pe = NULL;
+            prev = NULL;
         }
         if (usett)
             cp = tt_stand_in(cp);
         if (cp < ' ')
             cp = ' ';
-        e = cell_get(cp, fg, bg, c->attr, wide);
+        if (pe && pe->cp == cp && !wide && !pe->wide && pe->fg == fg &&
+            pe->bg == bg)
+            e = pe;                     /* the same cell again (spaces) */
+        else
+            e = pe = cell_get(cp, fg, bg, c->attr, wide);
         n = wide ? 2 * cw : cw;
         if (x * cw + n > rw)
             n = rw - x * cw;
@@ -1045,10 +1122,13 @@ static void layout_and_resize(void)
         vt_resize(vt, cols, rows);
 }
 
+static void forget_shown(void);
+
 static void redraw_all(void)
 {
     int r;
     VtChanges chg;
+    forget_shown();
     SetAPen(rp, pen_for(defbg));
     RectFill(rp, win->BorderLeft, win->BorderTop,
              win->Width - win->BorderRight - 1,
@@ -1070,6 +1150,7 @@ static void refresh(void)
     if (!vt_take_changes(vt, &chg))
         return;
     draw_cursor(FALSE);
+    flood = chg.all || chg.scroll_n != 0;
     if (painter) {
         /* nothing is ever scrolled on screen: the rows a scroll moved
          * are painted again (cheap), the rest only if they changed */
@@ -1097,7 +1178,15 @@ static void refresh(void)
 
 /* ---- for console.c ------------------------------------------------- */
 
-void term_write(const UBYTE *b, LONG n) { vt_write(vt, b, n); }
+void term_write(const UBYTE *b, LONG n)
+{
+    PF_START(t0);
+    vt_write(vt, b, n);
+    PF_ADD(pf_vt, t0);
+#ifdef PROFILE
+    pf_writes++;
+#endif
+}
 int term_cols(void) { return cols; }
 int term_rows(void) { return rows; }
 int term_cursor_x(void) { int x, y, v; vt_cursor(vt, &x, &y, &v); return x; }
@@ -1105,9 +1194,14 @@ int term_cursor_y(void) { int x, y, v; vt_cursor(vt, &x, &y, &v); return y; }
 
 void term_flush(void)
 {
+    PF_START(t0);
     owed = FALSE;
     if (win)
         refresh();
+    PF_ADD(pf_draw, t0);
+#ifdef PROFILE
+    pf_draws++;
+#endif
 }
 
 /* Draw within a frame: writes that keep coming meanwhile are drawn with
@@ -1119,7 +1213,10 @@ void term_render_soon(void)
     if (owed)
         return;
     owed = TRUE;
-    con_arm_render();
+    /* jump scroll: while text pours in and every draw is a whole scrolled
+     * window, draw every 60 ms instead of every frame - a third of the
+     * work, still smooth to the eye; back to every frame once it calms */
+    con_arm_render(flood ? 60000 : 20000);
 }
 
 static void scroll_view(int to)
@@ -2104,8 +2201,33 @@ static BOOL menu_pick(ULONG id)
     case M_SMALLER: tt_size(-2); break;
     case M_SPEED: speed_test(); break;
     case M_ABOUT:
-        say("\r\n\x1b[1mCTerm\x1b[0m 0.1b1 - a VT100/xterm terminal for the "
+        say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
             "Amiga.\r\n");
+#ifdef PROFILE
+        {   /* ms = ticks / 54000 */
+            char l[200];
+            ULONG all = ticks() - pf_all0;
+            strcpy(l, "[profile ms: all ");
+            numstr_cat(l, all / 54000);
+            strcat(l, ", waiting ");
+            numstr_cat(l, pf_wait / 54000);
+            strcat(l, ", packets ");
+            numstr_cat(l, pf_pkt / 54000);
+            strcat(l, " (emulator ");
+            numstr_cat(l, pf_vt / 54000);
+            strcat(l, ", drawing ");
+            numstr_cat(l, pf_draw / 54000);
+            strcat(l, " in ");
+            numstr_cat(l, pf_draws);
+            strcat(l, " draws); writes ");
+            numstr_cat(l, pf_writes);
+            strcat(l, "]\r\n");
+            say(l);
+            pf_vt = pf_draw = pf_pkt = pf_wait = pf_writes = pf_draws = 0;
+            pf_all0 = ticks();
+            refresh();
+        }
+#endif
         break;
     case M_UTF8:
         utf8 = !utf8;
@@ -2309,7 +2431,11 @@ static void run(void)
              * more per round, and a flood of tiny writes is all rounds */
             /* the frame timer and WaitForChar's timer signal the timer
              * port, whose bit con_sigmask() includes */
-            sigs = Wait(sigs);
+            {
+                PF_START(tw);
+                sigs = Wait(sigs);
+                PF_ADD(pf_wait, tw);
+            }
             n = 0;
         } else {
             if (wait >= 0) {
@@ -2334,7 +2460,11 @@ static void run(void)
         if (local) {
             char r[256];
             int k;
-            con_handle(sigs);
+            {
+                PF_START(tp);
+                con_handle(sigs);
+                PF_ADD(pf_pkt, tp);
+            }
             k = vt_take_reply(vt, r, sizeof r);
             if (k > 0)
                 con_reply((UBYTE *)r, k);

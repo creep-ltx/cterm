@@ -6,6 +6,10 @@ CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -Wall -Wno-pointer-sign -Ii
 
 all: CTerm test
 
+ifdef PROFILE
+CFLAGS += -DPROFILE
+endif
+
 CTerm: src/main.c src/vt.c src/vt.h src/boxtable.h src/console.c src/console.h
 	$(CC) $(CFLAGS) src/main.c src/vt.c src/console.c -o CTerm
 

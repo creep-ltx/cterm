@@ -1065,6 +1065,42 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
     int i;
     for (i = 0; i < len; i++) {
         int c = buf[i];
+        /* The fast lane: a run of plain ASCII text in the normal state
+         * goes straight into the row - most output is just this, and
+         * put()'s general checks (width, line drawing, insert) cost. */
+        if (c >= 0x20 && c < 0x7F && v->state == S_GROUND && !v->uneed &&
+            v->g[v->gl] != '0' && !v->insert) {
+            VtCell *r = row(v, v->y);
+            for (;;) {
+                if (v->pending && v->autowrap) {
+                    v->x = 0;
+                    linefeed(v);
+                    r = row(v, v->y);
+                }
+                v->pending = 0;
+                if (r[v->x].cp == VT_WIDE_TAIL && v->x > 0)
+                    r[v->x - 1] = blank_of(v);
+                if (v->x + 1 < v->cols && r[v->x + 1].cp == VT_WIDE_TAIL)
+                    r[v->x + 1] = blank_of(v);
+                r[v->x] = v->pen;
+                r[v->x].cp = (uint32_t)c;
+                v->dirty[v->y] = 1;
+                if (v->x + 1 >= v->cols) {
+                    v->x = v->cols - 1;
+                    v->pending = 1;
+                } else
+                    v->x++;
+                if (i + 1 >= len)
+                    break;
+                c = buf[i + 1];
+                if (c < 0x20 || c >= 0x7F)
+                    break;
+                i++;
+            }
+            v->any_dirty = 1;
+            v->last_cp = (uint32_t)buf[i];
+            continue;
+        }
         /* Latin-1 (the Amiga's ANSI): bytes 0x80-0x9F are C1 controls */
         if (!v->utf8 && v->state == S_GROUND && c >= 0x80 && c < 0xA0) {
             c1(v, c);

@@ -141,10 +141,10 @@ static void disarm(struct timerequest *t, BOOL *armedp)
     }
 }
 
-void con_arm_render(void)
+void con_arm_render(LONG us)
 {
     if (rtio && !rarmed) {
-        arm(rtio, 20000);               /* a frame */
+        arm(rtio, us);
         rarmed = TRUE;
     }
 }
