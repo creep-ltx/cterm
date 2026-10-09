@@ -1,0 +1,118 @@
+[?1h=[?25l[H(B[mtop - 22:45:45 up 1 day, 15:08,  0 users,  load average: 0,05, 0,05, 0,06(B[m[39;49m(B[m[39;49m[K
+(B[mTasks:(B[m[39;49m[1m 395 (B[m[39;49m(B[mtotal,(B[m[39;49m[1m 1 (B[m[39;49m(B[mrunning,(B[m[39;49m[1m 394 (B[m[39;49m(B[msleep,(B[m[39;49m[1m 0 (B[m[39;49m(B[md-sleep,(B[m[39;49m[1m 0 (B[m[39;49m(B[mstopped,(B[m[39;49m[1m 0 (B[m[39;49m(B[mzombie(B[m[39;49m(B[m[39;49m[K
+(B[m%Cpu(s):(B[m[39;49m[1m  0,3 (B[m[39;49m(B[mus,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[msy,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mni,(B[m[39;49m[1m 99,7 (B[m[39;49m(B[mid,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mwa,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mhi,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[msi,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mst(B[m[39;49m(B[m (B[m[39;49m(B[m[39;49m[K
+(B[mMiB Mem :(B[m[39;49m[1m  31189,9 (B[m[39;49m(B[mtotal,(B[m[39;49m[1m   3741,2 (B[m[39;49m(B[mfree,(B[m[39;49m[1m   6657,8 (B[m[39;49m(B[mused,(B[m[39;49m[1m  23841,6 (B[m[39;49m(B[mbuff/cache(B[m[39;49m(B[m (B[m[39;49m(B[m    (B[m[39;49m(B[m[39;49m[K
+(B[mMiB Swap:(B[m[39;49m[1m  31189,0 (B[m[39;49m(B[mtotal,(B[m[39;49m[1m  31186,7 (B[m[39;49m(B[mfree,(B[m[39;49m[1m      2,3 (B[m[39;49m(B[mused.(B[m[39;49m[1m  24532,2 (B[m[39;49m(B[mavail Mem (B[m[39;49m(B[m[39;49m[K
+[K
+[7m    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND                      (B[m[39;49m[K
+(B[m1207590 creep     16  -4 5622500 390648 130596 S   4,9   1,2   1:44.61 claude                       (B[m[39;49m[K
+(B[m      1 root      20   0   22296  16244  11188 S   0,0   0,1   0:03.26 systemd                      (B[m[39;49m[K
+(B[m      2 root      20   0       0      0      0 S   0,0   0,0   0:00.03 kthreadd                     (B[m[39;49m[K
+(B[m      3 root      20   0       0      0      0 S   0,0   0,0   0:00.00 pool_workqueue_release       (B[m[39;49m[K
+(B[m      4 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-rcu_gp             (B[m[39;49m[K
+(B[m      5 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-sync_wq            (B[m[39;49m[K
+(B[m      6 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-kvfree_rcu_reclaim (B[m[39;49m[K
+(B[m      7 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-slub_flushwq       (B[m[39;49m[K
+(B[m      8 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-netns              (B[m[39;49m[K
+(B[m     11 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/0:0H-kblockd         (B[m[39;49m[K
+(B[m     14 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-mm_percpu_wq       (B[m[39;49m[K
+(B[m     15 root      20   0       0      0      0 S   0,0   0,0   0:01.76 ksoftirqd/0                  (B[m[39;49m[K
+(B[m     16 root      -2   0       0      0      0 I   0,0   0,0   0:16.11 rcu_preempt                  (B[m[39;49m[K
+(B[m     17 root      -2   0       0      0      0 S   0,0   0,0   0:00.00 rcub/0                       (B[m[39;49m[K
+(B[m     18 root      20   0       0      0      0 S   0,0   0,0   0:00.00 rcu_exp_par_gp_kthread_work+ (B[m[39;49m[K
+(B[m     19 root      20   0       0      0      0 S   0,0   0,0   0:00.18 rcu_exp_gp_kthread_worker    (B[m[39;49m[K
+(B[m     20 root      rt   0       0      0      0 S   0,0   0,0   0:03.94 migration/0                  (B[m[39;49m[K
+(B[m     21 root      20   0       0      0      0 S   0,0   0,0   0:00.00 kprobe-optimizer             (B[m[39;49m[K
+(B[m     22 root     -51   0       0      0      0 S   0,0   0,0   0:00.00 idle_inject/0                (B[m[39;49m[K
+(B[m     23 root      20   0       0      0      0 S   0,0   0,0   0:00.00 cpuhp/0                      (B[m[39;49m[K
+(B[m     24 root      20   0       0      0      0 S   0,0   0,0   0:00.00 cpuhp/1                      (B[m[39;49m[K
+(B[m     25 root     -51   0       0      0      0 S   0,0   0,0   0:00.00 idle_inject/1                (B[m[39;49m[K
+(B[m     26 root      rt   0       0      0      0 S   0,0   0,0   0:00.94 migration/1                  (B[m[39;49m[K[H(B[mtop - 22:45:46 up 1 day, 15:09,  0 users,  load average: 0,05, 0,05, 0,06(B[m[39;49m(B[m[39;49m[K
+(B[mTasks:(B[m[39;49m[1m 394 (B[m[39;49m(B[mtotal,(B[m[39;49m[1m 1 (B[m[39;49m(B[mrunning,(B[m[39;49m[1m 393 (B[m[39;49m(B[msleep,(B[m[39;49m[1m 0 (B[m[39;49m(B[md-sleep,(B[m[39;49m[1m 0 (B[m[39;49m(B[mstopped,(B[m[39;49m[1m 0 (B[m[39;49m(B[mzombie(B[m[39;49m(B[m[39;49m[K
+(B[m%Cpu(s):(B[m[39;49m[1m  0,3 (B[m[39;49m(B[mus,(B[m[39;49m[1m  0,1 (B[m[39;49m(B[msy,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mni,(B[m[39;49m[1m 99,6 (B[m[39;49m(B[mid,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mwa,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mhi,(B[m[39;49m[1m  0,1 (B[m[39;49m(B[msi,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mst(B[m[39;49m(B[m (B[m[39;49m(B[m[39;49m[K
+
+
+[K
+
+(B[m 665418 creep     16  -4 5622488 391108 132656 S   3,0   1,2  11:11.49 claude                       (B[m[39;49m[K
+(B[m   1308 creep     16  -4 5622488 428656 130540 S   1,0   1,3  11:19.74 claude                       (B[m[39;49m[K
+(B[m1207590 creep     16  -4 5622500 387680 130596 S   1,0   1,2   1:44.62 claude                       (B[m[39;49m[K
+(B[m      1 root      20   0   22296  16244  11188 S   0,0   0,1   0:03.26 systemd                      (B[m[39;49m[K
+(B[m      2 root      20   0       0      0      0 S   0,0   0,0   0:00.03 kthreadd                     (B[m[39;49m[K
+(B[m      3 root      20   0       0      0      0 S   0,0   0,0   0:00.00 pool_workqueue_release       (B[m[39;49m[K
+(B[m      4 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-rcu_gp             (B[m[39;49m[K
+(B[m      5 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-sync_wq            (B[m[39;49m[K
+(B[m      6 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-kvfree_rcu_reclaim (B[m[39;49m[K
+(B[m      7 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-slub_flushwq       (B[m[39;49m[K
+(B[m      8 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-netns              (B[m[39;49m[K
+(B[m     11 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/0:0H-kblockd         (B[m[39;49m[K
+(B[m     14 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-mm_percpu_wq       (B[m[39;49m[K
+(B[m     15 root      20   0       0      0      0 S   0,0   0,0   0:01.76 ksoftirqd/0                  (B[m[39;49m[K
+(B[m     16 root      -2   0       0      0      0 I   0,0   0,0   0:16.11 rcu_preempt                  (B[m[39;49m[K
+(B[m     17 root      -2   0       0      0      0 S   0,0   0,0   0:00.00 rcub/0                       (B[m[39;49m[K
+(B[m     18 root      20   0       0      0      0 S   0,0   0,0   0:00.00 rcu_exp_par_gp_kthread_work+ (B[m[39;49m[K
+(B[m     19 root      20   0       0      0      0 S   0,0   0,0   0:00.18 rcu_exp_gp_kthread_worker    (B[m[39;49m[K
+(B[m     20 root      rt   0       0      0      0 S   0,0   0,0   0:03.94 migration/0                  (B[m[39;49m[K
+(B[m     21 root      20   0       0      0      0 S   0,0   0,0   0:00.00 kprobe-optimizer             (B[m[39;49m[K
+(B[m     22 root     -51   0       0      0      0 S   0,0   0,0   0:00.00 idle_inject/0                (B[m[39;49m[K
+(B[m     23 root      20   0       0      0      0 S   0,0   0,0   0:00.00 cpuhp/0                      (B[m[39;49m[K
+(B[m     24 root      20   0       0      0      0 S   0,0   0,0   0:00.00 cpuhp/1                      (B[m[39;49m[K[H(B[mtop - 22:45:47 up 1 day, 15:09,  0 users,  load average: 0,05, 0,05, 0,06(B[m[39;49m(B[m[39;49m[K
+
+(B[m%Cpu(s):(B[m[39;49m[1m  0,5 (B[m[39;49m(B[mus,(B[m[39;49m[1m  0,4 (B[m[39;49m(B[msy,(B[m[39;49m[1m  4,8 (B[m[39;49m(B[mni,(B[m[39;49m[1m 94,3 (B[m[39;49m(B[mid,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mwa,(B[m[39;49m[1m  0,1 (B[m[39;49m(B[mhi,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[msi,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mst(B[m[39;49m(B[m (B[m[39;49m(B[m[39;49m[K
+
+
+[K
+
+(B[m 725767 creep     30  10 2223420 393248  79656 S  80,7   1,2   0:05.50 clangd.main                  (B[m[39;49m[K
+(B[m 665418 creep     16  -4 5622488 395940 132656 S   5,0   1,2  11:11.54 claude                       (B[m[39;49m[K
+(B[m   1307 creep     16  -4 5614224 297108 119120 S   1,0   0,9   4:50.33 claude                       (B[m[39;49m[K
+(B[m   1308 creep     16  -4 5622488 428648 130540 S   1,0   1,3  11:19.75 claude                       (B[m[39;49m[K
+(B[m 535625 creep     16  -4 5622488 284088 127380 S   1,0   0,9   5:55.02 claude                       (B[m[39;49m[K
+(B[m1922486 creep     20   0 5606004 206164 117708 S   1,0   0,6   0:02.64 claude                       (B[m[39;49m[K
+(B[m      1 root      20   0   22296  16244  11188 S   0,0   0,1   0:03.26 systemd                      (B[m[39;49m[K
+(B[m      2 root      20   0       0      0      0 S   0,0   0,0   0:00.03 kthreadd                     (B[m[39;49m[K
+(B[m      3 root      20   0       0      0      0 S   0,0   0,0   0:00.00 pool_workqueue_release       (B[m[39;49m[K
+(B[m      4 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-rcu_gp             (B[m[39;49m[K
+(B[m      5 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-sync_wq            (B[m[39;49m[K
+(B[m      6 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-kvfree_rcu_reclaim (B[m[39;49m[K
+(B[m      7 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-slub_flushwq       (B[m[39;49m[K
+(B[m      8 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-netns              (B[m[39;49m[K
+(B[m     11 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/0:0H-kblockd         (B[m[39;49m[K
+(B[m     14 root       0 -20       0      0      0 I   0,0   0,0   0:00.00 kworker/R-mm_percpu_wq       (B[m[39;49m[K
+(B[m     15 root      20   0       0      0      0 S   0,0   0,0   0:01.76 ksoftirqd/0                  (B[m[39;49m[K
+(B[m     16 root      -2   0       0      0      0 I   0,0   0,0   0:16.11 rcu_preempt                  (B[m[39;49m[K
+(B[m     17 root      -2   0       0      0      0 S   0,0   0,0   0:00.00 rcub/0                       (B[m[39;49m[K
+(B[m     18 root      20   0       0      0      0 S   0,0   0,0   0:00.00 rcu_exp_par_gp_kthread_work+ (B[m[39;49m[K
+(B[m     19 root      20   0       0      0      0 S   0,0   0,0   0:00.18 rcu_exp_gp_kthread_worker    (B[m[39;49m[K
+(B[m     20 root      rt   0       0      0      0 S   0,0   0,0   0:03.94 migration/0                  (B[m[39;49m[K
+(B[m     21 root      20   0       0      0      0 S   0,0   0,0   0:00.00 kprobe-optimizer             (B[m[39;49m[K[H(B[mtop - 22:45:48 up 1 day, 15:09,  0 users,  load average: 0,05, 0,05, 0,06(B[m[39;49m(B[m[39;49m[K
+
+(B[m%Cpu(s):(B[m[39;49m[1m  0,2 (B[m[39;49m(B[mus,(B[m[39;49m[1m  0,1 (B[m[39;49m(B[msy,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mni,(B[m[39;49m[1m 99,7 (B[m[39;49m(B[mid,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mwa,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mhi,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[msi,(B[m[39;49m[1m  0,0 (B[m[39;49m(B[mst(B[m[39;49m(B[m (B[m[39;49m(B[m[39;49m[K
+(B[mMiB Mem :(B[m[39;49m[1m  31189,9 (B[m[39;49m(B[mtotal,(B[m[39;49m[1m   3631,3 (B[m[39;49m(B[mfree,(B[m[39;49m[1m   6767,6 (B[m[39;49m(B[mused,(B[m[39;49m[1m  23841,4 (B[m[39;49m(B[mbuff/cache(B[m[39;49m(B[m (B[m[39;49m(B[m    (B[m[39;49m(B[m[39;49m[K
+(B[mMiB Swap:(B[m[39;49m[1m  31189,0 (B[m[39;49m(B[mtotal,(B[m[39;49m[1m  31186,7 (B[m[39;49m(B[mfree,(B[m[39;49m[1m      2,3 (B[m[39;49m(B[mused.(B[m[39;49m[1m  24422,3 (B[m[39;49m(B[mavail Mem (B[m[39;49m(B[m[39;49m[K
+[K
+
+(B[m   1242 creep     16  -4 5595808 165004  91964 S   1,0   0,5   2:43.40 claude                       (B[m[39;49m[K
+(B[m   1244 creep     16  -4 5591644 165464  92608 S   1,0   0,5   3:04.12 claude                       (B[m[39;49m[K
+(B[m 665418 creep     16  -4 5622488 397540 132656 S   1,0   1,2  11:11.55 claude                       (B[m[39;49m[K
+(B[m1207590 creep     16  -4 5622500 388784 130596 S   1,0   1,2   1:44.63 claude                       (B[m[39;49m[K
+(B[m1916089 creep     16  -4 5610124 245492 123576 S   1,0   0,8   0:08.05 claude                       (B[m[39;49m[K
+(B[m[1m1928127 creep     16  -4   13716   6916   4676 R   1,0   0,0   0:00.01 top                          (B[m[39;49m[K
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[?1l>[31;1H
+[?12l[?25h[K

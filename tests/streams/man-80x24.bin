@@ -1,0 +1,70 @@
+[?1049h[22;0;0t[24;1H[?1h=[4mLS[24m(1)                            User Commands                            [4mLS[24m(1)[m
+[m
+[1mNAME[0m[m
+     ls - list directory contents[m
+[m
+[1mSYNOPSIS[0m[m
+     [1mls [22m[[4mOPTION[24m]... [[4mFILE[24m]...[m
+[m
+[1mDESCRIPTION[0m[m
+     List information about the FILEs (the current directory by default).  Sort[m
+     entries alphabetically if none of [1m-cftuvSUX [22mnor [1m--sort [22mis specified.[m
+[m
+     Mandatory arguments to long options are mandatory for short options too.[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-a\[1m[4m-a, --all[24m[22m]8;;\[1m[22m[m
+            do not ignore entries starting with .[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-A\[1m[4m-A, --almost-all[24m[22m]8;;\[1m[22m[m
+            do not list implied . and ..[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls--author\[1m[4m--author[24m[22m]8;;\[1m[22m[m
+            with [1m-l[22m, print the author of each file[m
+[m
+[7m Manual page ls(1) line 1 (press h for help or q to quit)[27m[K[K     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-b\[1m[4m-b, --escape[24m[22m]8;;\[1m[22m[m
+            print C-style escapes for nongraphic characters[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls--block-size\[1m[4m--block-size=SIZE[24m[22m]8;;\[1m[22m[m
+            with   [1m-l[22m,   scale   sizes   by  SIZE  when  printing  them;  e.g.,[m
+            '--block-size=M'; see SIZE format below[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-B\[1m[4m-B, --ignore-backups[24m[22m]8;;\[1m[22m[m
+            do not list implied entries ending with ~[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-c\[1m[4m-c[24m[22m]8;;\[1m[22m     with [1m-lt[22m: sort by, and show, ctime (time of  last  change  of  file[m
+            status  information);  with [1m-l[22m: show ctime and sort by name; other‐[m
+            wise: sort by ctime, newest first[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-C\[1m[4m-C[24m[22m]8;;\[1m[22m     list entries by columns[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls--color\[1m[4m--color[=WHEN][24m[22m]8;;\[1m[22m[m
+            color the output WHEN; more info below[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-d\[1m[4m-d, --directory[24m[22m]8;;\[1m[22m[m
+            list directories themselves, not their contents[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-D\[1m[4m-D, --dired[24m[22m]8;;\[1m[22m[m
+[7m Manual page ls(1) line 24 (press h for help or q to quit)[27m[K[K            generate output designed for Emacs' dired mode[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-f\[1m[4m-f[24m[22m]8;;\[1m[22m     same as [1m-a -U[0m[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-F\[1m[4m-F, --classify[=WHEN][24m[22m]8;;\[1m[22m[m
+            append indicator (one of */=>@|) to entries WHEN[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls--file-type\[1m[4m--file-type[24m[22m]8;;\[1m[22m[m
+            like [1m-F[22m, except do not append '*'[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls--format\[1m[4m--format=WORD[24m[22m]8;;\[1m[22m[m
+            across,horizontal ([1m-x[22m), commas ([1m-m[22m), long ([1m-l[22m), single-column ([1m-1[22m),[m
+            verbose ([1m-l[22m), vertical ([1m-C[22m)[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls--full-time\[1m[4m--full-time[24m[22m]8;;\[1m[22m[m
+            like [1m-l --time-style[22m=[4mfull-iso[0m[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-g\[1m[4m-g[24m[22m]8;;\[1m[22m     like [1m-l[22m, but do not list owner[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls--group-directories-first\[1m[4m--group-directories-first[24m[22m]8;;\[1m[22m[m
+            group directories before files[m
+[m
+     ]8;;https://www.gnu.org/software/coreutils/manual/coreutils.html#ls-G\[1m[4m-G, --no-group[24m[22m]8;;\[1m[22m[m
+[7m Manual page ls(1) line 47 (press h for help or q to quit)[27m[K

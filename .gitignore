@@ -1,0 +1,5 @@
+.venv/
+tests/vtdump
+CTerm
+*.o
+__pycache__/
