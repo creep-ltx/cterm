@@ -182,6 +182,12 @@ def main():
     ap.add_argument("command", nargs="*")
     a = ap.parse_args()
     command = a.command or [os.environ.get("SHELL", "/bin/bash"), "-l"]
+    # Our process number, so the relay can be stopped by it: "pkill -f"
+    # with its name also hits any shell whose command line mentions it.
+    pidfile = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
+                           "cterm-relay.pid")
+    with open(pidfile, "w") as fh:
+        fh.write(str(os.getpid()))
     host = a.host
     log("cterm-relay, knocking on port %d" % a.port)
     while True:

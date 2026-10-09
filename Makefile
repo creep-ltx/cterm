@@ -2,7 +2,7 @@
 # the emulator core and its tests also build natively on Linux.
 
 CC      = $(HOME)/opt/amiga/bin/m68k-amigaos-gcc
-CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -Wall -Wno-pointer-sign
+CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -Wall -Wno-pointer-sign -Iinclude
 
 all: CTerm test
 
