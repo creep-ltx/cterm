@@ -75,15 +75,46 @@ Amiga fonts are Latin-1.
 - The local Amiga Shell needs a console handler of CTerm's own (`CTERM:`);
   that is milestone 3. Notes: `Knowledge/amiga/amigados-handlers.md`.
 
+## What CTerm is (decided 2026-10-09)
+
+One terminal program for both:
+- **The local Amiga Shell:** everything the Shell does (`List`, `Dir`,
+  `Ed`, `More`...), with Amiga bitmap fonts in Latin-1 when wanted, or
+  TrueType and Unicode.
+- **Remote services:** the PC relay (Claude Code, bash), telnet, ssh and
+  the like.
+
+Like foot or xterm on Linux: the terminal does not care whether the
+program inside is local or remote.
+
+**CCON stays a separate product,** for people who only want a better
+console handler. CTerm does not replace it and does not touch it.
+CTerm's own console handler is new C code; it takes CCON's knowledge
+(the packet protocol, what Ed/More/List expect) but not its code.
+
 ## Milestones
 
-1. The emulator core, tested on Linux against pyte. A window on Workbench
-   showing a PC program through the relay, with Amiga fonts.
-2. TrueType through ttengine: glyph cache, antialiasing on deep screens.
-3. The local Amiga Shell through a `CTERM:` handler.
-4. Settings window, menus, own screen / full screen, mouse selection and
-   the clipboard, scroll bar on/off.
-5. Dialling out: telnet; maybe ssh later (AmiSSL 5.27 is installed).
+1. **Done 2026-10-09.** The emulator core, tested on Linux against pyte. A
+   window on Workbench showing a PC program through the relay, with
+   Amiga fonts.
+2. **Done 2026-10-09.** TrueType through ttengine (DejaVu Sans Mono;
+   14–28 ms per full screen on the A1200).
+3. **The local Amiga Shell:**
+   - a console handler of CTerm's own (`CTERM:`), mounted by CTerm, that
+     relays bytes between the Shell and CTerm's window and does not draw;
+   - the Amiga console's own codes in the emulator (CSI as `0x9B`,
+     window-size reports, raw/cooked mode, raw key events);
+   - line editing in the handler (history first, completion later,
+     CCON's keys as a guide).
+4. **Dialling out:** telnet to any host and port, a small list of saved
+   places (BBSes, the Pi), and the PC relay kept.
+5. **ssh:** most likely libssh2 on AmiSSL 5.27's crypto (installed). To be
+   researched: an existing 68k port, or building it with Bebbo's gcc.
+6. **Comfort:**
+   - a settings window (fonts, colours, screen, line spacing);
+   - window size remembered;
+   - mouse selection and the clipboard;
+   - perhaps tabs: the Shell and a remote session side by side.
 
 ## Reuse
 
