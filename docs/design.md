@@ -143,9 +143,12 @@ In the order the user and I agreed (2026-10-10):
   The passwords are kept on the Amiga only (ENVARC:CTerm/), never shown.
 - **Done 2026-10-10: Zmodem, Ymodem, Xmodem and Hydra** (tested against
   lrzsz and HydraCom itself on the PC, and every one from CTerm in FS-UAE
-  through tests/xfer/zbbs.py). To do: the real A1200 against a real board
-  (the PC's firewall stops the A1200's calls to the PC: open it, or use a
-  board on the internet); SFTP and FTP later. Was: **File
+  through tests/xfer/zbbs.py). **Zmodem verified on the real A1200
+  2026-10-10** through pc/cterm-relay.py running lsz (the PC calls out, so
+  the firewall does not matter): 20 MB at ~500 KB/s, md5-identical; Esc
+  keeps name.part and a new send goes on from it. To do: Hydra, Ymodem
+  and Xmodem on the A1200 (the same relay way: run HydraCom / lsz --ymodem
+  / lsz --xmodem through cterm-relay), a real board; SFTP and FTP later. Was: **File
   transfers:** Zmodem, Ymodem, Xmodem and Hydra first (BBSes);
   SFTP, FTP and the like later. Settings has a download drawer (where
   received files go) and an upload drawer (where the file requester opens
@@ -162,6 +165,23 @@ In the order the user and I agreed (2026-10-10):
 - Also: an ssh password login tried against a real server, ARexx,
   dropping files on the window, emoji fallback, more stock-A1200 speed.
 - Keys configurable (the rule for all the user's programs).
+
+- **After the audit of 2026-10-10** (Knowledge/amiga/cterm-audit-2026-10-10.md;
+  every finding fixed, commits b6f36fc..cefd2fd). Left open:
+  - not yet tried on the A1200: an ssh login (password, keyboard-interactive,
+    a key) - it now uses CTerm's own wiping allocator in libssh2; a changed
+    host key needing "yes"; known_hosts past 4 KB; Hydra/Ymodem/Xmodem;
+    two transfers at once (the second refused); the own-screen visitor
+    question at quit; ghost letters on a planar screen during a transfer;
+  - the pen hash table (3a058dd) gave a 16-colour screen's pens on the
+    Workbench after a screen switch; reverted (040e092), cause unknown -
+    test a screen switch on the A1200 before trying it again;
+  - measure conbench on the stock A1200 (FS-UAE) again: the emulator's new
+    fast lane for CP437 and box lines (6af565f) was only measured on the PC
+    (0.30 -> 0.11 s for 50 MB of CP437 art);
+  - the vt.c fuzzer is `make fuzz` (tests/fuzz/fz.c, ASan/UBSan, 10 seeds);
+  - the name lookup (gethostbyname) still blocks the window until the
+    TCP/IP stack gives up; everything after it has Esc and 30 s.
 
 - **Memory, load on demand** (the user, 2026-10-10): done - the
   protocols are files (PROGDIR:Protocols/), ttengine.library (109 KB)

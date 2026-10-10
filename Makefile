@@ -96,3 +96,11 @@ ztest: tests/zmodem_test tests/hydra_test
 	tests/hydra/build.sh
 	tests/hydra_test
 
+
+# The emulator against random hostile bytes, with ASan/UBSan (a few
+# minutes; any report or hang is a bug): make fuzz
+tests/fuzz/fz: tests/fuzz/fz.c src/vt.c src/vt.h
+	gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -I. -o $@ tests/fuzz/fz.c src/vt.c
+
+fuzz: tests/fuzz/fz
+	for s in 1 2 3 4 5 6 7 8 9 10; do tests/fuzz/fz $$s || exit 1; done; echo "fuzz: all passed"

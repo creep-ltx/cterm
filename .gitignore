@@ -25,3 +25,4 @@ tests/zmodem_test
 Protocols/
 tests/hydra_test
 tests/hydra/hcref
+tests/fuzz/fz
