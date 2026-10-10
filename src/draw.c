@@ -1089,36 +1089,99 @@ void draw_cursor(BOOL on)
 
 ULONG *rowbuf;                   /* one text row: cols*cw x ch */
 static LONG rowbuf_n;
-#define CSIZE 4096                      /* cache entries (a power of 2) */
+/* The cell cache: one table of single cells and a smaller one of wide
+ * ones (each picture only as big as its cell). Entries: about one per
+ * two cells of the window, a power of 2 from 64 to 4096, and never more
+ * than a quarter of the largest free block - smaller again if that
+ * fails. 8x16 at 80x25: 1024 + 128 wide, 0.6 MB (it was 4096 pictures
+ * of 2 cells each, 4 MB; TrueType at 72 pixels 120 MB). */
+#define CMAX 4096
 struct CEntry {
     ULONG cp, fg, bg;
     UWORD attr;
-    UBYTE wide, used;
+    UBYTE wide, used;                   /* used: 1, 2 asked for again */
     ULONG *pix;
 };
-static struct CEntry *ccache;
-static ULONG *cpool;
-static LONG cell_longs;                 /* per entry: 2*cw x ch */
+static struct CEntry *ccache, *wcache;
+static ULONG *cpool, *wpool;
+static int cmask, wmask;                /* entries - 1 */
+static BOOL cache_small;                /* cut down: memory was short */
+
+/* What the pictures were made for: the same again needs no new ones
+ * (a tab switch asks; colours are part of each entry's key). */
+static struct {
+    struct TextFont *font;
+    UWORD fx, fy;
+    int cw, ch, cbase, ttsize;
+    BOOL usett, ttaa;
+    char ttfile[sizeof ttfile];
+} made;
 
 void cache_free(void)
 {
     if (ccache) { FreeVec(ccache); ccache = NULL; }
+    if (wcache) { FreeVec(wcache); wcache = NULL; }
     if (cpool) { FreeVec(cpool); cpool = NULL; }
+    if (wpool) { FreeVec(wpool); wpool = NULL; }
+}
+
+static LONG cache_want(void)
+{
+    LONG n = 64, cells = (LONG)cols * rows / 2;
+    while (n < cells && n < CMAX)
+        n <<= 1;
+    return n;
+}
+
+/* The cache still right for the letters and the window? */
+static BOOL cache_fits(void)
+{
+    if (!ccache || made.font != font || made.fx != font->tf_XSize ||
+        made.fy != font->tf_YSize || made.cw != cw || made.ch != ch ||
+        made.cbase != cbase || made.usett != usett)
+        return FALSE;
+    if (usett && (made.ttsize != ttsize || made.ttaa != ttaa ||
+                  strcmp(made.ttfile, ttfile)))
+        return FALSE;
+    return cache_small || cache_want() <= cmask + 1;
 }
 
 static BOOL cache_alloc(void)
 {
-    int i;
+    LONG cl = (LONG)cw * ch, n, nw, i;
+    ULONG room = AvailMem(MEMF_ANY | MEMF_LARGEST) / 4;
     cache_free();
-    cell_longs = 2 * cw * ch;
-    ccache = AllocVec(CSIZE * sizeof *ccache, MEMF_ANY | MEMF_CLEAR);
-    cpool = AllocVec(CSIZE * cell_longs * 4, MEMF_ANY);
-    if (!ccache || !cpool) {
+    cache_small = FALSE;
+    for (n = cache_want(); n >= 64; n >>= 1, cache_small = TRUE) {
+        nw = n / 8 < 16 ? 16 : n / 8;
+        if ((ULONG)(n + 2 * nw) * cl * 4 > room)
+            continue;
+        ccache = AllocVec(n * sizeof *ccache, MEMF_ANY | MEMF_CLEAR);
+        wcache = AllocVec(nw * sizeof *wcache, MEMF_ANY | MEMF_CLEAR);
+        cpool = AllocVec(n * cl * 4, MEMF_ANY);
+        wpool = AllocVec(nw * 2 * cl * 4, MEMF_ANY);
+        if (ccache && wcache && cpool && wpool)
+            break;
         cache_free();
-        return FALSE;
     }
-    for (i = 0; i < CSIZE; i++)
-        ccache[i].pix = cpool + i * cell_longs;
+    if (!ccache)
+        return FALSE;
+    for (i = 0; i < n; i++)
+        ccache[i].pix = cpool + i * cl;
+    for (i = 0; i < nw; i++)
+        wcache[i].pix = wpool + i * 2 * cl;
+    cmask = n - 1;
+    wmask = nw - 1;
+    made.font = font;
+    made.fx = font->tf_XSize;
+    made.fy = font->tf_YSize;
+    made.cw = cw;
+    made.ch = ch;
+    made.cbase = cbase;
+    made.usett = usett;
+    made.ttaa = ttaa;
+    made.ttsize = ttsize;
+    strcpy(made.ttfile, ttfile);
     return TRUE;
 }
 
@@ -1245,27 +1308,38 @@ static void make_cell(struct CEntry *e)
 static struct CEntry *cell_get(ULONG cp, ULONG fg, ULONG bg, UWORD attr,
                                UBYTE wide)
 {
-    ULONG h = (cp * 2654435761UL) ^ (fg * 0x9E37UL) ^ (bg * 0x85EBUL) ^
-              ((ULONG)attr << 7) ^ wide;
-    int i, k;
+    struct CEntry *t = wide ? wcache : ccache, *e;
+    int m = wide ? wmask : cmask, k;
+    ULONG h;
+    /* only what the picture shows (inverse, dim, hidden are in the
+     * colours already): the same look is one entry */
     attr &= VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE;
+    h = (cp * 2654435761UL) ^ (fg * 0x9E37UL) ^ (bg * 0x85EBUL) ^
+        ((ULONG)attr << 7);
+    h ^= h >> 15;                       /* the multiply's good bits down */
     for (k = 0; k < 8; k++) {
-        struct CEntry *e = &ccache[(h + k) & (CSIZE - 1)];
-        if (e->used && e->cp == cp && e->fg == fg && e->bg == bg &&
-            e->attr == attr && e->wide == wide)
-            return e;
-        if (!e->used) {
-            e->cp = cp; e->fg = fg; e->bg = bg; e->attr = attr;
-            e->wide = wide; e->used = 1;
-            make_cell(e);
+        e = &t[(h + k) & m];
+        if (!e->used)
+            goto make;
+        if (e->cp == cp && e->fg == fg && e->bg == bg && e->attr == attr) {
+            e->used = 2;                /* asked for again: kept longer */
             return e;
         }
     }
-    i = h & (CSIZE - 1);                /* full there: replace the first */
-    ccache[i].cp = cp; ccache[i].fg = fg; ccache[i].bg = bg;
-    ccache[i].attr = attr; ccache[i].wide = wide; ccache[i].used = 1;
-    make_cell(&ccache[i]);
-    return &ccache[i];
+    /* full there: the first not asked for again since it was made or
+     * last passed over (a second chance), else the first */
+    for (k = 0; k < 8; k++) {
+        e = &t[(h + k) & m];
+        if (e->used == 1)
+            goto make;
+        e->used = 1;
+    }
+    e = &t[h & m];
+make:
+    e->cp = cp; e->fg = fg; e->bg = bg; e->attr = attr;
+    e->wide = wide; e->used = 1;
+    make_cell(e);
+    return e;
 }
 
 /* What each screen row shows now: a blank row painted blank need not be
@@ -1433,9 +1507,11 @@ void painter_setup(void)
     LONG need = (LONG)cols * cw * ch;
     painter = FALSE;
     planar = !CyberGfxBase || !GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX);
-    if (planar || GetCyberMapAttr(bm, CYBRMATTR_DEPTH) < 15)
+    if (planar || GetCyberMapAttr(bm, CYBRMATTR_DEPTH) < 15) {
+        cache_free();                   /* Text() draws here: no pictures */
         return;
-    if (!ccache && !cache_alloc())
+    }
+    if (!cache_fits() && !cache_alloc())
         return;
     if (need > rowbuf_n) {
         if (rowbuf) FreeVec(rowbuf);
@@ -1446,12 +1522,15 @@ void painter_setup(void)
     backdrop_make();                    /* the picture for this window */
 }
 
-/* After a font or colour change the pictures are out of date. */
+/* After a font, colour or tab change: new pictures only if the letters
+ * differ (colours are in each entry's key), the backdrop only if the
+ * background or window did. Cheap when nothing changed. */
 void painter_forget(void)
 {
-    cache_free();
     if (win)
         painter_setup();
+    else
+        cache_free();
 }
 
 /* ---- the scroll bar (from AmiClaude: see intuition-border-gadgets.md) - */
@@ -1660,6 +1739,7 @@ void draw_tabbar(void)
 
 struct Library *DataTypesBase;
 static ULONG *ld_buf;                   /* the loader's result */
+static ULONG bggen;                     /* counts pictures loaded */
 static LONG ld_w, ld_h;
 static const char *ld_path;
 
@@ -1726,6 +1806,7 @@ BOOL load_picture(const char *path)
     bgsrc = ld_buf;
     bgsw = ld_w;
     bgsh = ld_h;
+    bggen++;                            /* maybe at the old one's address */
     return TRUE;
 }
 
@@ -1741,13 +1822,27 @@ void backdrop_free(void)
 void backdrop_make(void)
 {
     LONG x, y, sx0, sy0, scw, sch;
-    backdrop_free();
-    if (!painter || !bgsrc || !win || bgsee <= 0)
+    static ULONG mbg, mgen;             /* what the backdrop was made of */
+    static int msee;
+    if (!painter || !bgsrc || !win || bgsee <= 0) {
+        backdrop_free();
         return;
+    }
+    /* the same picture, window and colour (a tab switch): kept - mixing
+     * it costs a multiply per pixel */
+    if (backdrop && bkx == win->BorderLeft && bky == win->BorderTop &&
+        bkw == win->Width - win->BorderLeft - win->BorderRight &&
+        bkh == win->Height - win->BorderTop - win->BorderBottom &&
+        mbg == defbg && msee == bgsee && mgen == bggen)
+        return;
+    backdrop_free();
     bkx = win->BorderLeft;
     bky = win->BorderTop;
     bkw = win->Width - win->BorderLeft - win->BorderRight;
     bkh = win->Height - win->BorderTop - win->BorderBottom;
+    mbg = defbg;
+    msee = bgsee;
+    mgen = bggen;
     if (bkw <= 0 || bkh <= 0)
         return;
     backdrop = AllocVec(bkw * bkh * 4, MEMF_ANY);

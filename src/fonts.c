@@ -93,6 +93,8 @@ static APTR open_variant(const char *const *suffixes)
     return NULL;
 }
 
+static BOOL tt_new;                     /* load_tt opened faces anew */
+
 /* Open the TrueType font and measure its cell. FALSE: not possible. */
 BOOL load_tt(void)
 {
@@ -102,11 +104,24 @@ BOOL load_tt(void)
     static const char *const both[] = { "-BoldOblique", "-BoldItalic",
                                         "BoldItalic", "BoldOblique", NULL };
     struct RastPort trp;
-    ULONG top = 0, bot = 0;
+    static ULONG top, bot;              /* the open faces' measures */
+    static int ocw, osize = -1;
+    static char ofile[sizeof ttfile];
     int ten;
+    /* the same file at the same size is open already (a tab with the
+     * same letters as the last): only the spacing may have changed */
+    if (ttface[0] && osize == ttsize && !strcmp(ofile, ttfile)) {
+        cw = ocw;
+        ch = top + bot + linespace;
+        cbase = top + linespace / 2;
+        return TRUE;
+    }
     if (!tt_open())
         return FALSE;
     close_tt();
+    top = bot = 0;
+    osize = -1;
+    tt_new = TRUE;
     ttface[0] = TT_OpenFont(TT_FontFile, (ULONG)ttfile, TT_FontSize, ttsize,
                             TAG_END);
     if (!ttface[0])
@@ -129,6 +144,9 @@ BOOL load_tt(void)
     ttruns = ten == 10 * cw;
     ch = top + bot + linespace;         /* the spacing shared above, below */
     cbase = top + linespace / 2;
+    ocw = cw;
+    osize = ttsize;
+    strcpy(ofile, ttfile);
     return TRUE;
 }
 
@@ -224,6 +242,11 @@ static int tab_wish(void)
 void tab_letters(BOOL tab)
 {
     int want = tab ? tab_wish() : BL_CTERM;
+    /* the letters as they are: a tab with the same ones as the last
+     * needs no new layout, pictures or redraw from here */
+    BOOL was_tt = usett && ttface[0], was_aa = ttaa;
+    struct TextFont *was_font = font;
+    int was_cw = cw, was_ch = ch, was_base = cbase;
     if (want == fontover)
         return;
     if (fontover) {                     /* the person's back first */
@@ -248,13 +271,16 @@ void tab_letters(BOOL tab)
         }
     }
     fontover = want;
+    tt_new = FALSE;
     if (usett && !load_tt())
         usett = FALSE;
     if (!usett) {
         close_tt();
         load_font();
     }
-    if (win)
+    if (win && (usett != was_tt || tt_new || (!usett && font != was_font) ||
+                cw != was_cw || ch != was_ch || cbase != was_base ||
+                ttaa != was_aa))
         font_changed();
 }
 
