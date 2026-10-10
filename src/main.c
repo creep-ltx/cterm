@@ -879,6 +879,27 @@ BOOL asl_open(void)
     return AslBase != NULL;
 }
 
+/* ttengine.library is 109 KB: opened the first time TrueType is used
+ * (a person with Amiga fonts never loads it). Whether it is there to be
+ * used: tt_installed(), which does not load it. */
+BOOL tt_installed(void)
+{
+    BPTR l;
+    if (TTEngineBase)
+        return TRUE;
+    l = Lock((STRPTR)"LIBS:ttengine.library", ACCESS_READ);
+    if (l)
+        UnLock(l);
+    return l != 0;
+}
+
+BOOL tt_open(void)
+{
+    if (!TTEngineBase)
+        TTEngineBase = OpenLibrary((STRPTR)"ttengine.library", 6);
+    return TTEngineBase != NULL;
+}
+
 BOOL diskfont_open(void)
 {
     if (!DiskfontBase)
@@ -1034,7 +1055,6 @@ static int cterm_main(int argc, char **argv)
         SocketBase = OpenLibrary("bsdsocket.library", 4);
     KeymapBase = OpenLibrary("keymap.library", 37);
     GadToolsBase = OpenLibrary("gadtools.library", 37);
-    TTEngineBase = OpenLibrary("ttengine.library", 6);
     CyberGfxBase = OpenLibrary("cybergraphics.library", 40);
     load_prefs();
     apply_theme();
@@ -1050,7 +1070,7 @@ static int cterm_main(int argc, char **argv)
         book_load();
     /* first start: TrueType if it is installed (DejaVu Sans Mono) */
     if (!hadprefs)
-        usett = TTEngineBase && file_exists(ttfile);
+        usett = tt_installed() && file_exists(ttfile);
     con_timer_init();
     {
         /* history takes at most a quarter of free memory (a line of 80

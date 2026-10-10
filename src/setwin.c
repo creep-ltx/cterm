@@ -584,7 +584,7 @@ static Object *page_text(void)
     Object *p = r_page(), *g = r_group("Letters");
     font_attr();
     r_add(g, r_chooser(S_LETTERS, letterlabels, usett), "Letters");
-    r_disable(S_LETTERS, !TTEngineBase);
+    r_disable(S_LETTERS, !tt_installed());
     r_add(g, sg[S_FONT] = GetFontObject, GA_ID, S_FONT, GA_RelVerify, TRUE,
           GETFONT_TextAttr, (ULONG)&setfont, GETFONT_FixedWidthOnly, TRUE,
           GETFONT_TitleText, (ULONG)"CTerm's font (fixed width)", End,
@@ -594,7 +594,7 @@ static Object *page_text(void)
           GETFILE_TitleText, (ULONG)"A TrueType font (fixed width)",
           GETFILE_Pattern, (ULONG)"#?.ttf", GETFILE_DoPatterns, TRUE,
           GETFILE_RejectIcons, TRUE, End, "TrueType font");
-    r_disable(S_TT, !TTEngineBase);
+    r_disable(S_TT, !tt_installed());
     r_add(g, r_slider(S_TTSIZE, 6, 40, ttsize, "%ld"), "TrueType size");
     r_disable(S_TTSIZE, !usett);
     r_add(g, r_slider(S_SPACE, 0, 8, linespace, "%ld"), "Line spacing");
@@ -894,7 +894,7 @@ static int settings_gadget(int id)
     case S_FULL: pend_full = get_attr(S_FULL, GA_Selected) != 0; break;
     case S_BAR: pend_bar = get_attr(S_BAR, GA_Selected) != 0; break;
     case S_LETTERS:
-        usett = get_attr(S_LETTERS, CHOOSER_Selected) && TTEngineBase;
+        usett = get_attr(S_LETTERS, CHOOSER_Selected) && tt_installed();
         if (!usett)
             load_font();
         letters_changed();

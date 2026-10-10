@@ -103,7 +103,7 @@ BOOL load_tt(void)
     struct RastPort trp;
     ULONG top = 0, bot = 0;
     int ten;
-    if (!TTEngineBase)
+    if (!tt_open())
         return FALSE;
     close_tt();
     ttface[0] = TT_OpenFont(TT_FontFile, (ULONG)ttfile, TT_FontSize, ttsize,
@@ -156,7 +156,7 @@ void ask_ttfont(void)
 {
     struct FileRequester *req;
     char path[160];
-    if (!asl_open() || !TTEngineBase) {
+    if (!asl_open() || !tt_open()) {
         say("\r\n[TrueType needs ttengine.library in LIBS:]\r\n");
         return;
     }
@@ -228,8 +228,8 @@ void tab_letters(BOOL tab)
         ttaa = TRUE;
         fontover = BL_CTERM;
     }
-    if ((want == BL_PC && (!TTEngineBase || !file_exists(pcttfile))) ||
-        (want == BL_TT && !TTEngineBase))
+    if ((want == BL_PC && (!tt_installed() || !file_exists(pcttfile))) ||
+        (want == BL_TT && !tt_installed()))
         want = BL_CTERM;
     if (want != BL_CTERM) {
         keepfont.usett = usett;

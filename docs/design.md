@@ -163,6 +163,35 @@ In the order the user and I agreed (2026-10-10):
   dropping files on the window, emoji fallback, more stock-A1200 speed.
 - Keys configurable (the rule for all the user's programs).
 
+- **Memory, load on demand** (the user, 2026-10-10): done - the
+  protocols are files (PROGDIR:Protocols/), ttengine.library (109 KB)
+  opens only when TrueType is used, ssh is CTermSSH started only for an
+  ssh call, bsdsocket opens only for a call. Not worth it: telnet,
+  transfers and the phone book are ~24 KB of code together. The real
+  knob is the history (most of CTerm's ~3 MB); TrueType costs ~3.6 MB
+  more than an Amiga font (measured on the A1200) - worth a look.
+- **An assembly engine** (the user: "custom assembler is the path to
+  speed, ask CCON"). Keep CTerm in C; write the inner loops in 68k
+  assembly (vasm, as CCON's engine/pgroups.s), linked in. In order of
+  what it should win:
+  1. **Planar screens** (the stock A1200, 42 s vs CCON's 26 s): CTerm
+     draws there with Text(). Replace it with a painter like CCON's:
+     glyphs pre-shifted in a cache, a 4x4 byte transpose per four
+     cells, each needed plane written in longs (plane mask as today),
+     loops small enough for the 020's 256-byte cache, no loop state in
+     memory. One row per call, straight from the cell model.
+  2. **RTG painter** (the PiStorm A1200, 4.2 s vs 3.85 s): the row
+     builder that copies cached cell pixels into the row buffer - an
+     unrolled move.l loop per cell line.
+  3. **The parser's fast path**: runs of printable bytes and SGR colour
+     (CTerm loses most in conbench's sgr-colour and bytewise): scan a
+     run in asm, write cells in one go, return at the first control.
+  Each step: measure with the PROFILE_ECLOCK build first, keep the C as
+  the reference and test the asm against it (tests/streams), one step
+  at a time on both A1200s. Later, if it pays, the engine per CPU
+  (68000 / 68020+) as a file chosen at start - the plugin pattern
+  (Knowledge/amiga/load-on-demand-and-plugins.md).
+
 Speed on a stock A1200 (FS-UAE, conbench): 99 s at first, 39.6 s on
 2026-10-10, CCON 26.0 s; on the PiStorm A1200 4.45 s against CCON's 4.26.
 Notes and what is left: Knowledge/amiga/graphics-and-performance.md.

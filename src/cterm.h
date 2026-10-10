@@ -307,6 +307,8 @@ extern BOOL title_force;
 
 /* ---- the parts' calls ---- */
 BOOL asl_open(void);
+BOOL tt_installed(void);
+BOOL tt_open(void);
 ULONG history_lines(void);
 BOOL diskfont_open(void);
 BOOL transfer_take(UBYTE *buf, LONG n);
