@@ -326,6 +326,7 @@ void draw_tabbar(void);
 BOOL xfer_click(int x, int y);
 void transfer_menu(int what);
 void transfer_free(void);
+void transfer_tab_gone(struct Tab *t);   /* its Hydra queue goes */
 void deep_call(void (*fn)(void));
 __attribute__((noinline)) __stdargs APTR RNewObject(struct IClass *c, CONST_STRPTR id, ULONG tag1, ...);
 __attribute__((noinline)) __stdargs ULONG RSetAttrs(APTR o, ULONG tag1, ...);

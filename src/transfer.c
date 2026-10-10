@@ -624,6 +624,16 @@ void transfer_free(void)
     xwin_shut();
 }
 
+/* A tab closes: a Hydra queue made in it goes too (a new tab may get the
+ * same memory and must not inherit it). */
+void transfer_tab_gone(struct Tab *t)
+{
+    if (hqtab == t) {
+        nhq = 0;
+        hqtab = NULL;
+    }
+}
+
 /* The Hydra queue's files, when it was made in this tab (T) and that tab
  * is still open: 0 for any other. */
 static int hq_mine(void)

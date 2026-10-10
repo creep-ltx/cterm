@@ -585,6 +585,7 @@ static void tab_drop(struct Tab *t)
         con_retire(T->con);
         T->con = NULL;
     }
+    transfer_tab_gone(t);
     vt_free(T->t_vt);
     memmove(tabs + i, tabs + i + 1, (ntabs - i - 1) * sizeof tabs[0]);
     ntabs--;

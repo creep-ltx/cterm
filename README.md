@@ -21,6 +21,10 @@ million colours, Latin-1, UTF-8 and the PC's character set.
 | `BOOK name` | call a phone book entry |
 | `LISTEN` / `PORT n` | wait for the PC's relay (pc/cterm-relay.py) |
 
+LISTEN lets in only the PC named in `ENVARC:CTerm/relay_from`. The first
+time, CTerm asks whether to trust the PC that calls and remembers it;
+delete that file to choose another PC.
+
 Project/Call... (Right Amiga+K) asks for a host and remembers the last
 eight; the phone book's places are listed first. A call opens in a new
 tab (or a window of its own); when it ends, Return calls again.
