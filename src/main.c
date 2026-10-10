@@ -1849,6 +1849,7 @@ static BOOL dial(void)
     return TRUE;
 }
 
+#ifndef NO_SSH
 /* A line typed in the window while ssh sets up (a password: echo off).
  * FALSE: the window was closed. */
 static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
@@ -1901,6 +1902,8 @@ static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
         }
     }
 }
+
+#endif
 
 /* Call the host: telnet, or ssh (which asks what it must in the window). */
 static BOOL connect_out(void)
@@ -3138,14 +3141,16 @@ static void calls_add(const char *entry)
     strcpy(calls, out);
 }
 
-/* The program's own path, to start another CTerm with. */
-static void own_path(char *buf, int max)
+/* A program beside ours (NULL: ours), to start another CTerm with. */
+static void own_path(char *buf, int max, const char *sibling)
 {
     char name[108];
     BPTR dir = GetProgramDir();
     buf[0] = 0;
     if (!GetProgramName((STRPTR)name, sizeof name) || !name[0])
         strcpy(name, "CTerm");
+    if (sibling)
+        strcpy(name, sibling);
     if (dir && NameFromLock(dir, (STRPTR)buf, max)) {
         if (!AddPart((STRPTR)buf, FilePart((STRPTR)name), max))
             strcpy(buf, name);
@@ -3157,7 +3162,11 @@ static void call_start(const char *host, BOOL pc, BOOL ssh)
 {
     char cmd[400], path[256];
     BPTR nil;
-    own_path(path, sizeof path);
+#ifdef NO_SSH
+    own_path(path, sizeof path, ssh ? "CTermSSH" : NULL);
+#else
+    own_path(path, sizeof path, NULL);
+#endif
     strcpy(cmd, "Run >NIL: \"");
     strcat(cmd, path);
     strcat(cmd, ssh ? "\" SSH \"" : "\" HOST \"");
@@ -3710,6 +3719,30 @@ int main(int argc, char **argv)
             ssh_set_key((char *)args[9]);
         FreeArgs(rda);
     }
+#ifdef NO_SSH
+    if (sshmode) {
+        /* ssh is CTermSSH's: start it with the same words, beside us */
+        char cmd[600], path[256];
+        STRPTR a = GetArgStr();
+        int n;
+        BPTR nil = Open((STRPTR)"NIL:", MODE_NEWFILE);
+        own_path(path, sizeof path, "CTermSSH");
+        strcpy(cmd, "Run >NIL: \"");
+        strcat(cmd, path);
+        strcat(cmd, "\" ");
+        strncat(cmd, a ? (char *)a : "", sizeof cmd - strlen(cmd) - 1);
+        n = strlen(cmd);
+        while (n && (cmd[n - 1] == '\n' || cmd[n - 1] == ' '))
+            cmd[--n] = 0;
+        if (SystemTags((STRPTR)cmd, SYS_Input, nil, SYS_Output, NULL,
+                       TAG_END) != 0) {
+            if (nil) Close(nil);
+            PutStr("CTerm: ssh needs CTermSSH beside CTerm\n");
+            return RETURN_FAIL;
+        }
+        return RETURN_OK;
+    }
+#endif
     /* the network only when there is one to talk to: the local Shell
      * needs no TCP/IP stack at all */
     if (!local)

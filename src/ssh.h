@@ -25,4 +25,16 @@ void ssh_write(const UBYTE *b, LONG n);
 void ssh_resize(int cols, int rows);
 void ssh_close(void);
 
+#ifdef NO_SSH
+/* The small CTerm: ssh lives in CTermSSH, which CTerm starts instead
+ * (a stock Amiga never loads libssh2; AmiSSL wants fast memory anyway). */
+#define ssh_open(t, c, r, a, s) FALSE
+#define ssh_set_key(p) ((void)0)
+#define ssh_socket() (-1L)
+#define ssh_read(b, m) (-1L)
+#define ssh_write(b, n) ((void)0)
+#define ssh_resize(c, r) ((void)0)
+#define ssh_close() ((void)0)
+#endif
+
 #endif

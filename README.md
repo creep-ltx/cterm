@@ -26,7 +26,9 @@ again.
 
 ## ssh
 
-- Needs AmiSSL 5 (amisslmaster.library and LIBS:AmiSSL/).
+- ssh is in a second program, **CTermSSH**, kept beside CTerm: CTerm
+  starts it when ssh is asked for, so a small Amiga never loads it.
+- Needs AmiSSL 5 (amisslmaster.library and LIBS:AmiSSL/) and fast memory.
 - A key file is used if there is one: `ENVARC:CTerm/id_ed25519`,
   `id_ecdsa` or `id_rsa` (made with ssh-keygen, no passphrase; put the
   `.pub` in the host's `~/.ssh/authorized_keys`). Otherwise CTerm asks
@@ -48,6 +50,6 @@ They are kept in `ENVARC:CTerm.prefs`, with the window's place and size.
 
 ## Building
 
-`make` (bebbo's m68k-amigaos-gcc in ~/opt/amiga). The first build
+`make` (bebbo's m68k-amigaos-gcc in ~/opt/amiga) builds CTerm and CTermSSH. The first build
 downloads the AmiSSL SDK and libssh2 (third_party/fetch.sh) and builds
 libssh2. `make test` checks the emulator core on Linux.
