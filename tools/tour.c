@@ -475,7 +475,10 @@ static void ball_make(void)
             /* light from the upper left */
             {
                 int l = (-dx * 5 - dy * 6 + z * 9) * 255 / (r * 12);
-                bl[y][x] = l < 70 ? 70 : l > 255 ? 255 : l;
+                l = l < 70 ? 70 : l > 255 ? 255 : l;
+                /* four steps of light, not hundreds: on a 16-colour
+                 * screen each new colour is a search for the nearest pen */
+                bl[y][x] = 96 + (l - 70) * 4 / 186 * 53;
             }
         }
 }
@@ -493,14 +496,44 @@ static void pixel_bg(int px, int py, int *R, int *G, int *B)
     }
 }
 
+/* a colour code, quickly: no sprintf (on a 14 MHz 68020 it was a good
+ * part of a frame) */
+static char *num3(char *d, int v)
+{
+    if (v >= 100) *d++ = '0' + v / 100;
+    if (v >= 10) *d++ = '0' + v / 10 % 10;
+    *d++ = '0' + v % 10;
+    return d;
+}
+
+static void col(int which, int r, int g, int b)    /* which: 38 or 48 */
+{
+    char e[24], *d = e;
+    *d++ = 0x1b; *d++ = '[';
+    *d++ = which == 38 ? '3' : '4'; *d++ = '8'; *d++ = ';'; *d++ = '2'; *d++ = ';';
+    d = num3(d, r); *d++ = ';';
+    d = num3(d, g); *d++ = ';';
+    d = num3(d, b); *d++ = 'm';
+    *d = 0;
+    put(e);
+}
+
+/* what each cell of the field shows now: only changed cells are sent,
+ * as a program animating in a terminal would (0: not known) */
+#define FMAXR 20
+#define FMAXC 80
+static ULONG shtop[FMAXR][FMAXC], shbot[FMAXR][FMAXC];
+
 /* the box of cells r0..r1, c0..c1 (pixels: two rows a cell) drawn again */
 static void ball_cells(int r0, int r1, int c0, int c1, int top, int phase)
 {
-    int r, c, lr = -1, lg = -1, lb = -1, kr = -1, kg = -1, kb = -1;
-    for (r = r0; r <= r1; r++) {
-        at(top + r, 3 + c0);
-        for (c = c0; c <= c1; c++) {
+    int r, c;
+    ULONG lf = ~0UL, lb = ~0UL;
+    for (r = r0; r <= r1 && r < FMAXR; r++) {
+        int skipped = 1;
+        for (c = c0; c <= c1 && c < FMAXC; c++) {
             int k, R[2], G[2], B[2];
+            ULONG pt, pb;
             for (k = 0; k < 2; k++) {
                 int px = c, py = r * 2 + k, x = px - bx, y = py - by;
                 if (x >= 0 && x < BW && y >= 0 && y < BH && bu[y][x] >= 0) {
@@ -511,15 +544,26 @@ static void ball_cells(int r0, int r1, int c0, int c1, int top, int phase)
                 } else
                     pixel_bg(px, py, &R[k], &G[k], &B[k]);
             }
-            if (R[0] != lr || G[0] != lg || B[0] != lb) {
-                fg24(R[0], G[0], B[0]);
-                lr = R[0]; lg = G[0]; lb = B[0];
+            pt = 0x1000000UL | R[0] << 16 | G[0] << 8 | B[0];
+            pb = 0x1000000UL | R[1] << 16 | G[1] << 8 | B[1];
+            if (shtop[r][c] == pt && shbot[r][c] == pb) {
+                skipped = 1;
+                continue;
             }
-            if (R[1] != kr || G[1] != kg || B[1] != kb) {
-                bg24(R[1], G[1], B[1]);
-                kr = R[1]; kg = G[1]; kb = B[1];
+            if (skipped)
+                at(top + r, 3 + c);
+            skipped = 0;
+            if (pt != lf) {
+                col(38, R[0], G[0], B[0]);
+                lf = pt;
+            }
+            if (pb != lb) {
+                col(48, R[1], G[1], B[1]);
+                lb = pb;
             }
             put("▀");
+            shtop[r][c] = pt;
+            shbot[r][c] = pb;
         }
     }
     reset();
@@ -536,10 +580,13 @@ static void p_boing(void)
         fh = 18;
     by = 2;
     bx = 4;
-    ox = oy = -100;
     frames = 0;
-    t0 = ticks();
+    memset(shtop, 0, sizeof shtop);     /* the screen was cleared */
+    memset(shbot, 0, sizeof shbot);
     ball_cells(0, fh - 1, 0, fw - 1, 4, 0);
+    ox = bx;                            /* what is on screen now */
+    oy = by;
+    t0 = ticks();
 }
 
 static int p_boing_anim(int n)
@@ -721,7 +768,12 @@ static LONG flood(BPTR o)
 
 static void p_race(void)
 {
-    heading("The race", "the same 1500 coloured lines into the Amiga's own CON: and into CTerm");
+    {
+        char sub[100];
+        sprintf(sub, "the same %ld coloured lines into the Amiga's own CON: and into CTerm",
+                (long)flood_lines);
+        heading("The race", sub);
+    }
     at(4, 3);
     put("Press \x1b[1mR\x1b[0m: a CON: window opens beside this one and gets the text");
     at(5, 3);
@@ -796,7 +848,12 @@ static int race_go(void)
     flush();
     t = flood(out);
     put("\x1b[0m\x1b[H\x1b[2J");
-    heading("The race", "the same 1500 coloured lines, a line a write, each console alone");
+    {
+        char sub[100];
+        sprintf(sub, "the same %ld coloured lines, a line a write, each console alone",
+                (long)flood_lines);
+        heading("The race", sub);
+    }
     race_bar(5, "CON:", them, them > t ? them : t, cols - 22, 31);
     race_bar(7, "CTerm", t, them > t ? them : t, cols - 22, 32);
     at(10, 3);
@@ -805,9 +862,9 @@ static int race_go(void)
     else if (t == 0)
         put("CTerm took less than a 50th of a second.");
     at(12, 3);
-    put("\x1b[2mTimes are the Amiga's own clock (50ths of a second). CON:'s window\x1b[0m");
+    put("\x1b[2mTimes are the Amiga's own clock (50ths of a second); CON: wrote its\x1b[0m");
     at(13, 3);
-    put("\x1b[2mshows its time too; close it with its gadget.\x1b[0m");
+    put("\x1b[2mown time at the end of its window.\x1b[0m");
     return 1;
 }
 

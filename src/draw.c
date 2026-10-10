@@ -202,18 +202,59 @@ static ULONG pc_rgb[NPEN];
 static LONG pc_pen[NPEN];
 int npc;
 
+/* Every colour asked for, and its pen - the pens obtained and the
+ * nearest ones given once the screen had no more: found by hash. Before,
+ * an exact match was a walk of up to 256 entries, and with the pens all
+ * taken (a 16-colour Workbench after a page of colours) every new colour
+ * was the nearest-pen search again, every time it came: a 24-bit
+ * animation on a 14 MHz Amiga went from 4 frames a second to under 1. */
+#define PHASH 1024
+static ULONG ph_rgb[PHASH];             /* rgb + 1 (0: free) */
+static LONG ph_pen[PHASH];
+static int ph_n;
+
+static LONG pen_find(ULONG rgb, int *slot)
+{
+    ULONG h = (rgb * 2654435761UL) >> 22;   /* 10 bits */
+    while (ph_rgb[h]) {
+        if (ph_rgb[h] == rgb + 1)
+            return ph_pen[h];
+        h = (h + 1) & (PHASH - 1);
+    }
+    *slot = (int)h;
+    return -1;
+}
+
+static LONG pen_for_(ULONG rgb);
+
 static LONG pen_for(ULONG rgb)
+{
+    int slot;
+    LONG p = pen_find(rgb, &slot);
+    if (p >= 0)
+        return p;
+    p = pen_for_(rgb);
+    if (ph_n >= PHASH * 3 / 4) {
+        /* full (a page of 24-bit gradients is ~1000 colours): start
+         * afresh, so the colours in use now are found again - kept full,
+         * every new colour was the slow way for good */
+        memset(ph_rgb, 0, sizeof ph_rgb);
+        ph_n = 0;
+        pen_find(rgb, &slot);
+    }
+    ph_rgb[slot] = rgb + 1;
+    ph_pen[slot] = p;
+    ph_n++;
+    return p;
+}
+
+static LONG pen_for_(ULONG rgb)
 {
     int i, best = -1;
     LONG d, bd = 0x7FFFFFFF;
-    static int mru;                     /* where the last one was found */
-    if (mru < npc && pc_rgb[mru] == rgb)
-        return pc_pen[mru];
-    for (i = 0; i < npc; i++)
-        if (pc_rgb[i] == rgb) {
-            mru = i;
+    for (i = 0; i < npc; i++)           /* (only when the hash is full) */
+        if (pc_rgb[i] == rgb)
             return pc_pen[i];
-        }
     if (npc < NPEN) {
         LONG p = ObtainBestPen(scr->ViewPort.ColorMap,
                                ((rgb >> 16) & 255) * 0x01010101,
@@ -360,6 +401,8 @@ void release_pens(void)
 {
     while (npc > 0)
         ReleasePen(scr->ViewPort.ColorMap, pc_pen[--npc]);
+    memset(ph_rgb, 0, sizeof ph_rgb);   /* their numbers mean nothing now */
+    ph_n = 0;
 }
 
 /* What a cell's colours come to, as RGB. */
