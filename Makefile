@@ -35,6 +35,11 @@ CTermSSH: $(SRC) $(HDR) src/ssh.c src/ppaint.o $(TP)/lib/libssh2.a
 src/ppaint.o: src/ppaint.s
 	vasmm68k_mot -Faout -m68020 -quiet -o $@ $<
 
+# The tour: what CTerm does, page by page, and a race against CON:
+tour: CTermTour
+CTermTour: tools/tour.c
+	$(CC) $(CFLAGS) tools/tour.c -o $@
+
 # The planar painter's asm against its C reference, under vamos
 tests/pptest: tests/pptest.c src/ppaint.c src/ppaint.h src/ppaint.o
 	$(CC) $(CFLAGS) tests/pptest.c src/ppaint.c src/ppaint.o -o $@

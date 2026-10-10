@@ -940,9 +940,11 @@ static void csi(Vt *v, int final)
 
     if (v->priv2)                       /* Ed's CSI >?NN v/l/h/w: private */
         return;
-    if (!v->amigamode && v->inter == ' ' && final == 'q') {
+    if (v->inter == ' ' && final == 'q' &&
+        (!v->amigamode || P(0, 0) >= 1)) {
         /* DECSCUSR: 0/1 blinking block, 2 block, 3/4 underline, 5/6 bar
-         * (the Amiga console's ' q' is a window report: amigamode) */
+         * (the Amiga console's CSI 0 SP q is a window report: in the
+         * Amiga Shell 1-6 set the shape, 0 or none asks for the report) */
         int p = P(0, 0);
         v->cshape = p <= 2 ? 0 : p <= 4 ? 1 : 2;
         v->cblink = p == 0 || p == 1 || p == 3 || p == 5;
@@ -1118,6 +1120,17 @@ static void esc(Vt *v, int c)
 {
     if (v->inter == '(' || v->inter == ')') {
         v->g[v->inter == ')'] = (char)c;
+        return;
+    }
+    if (v->inter == '%') {
+        /* DOCS (ISO 2022, as xterm): ESC % G UTF-8, ESC % @ back to the
+         * 8-bit set - Latin-1, and in the Amiga Shell 0x9B is CSI again.
+         * A program (CTermTour) can show UTF-8 in the Amiga's Shell. */
+        if (c == 'G' || c == '@') {
+            v->utf8 = c == 'G';
+            v->uneed = 0;
+            v->cp437 = 0;
+        }
         return;
     }
     if (v->inter == '#') {

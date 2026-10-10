@@ -27,3 +27,5 @@ tests/hydra_test
 tests/hydra/hcref
 tests/fuzz/fz
 tests/pptest
+demo/
+CTermTour

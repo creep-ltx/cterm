@@ -30,6 +30,21 @@ int main(void)
     feed(v, "\x9b" "2J\x9b" "1;1Hhome");         /* 8-bit CSI */
     CHECK(at(v, 0, 0) == 'h' && at(v, 1, 0) == ' ', "0x9B is CSI");
 
+    {   /* ESC % G: UTF-8 in the Amiga Shell; ESC % @: Latin-1 and 9B again */
+        int w;
+        const VtCell *l;
+        feed(v, "\x0c" "\x1b%G" "\xe2\x94\x80" "\x1b%@" "\xe4" "\x9b" "2;1H" "z");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 2 && l[0].cp == 0x2500 && l[1].cp == 0xE4, "ESC % G / ESC % @");
+        CHECK(at(v, 1, 0) == 'z', "0x9B is CSI again after ESC % @");
+    }
+    {   /* CSI 5 SP q: a bar cursor, no report; CSI 0 SP q: the report */
+        int blink;
+        feed(v, "\x9b" "5 q");
+        CHECK(vt_take_reply(v, rep, sizeof rep) == 0 &&
+              vt_cursor_shape(v, &blink) == 2, "CSI 5 SP q sets a bar");
+        feed(v, "\x9b" "2 q");
+    }
     feed(v, "\x0c" "page");                      /* FF = clear page */
     CHECK(at(v, 0, 0) == 'p' && at(v, 0, 4) == ' ', "FF clears and homes");
 

@@ -29,6 +29,19 @@ Project/Call... (Right Amiga+K) asks for a host and remembers the last
 eight; the phone book's places are listed first. A call opens in a new
 tab (or a window of its own); when it ends, Return calls again.
 
+## The tour
+
+`CTermTour` (built by `make tour`), run in a CTerm window, shows what CTerm
+does, page by page: styles, colours, lines and blocks, characters, cursor
+shapes, a Boing ball in 24-bit colour, and a race against the Amiga's own
+CON: window (R on its page). Space: next page, B: back, Esc: the end;
+`SECS n` turns the pages by themselves. On the A1200 (PiStorm, 32-bit
+Workbench): 1500 coloured lines, a line a write, CON: 9.90 s, CTerm 0.14 s.
+
+Programs can switch the window to UTF-8 and back (ESC % G, ESC % @), and
+in the Amiga Shell `CSI 1..6 SP q` sets the cursor's shape as on xterm
+(0 is still the Amiga's window bounds request).
+
 ## The phone book
 
 Settings, Phone book tab: the places you call, each with
