@@ -93,6 +93,23 @@ Programs on the other computer can copy too: what you copy in vim, tmux
 and the like (the OSC 52 code) lands on the Amiga's clipboard. They
 cannot read it.
 
+## File transfers
+
+- **Zmodem starts by itself.** When the host begins one (a BBS
+  download, or `sz file` in a shell), CTerm receives the files into the
+  phone book entry's download drawer, else the Files tab's, else
+  `PROGDIR:Downloads`; a file never goes over one that is there (a
+  number is added). When the host waits for files (a BBS upload, or `rz`),
+  a requester asks which; several can be chosen at once.
+- **Ymodem and Xmodem** are started by you, after starting the other side
+  on the host: Transfer/Receive with Ymodem (names come with the files),
+  Receive with Xmodem... (asks the name), Send with Ymodem... and Send
+  with Xmodem... Xmodem pads a file's end to a whole block, as it must.
+- The window title shows the file, how far it is and the speed; **Esc
+  stops** a transfer. The other tabs' Shells go on meanwhile.
+- Tested against lrzsz, the reference (`make ztest`): every file the same,
+  also over a line that loses and garbles bytes (Zmodem).
+
 ## Logging
 
 Project/Start log... (Right Amiga+L) saves everything that comes into
