@@ -910,6 +910,13 @@ static int area_right(void)
     return win->Width - win->BorderRight - 1 - (fullscreen ? POSBAR + 2 : 0);
 }
 static UBYTE shown_blank[1024];
+static UBYTE painted[1024], pgen = 1;   /* the painter: row r painted in
+                                           draw pass pgen */
+
+static inline BOOL fresh_row(int r)
+{
+    return r < (int)sizeof painted && painted[r] == pgen;
+}
 
 /* A cell that shows only the background: both ways of drawing skip
  * these. Blink is in: a PC's blink is a bright background. The text's
@@ -1012,17 +1019,27 @@ static void cursor_mark(int x, int y)
 void draw_cursor(BOOL on)
 {
     int x, y, vis;
+    if (!on)
+        rp_forget();                    /* a draw starts: Ed or More may
+                                           have used the window since */
     vt_cursor(vt, &x, &y, &vis);
     if (painter) {
-        /* the rows carry the cursor: repaint where it was and where it is */
-        if (!on)
-            return;
-        if (cury >= 0 && cury < rows && cury != y)
-            paint_row(cury);
-        if (y < rows)
-            paint_row(y);
-        curx = x;
-        cury = y;
+        /* the rows carry the cursor: repaint where it was and where it
+         * is - unless painted since draw_cursor(FALSE), when the cursor
+         * already stood where it stands now */
+        if (on) {
+            if (cury >= 0 && cury < rows && cury != y && !fresh_row(cury))
+                paint_row(cury);
+            if (y < rows && !fresh_row(y))
+                paint_row(y);
+            curx = x;
+            cury = y;
+        }
+        if (++pgen == 0) {              /* rows painted from here on are
+                                           not known to carry the cursor */
+            memset(painted, 0, sizeof painted);
+            pgen = 1;                   /* old marks never match again */
+        }
         return;
     }
     if (curx >= 0 && cury >= 0 && cury < rows && curx < cols) {
@@ -1378,6 +1395,8 @@ static void paint_row(int r)
     BOOL bk;
     if (r < 0 || r >= rows)
         return;
+    if (r < (int)sizeof painted)
+        painted[r] = pgen;
     /* the picture under this row - all of it: a tiny window keeps at
      * least 10x3 cells, which can reach past the window (and the
      * backdrop); such a row goes without */
@@ -1541,6 +1560,11 @@ void painter_forget(void)
 
 /* ---- the scroll bar (from AmiClaude: see intuition-border-gadgets.md) - */
 
+/* What the knob or the place bar shows now: every refresh asks, and
+ * mostly nothing moved (NewModifyProp redraws the gadget). Forgotten
+ * when the window is drawn afresh. */
+static LONG k_total = -1, k_top, k_rows;
+
 struct Gadget vgad, agup, agdn;
 struct PropInfo vpi;
 static struct Image vim;
@@ -1614,14 +1638,24 @@ void add_scroller(void)
     AddGList(win, &vgad, -1, n, NULL);
     RefreshWindowFrame(win);
     gadsok = TRUE;
+    k_total = -1;                       /* a new knob: set it */
 }
 
 /* The scroll bar's knob, or full screen's place bar, says where we are. */
 void update_knob(void)
 {
     LONG total = vt_history(vt) + rows, top = vt_history(vt) - back;
+    if (total == k_total && top == k_top && rows == k_rows)
+        return;
     if (fullscreen && win) {
         int x0 = win->Width - POSBAR, y0 = oy, h = rows * ch, a, b;
+        LONG keepbase = pbase;
+        UBYTE keepmask = pmask;
+        /* all planes, the text's mask kept: the bar's own pens would
+         * widen it, and every scroll would then move more planes (the
+         * bar is outside what scrolls and clears) */
+        planes_full();
+        rp_forget();
         if (!backdrop_put(x0 - 1, y0, win->Width - x0 + 1, h)) {
             apen(defbg);
             RectFill(rp, x0 - 1, y0, win->Width - 1, y0 + h - 1);
@@ -1631,17 +1665,27 @@ void update_knob(void)
             b = y0 + (LONG)h * (top + rows) / total - 1;
             if (b < a + 3) b = a + 3;
             apen(mix(defbg, deffg, 15));
-            RectFill(rp, x0, y0, win->Width - 3, y0 + h - 1);
+            if (a > y0)                 /* above and below the knob */
+                RectFill(rp, x0, y0, win->Width - 3, a - 1);
+            if (b < y0 + h - 1)
+                RectFill(rp, x0, b + 1, win->Width - 3, y0 + h - 1);
             apen(mix(defbg, deffg, 60));
             RectFill(rp, x0, a, win->Width - 3, b);
         }
+        pbase = keepbase;
+        pmask = keepmask;
+        SetWriteMask(rp, pmask);
+        rp_forget();
+    } else if (!gadsok || (vpi.Flags & KNOBHIT)) {
+        k_total = -1;                   /* dragged: set it when let go */
         return;
-    }
-    if (!gadsok || (vpi.Flags & KNOBHIT))
-        return;
-    NewModifyProp(&vgad, win, NULL, vpi.Flags, 0,
-                  total > rows ? (0xFFFFUL * top) / (total - rows) : 0, 0,
-                  (0xFFFFUL * rows) / total, 1);
+    } else
+        NewModifyProp(&vgad, win, NULL, vpi.Flags, 0,
+                      total > rows ? (0xFFFFUL * top) / (total - rows) : 0, 0,
+                      (0xFFFFUL * rows) / total, 1);
+    k_total = total;
+    k_top = top;
+    k_rows = rows;
 }
 
 /* ---- layout ------------------------------------------------------------ */
@@ -1903,6 +1947,7 @@ void redraw_all(void)
     }
     planes_reset();                     /* all background: no plane yet */
     draw_tabbar();
+    k_total = -1;                       /* the place bar was cleared */
     vt_take_changes(vt, &chg);
     curx = cury = -1;
     for (r = 0; r < rows; r++)
