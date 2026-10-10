@@ -6,3 +6,13 @@ __pycache__/
 tests/shadow_test
 tests/amiga_test
 tests/vtdump
+tests/bridge/amibridge
+third_party/AmiSSL/
+third_party/AmiSSL.info
+third_party/libssh2-1.11.1/
+third_party/os3/
+third_party/obj/
+third_party/lib/
+third_party/*.lha
+third_party/*.tar.gz
+tests/ssh/sshtest

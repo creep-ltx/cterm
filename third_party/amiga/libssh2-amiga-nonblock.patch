@@ -1,0 +1,31 @@
+--- session.c.orig	2026-10-10 03:44:42.816513187 +0200
++++ session.c	2026-10-10 03:46:26.637513756 +0200
+@@ -308,8 +308,13 @@
+     flags = nonblock;
+     return ioctl(sockfd, FIONBIO, &flags);
+ #elif defined(HAVE_IOCTLSOCKET_CASE)
+-    /* presumably for Amiga */
+-    return IoctlSocket(sockfd, FIONBIO, (long) nonblock);
++    /* presumably for Amiga - bsdsocket.library's IoctlSocket() takes a
++     * pointer to the value (CTerm: passing the value itself left the
++     * socket blocking, and a read then waited forever) */
++    {
++        long b = nonblock;
++        return IoctlSocket(sockfd, FIONBIO, (char *)&b);
++    }
+ #elif defined(HAVE_SO_NONBLOCK)
+     /* BeOS */
+     long b = nonblock ? 1 : 0;
+@@ -377,6 +382,12 @@
+         return 1;
+     }
+     return (int) option_value;
++#elif defined(HAVE_IOCTLSOCKET_CASE)
++    /* Amiga: bsdsocket.library cannot be asked; a socket starts blocking
++     * (CTerm: falling through to "1" below meant libssh2 never made it
++     * non-blocking, and a blocking recv() then waited forever) */
++    (void)sockfd;
++    return 0;
+ #else
+     (void)sockfd;
+     return 1;                   /* returns blocking */
