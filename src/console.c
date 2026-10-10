@@ -78,6 +78,11 @@ struct Con {
     int x0, y0;                         /* where it starts on screen */
     UBYTE *hist[HISTMAX];
     int nhist, hpos;
+
+    /* a paste not yet taken: fed in as the reader asks for it */
+    UBYTE *paste;
+    LONG plen, ppos;
+    BOOL pfull;                         /* this line was too long: beeped */
 };
 
 /* ---- the helper that runs the Shell ---------------------------------- */
@@ -363,6 +368,81 @@ static void finish_line(struct Con *c)
     serve(c);
 }
 
+/* One character into the line at the cursor. */
+static void insert_char(struct Con *c, UBYTE ch)
+{
+    begin_line(c);
+    memmove(c->line + c->lcur + 1, c->line + c->lcur, c->llen - c->lcur);
+    c->line[c->lcur++] = ch;
+    c->llen++;
+    if (c->lcur == c->llen) {                       /* at the end: just add */
+        term_write(c->user, &ch, 1);
+        term_render_soon(c->user);
+    } else
+        redraw_line(c);
+}
+
+static void beep(void)
+{
+    DisplayBeep(win ? win->WScreen : NULL);
+}
+
+/* A pasted byte that is text: no control codes, no CSI - a paste is
+ * never taken as keys (Ctrl-C, cursor keys). */
+static BOOL pasteable(UBYTE ch)
+{
+    return ch >= 0x20 && ch != 0x7F && !(ch >= 0x80 && ch < 0xA0);
+}
+
+static void paste_drop(struct Con *c)
+{
+    if (c->paste)
+        FreeVec(c->paste);
+    c->paste = NULL;
+    c->plen = c->ppos = 0;
+}
+
+/* Feed the paste in as far as the reader takes it. Raw: as much as the
+ * input queue holds. Cooked: a line at a time, each into the editor when
+ * the reader asks for a line, so the prompts come between the lines and
+ * nothing is lost past the queue; a line too long for the editor is cut
+ * with a beep. */
+static void paste_feed(struct Con *c)
+{
+    BOOL fed = FALSE;
+    while (c->paste && c->ppos < c->plen) {
+        UBYTE ch = c->paste[c->ppos];
+        if (c->rawmode) {
+            if (c->inlen >= INMAX)
+                break;
+            c->ppos++;
+            if (pasteable(ch) || ch == '\t' || ch == '\r')
+                c->inq[c->inlen++] = ch;
+            fed = TRUE;
+            continue;
+        }
+        if (!c->editing && (c->nreads == 0 || c->inlen > 0))
+            break;                      /* the next line when it is asked */
+        c->ppos++;
+        if (ch == '\r') {
+            begin_line(c);
+            c->pfull = FALSE;
+            finish_line(c);
+        } else if (pasteable(ch) || ch == '\t') {
+            if (c->llen < LINEMAX - 1)
+                insert_char(c, ch == '\t' ? ' ' : ch);
+            else if (!c->pfull) {
+                c->pfull = TRUE;
+                beep();
+            }
+        }
+    }
+    if (c->paste && c->ppos >= c->plen)
+        paste_drop(c);
+    if (fed)
+        serve(c);
+}
+
 /* One key's bytes, cooked. */
 static void edit_key(struct Con *c, const UBYTE *b, LONG n)
 {
@@ -424,16 +504,7 @@ static void edit_key(struct Con *c, const UBYTE *b, LONG n)
             }
         } else if (ch >= 0x20 && !(ch >= 0x80 && ch < 0xA0) &&
                    c->llen < LINEMAX - 1) {
-            begin_line(c);
-            memmove(c->line + c->lcur + 1, c->line + c->lcur,
-                    c->llen - c->lcur);
-            c->line[c->lcur++] = ch;
-            c->llen++;
-            if (c->lcur == c->llen) {               /* at the end: just add */
-                term_write(c->user, &ch, 1);
-                term_render_soon(c->user);
-            } else
-                redraw_line(c);
+            insert_char(c, ch);
         }
     }
 }
@@ -448,6 +519,7 @@ void con_keys(struct Con *c, const UBYTE *b, LONG n)
     /* Ctrl-C..F: break signals, never input */
     for (i = 0; i < n; i++)
         if (b[i] >= 3 && b[i] <= 6) {
+            paste_drop(c);              /* a paste still going in stops */
             send_break(c, SIGBREAKF_CTRL_C << (b[i] - 3));
             return;
         }
@@ -456,6 +528,28 @@ void con_keys(struct Con *c, const UBYTE *b, LONG n)
         serve(c);
     } else
         edit_key(c, b, n);
+}
+
+/* Pasted text, typed in as text: added to what is still going in. Newlines
+ * are Returns (\r). TRUE: taken. */
+BOOL con_paste(struct Con *c, const UBYTE *b, LONG n)
+{
+    UBYTE *p;
+    LONG left;
+    if (!c || n <= 0)
+        return c != NULL;
+    left = c->paste ? c->plen - c->ppos : 0;
+    if (!(p = AllocVec(left + n, MEMF_ANY)))
+        return FALSE;
+    if (left)
+        CopyMem(c->paste + c->ppos, p, left);
+    CopyMem((APTR)b, p + left, n);
+    paste_drop(c);
+    c->paste = p;
+    c->plen = left + n;
+    c->pfull = FALSE;
+    paste_feed(c);
+    return TRUE;
 }
 
 void con_reply(struct Con *c, const UBYTE *b, LONG n)
@@ -541,6 +635,7 @@ void con_handle(struct Con *c, ULONG sigs)
             if (c->nreads < READMAX) {
                 c->reads[c->nreads++] = p;
                 serve(c);
+                paste_feed(c);          /* the next of a paste, if any */
                 if (c->nreads) {
                     /* about to wait for the person: show everything */
                     if (!c->rawmode)
@@ -551,6 +646,8 @@ void con_handle(struct Con *c, ULONG sigs)
                 ReplyPkt(p, -1, ERROR_NO_FREE_STORE);
             break;
         case ACTION_WAIT_CHAR:
+            if (c->rawmode)
+                paste_feed(c);
             if (c->inlen > 0 || c->eof_pending) {
                 ReplyPkt(p, DOSTRUE, 0);
             } else if (p->dp_Arg1 <= 0) {
@@ -769,6 +866,7 @@ struct Con *con_start(const char *startup, void *user)
  * caller keeps answering packets until con_alive() is FALSE. */
 void con_stop(struct Con *c)
 {
+    paste_drop(c);
     c->eof_pending = TRUE;
     send_break(c, SIGBREAKF_CTRL_C);
     serve(c);
@@ -794,5 +892,6 @@ void con_free(struct Con *c)
         FreeSignal(c->endbit);
     for (i = 0; i < c->nhist; i++)
         FreeVec(c->hist[i]);
+    paste_drop(c);
     FreeVec(c);
 }

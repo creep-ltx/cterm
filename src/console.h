@@ -20,6 +20,7 @@ void con_handle(struct Con *c, ULONG sigs);   /* answer what has come */
 BOOL con_alive(struct Con *c);          /* the Shell is still running */
 void con_keys(struct Con *c, const UBYTE *b, LONG n);  /* typed bytes */
 void con_reply(struct Con *c, const UBYTE *b, LONG n); /* DSR replies... */
+BOOL con_paste(struct Con *c, const UBYTE *b, LONG n); /* as text */
 void con_close_gadget(struct Con *c);   /* the window's close gadget */
 void con_free(struct Con *c);           /* after con_alive() is FALSE */
 void con_retire(struct Con *c);         /* its tab closes: all but the port */

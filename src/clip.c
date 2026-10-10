@@ -265,9 +265,10 @@ static void paste_(UBYTE *buf, ULONG bufsize)
                     t[i] = '\r';
             if (back)
                 scroll_view(0);
-            if (local)
-                con_keys(T->con, t, sz);
-            else {
+            if (local) {
+                if (!con_paste(T->con, t, sz))
+                    DisplayBeep(scr);   /* no memory: not silently lost */
+            } else {
                 if (vt_bracketed_paste(vt))
                     send_str("\x1b[200~");
                 send_typed(t, sz);
