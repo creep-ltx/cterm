@@ -276,6 +276,8 @@ static void paste_(UBYTE *buf, ULONG bufsize)
             }
             return;
         }
+        if (sz > got - o - 8)           /* past the end (or wraps): done */
+            break;
         o += 8 + sz + (sz & 1);
     }
 }
