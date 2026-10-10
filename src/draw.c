@@ -3,6 +3,7 @@
  * the scroll bar, the layout and the picture behind the text.
  */
 #include "cterm.h"
+#include <graphics/regions.h>
 
 struct CEntry;
 static ULONG index_rgb(int i);
@@ -1955,6 +1956,76 @@ void redraw_all(void)
     draw_cursor(TRUE);
     update_knob();
     if (shown && shown->t_xfer)
+        xfer_panel();
+}
+
+/* IDCMP_REFRESHWINDOW: only what the damage reaches is drawn again (a
+ * requester or another window moved off a corner, not the whole text).
+ * The damage is read between BeginRefresh and EndRefresh, then drawn
+ * without the damage clip, as an ordinary draw - whole rows, with the
+ * cursor handled as refresh() does. */
+void repair_damage(void)
+{
+    struct Region *dl;
+    struct Rectangle d;
+    VtChanges chg;
+    BOOL some, changed;
+    int r, r0, r1, x0, x1;
+    LONG keepbase = pbase;
+    UBYTE keepmask = pmask;
+    BeginRefresh(win);
+    dl = win->WLayer->DamageList;       /* in the window's coordinates */
+    some = dl && dl->RegionRectangle;
+    if (some)
+        d = dl->bounds;
+    EndRefresh(win, TRUE);
+    /* nothing known, or text that moved and is not drawn yet (a scroll
+     * then would carry rows drawn here): all of it, as before */
+    if (!some || T != shown) {
+        redraw_all();
+        return;
+    }
+    changed = vt_take_changes(vt, &chg);
+    if (changed && (chg.all || chg.scroll_n)) {
+        redraw_all();
+        return;
+    }
+    x0 = d.MinX > win->BorderLeft ? d.MinX : win->BorderLeft;
+    x1 = d.MaxX < win->Width - win->BorderRight - 1 ? d.MaxX
+       : win->Width - win->BorderRight - 1;
+    if (d.MinY < win->BorderTop) d.MinY = win->BorderTop;
+    if (d.MaxY > win->Height - win->BorderBottom - 1)
+        d.MaxY = win->Height - win->BorderBottom - 1;
+    rp_forget();
+    if (x0 <= x1 && d.MinY <= d.MaxY) {
+        /* the damage afresh in the background, with all planes: the
+         * planes outside the text's mask must hold the background */
+        planes_full();
+        if (!backdrop_put(x0, d.MinY, x1 - x0 + 1, d.MaxY - d.MinY + 1)) {
+            apen(defbg);
+            RectFill(rp, x0, d.MinY, x1, d.MaxY);
+        }
+        pbase = keepbase;
+        pmask = keepmask;
+        SetWriteMask(rp, pmask);
+        rp_forget();
+    }
+    if (d.MinY < oy)
+        draw_tabbar();
+    r0 = (d.MinY - oy) / ch;
+    r1 = (d.MaxY - oy) / ch;
+    if (d.MinY < oy) r0 = 0;
+    if (r1 >= rows) r1 = rows - 1;
+    draw_cursor(FALSE);
+    for (r = 0; r < rows; r++)
+        if ((r >= r0 && r <= r1) || (changed && chg.dirty[r])) {
+            if (r < (int)sizeof shown_blank)
+                shown_blank[r] = 0;     /* what it showed is gone */
+            draw_row(r);
+        }
+    draw_cursor(TRUE);
+    update_knob();
+    if (shown->t_xfer)
         xfer_panel();
 }
 
