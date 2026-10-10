@@ -126,8 +126,17 @@ In the order the user and I agreed (2026-10-10):
   Screen, Text, Colours and picture, Keys, so it is not one long cluttered
   window. On OS 3.2 the clicktab gadget (ReAction) gives real tabs; a row
   of buttons switching pages works with GadTools alone.
-- Search the scrollback; double-click to select a word; a phone book of
-  hosts; OSC 52 copy; clickable links; logging; Zmodem.
+- Search the scrollback; double-click to select a word; OSC 52 copy;
+  clickable links; logging.
+- **The phone book** (the user's spec, 2026-10-10). Each entry: a name;
+  the address (IP, host name or URL) and port; telnet or ssh; a user name
+  and password (saved), sent at the host's prompt with Right Amiga+U (the
+  name) and Right Amiga+P (the password), both keys configurable; the
+  letters (Amiga font, TrueType, PC VGA font) and the mode (PC BBS / CP437,
+  Amiga / Latin-1, UTF-8). Calling an entry opens a tab dressed that way.
+  The passwords are kept on the Amiga only (ENVARC:CTerm/), never shown.
+- **File transfers:** Zmodem, Ymodem, Xmodem and Hydra first (BBSes);
+  SFTP, FTP and the like later.
 - Also: an ssh password login tried against a real server, ARexx,
   dropping files on the window, emoji fallback, more stock-A1200 speed.
 - Keys configurable (the rule for all the user's programs).
