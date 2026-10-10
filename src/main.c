@@ -1044,16 +1044,30 @@ static void cell_tt_glyph(ULONG cp, ULONG fg, ULONG bg, UWORD attr, int w)
     struct TT_Pixmap *pm;
     ULONG u = cp;
     int x, y, ph, pw;
+    struct TextExtent te;
+    int top, left;
     pm = TT_GetPixmap(tt_for(attr), (APTR)&u, 1, TT_Encoding,
                       TT_Encoding_UTF32_BE, TT_Antialias, TT_Antialias_On,
                       TAG_END);
     if (!pm)
         return;
-    ph = pm->ttp_Height < (ULONG)ch ? (int)pm->ttp_Height : ch;
-    pw = pm->ttp_Width < (ULONG)w ? (int)pm->ttp_Width : w;
+    /* the picture is the letter's ink only: it goes where the ink sits
+     * on the baseline (measured: an "n" is 8 rows, an "E" 10 - put both
+     * at the cell's top and the text jitters) */
+    TT_SetFont(rp, tt_for(attr));
+    TT_SetAttrs(rp, TT_Encoding, TT_Encoding_UTF32_BE, TAG_END);
+    TT_TextExtent(rp, (APTR)&u, 1, &te);
+    top = cbase + te.te_Extent.MinY;
+    left = te.te_Extent.MinX;
+    if (top < 0) top = 0;
+    if (left < 0) left = 0;
+    ph = (int)pm->ttp_Height;
+    if (top + ph > ch) ph = ch - top;
+    pw = (int)pm->ttp_Width;
+    if (left + pw > w) pw = w - left;
     for (y = 0; y < ph; y++) {
         const UBYTE *a = pm->ttp_Data + y * pm->ttp_Width;
-        ULONG *dst = cellbuf + y * cellw;
+        ULONG *dst = cellbuf + (top + y) * cellw + left;
         for (x = 0; x < pw; x++) {
             int k = a[x];
             if (k == 0)
