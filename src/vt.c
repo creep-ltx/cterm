@@ -75,6 +75,8 @@ struct Vt {
     uint32_t uacc, umin;                /* umin: the least a sequence of
                                            its length may hold */
     int uneed;
+    uint8_t ubuf[4];                /* the sequence's bytes so far */
+    int ulen;
 
     uint8_t *dirty;
     uint16_t *dx0, *dx1;            /* a dirty row's changed columns */
@@ -1319,6 +1321,23 @@ static void ground_char(Vt *v, uint32_t cp)
     put(v, cp);
 }
 
+/* Bytes that are not UTF-8: U+FFFD - but in the Amiga Shell, whose
+ * programs write Latin-1 (dir, the Shell's own echo of an å), the Latin-1
+ * letters they are; 0x80-0x9F there are the Amiga's C1 controls. */
+static void not_utf8(Vt *v, const uint8_t *b, int n)
+{
+    int i;
+    if (!v->amigamode) {
+        put(v, 0xFFFD);
+        return;
+    }
+    for (i = 0; i < n; i++)
+        if (b[i] >= 0xA0)
+            put(v, b[i]);
+        else if (b[i] >= 0x80)
+            c1(v, b[i]);
+}
+
 static void byte(Vt *v, int c)
 {
     switch (v->state) {
@@ -1327,6 +1346,7 @@ static void byte(Vt *v, int c)
             if (v->uneed) {
                 if ((c & 0xC0) == 0x80) {
                     v->uacc = (v->uacc << 6) | (c & 0x3F);
+                    v->ubuf[v->ulen++] = (uint8_t)c;
                     if (--v->uneed == 0) {
                         uint32_t u = v->uacc;
                         /* too long a form (C0 9B is not ESC), a surrogate,
@@ -1334,15 +1354,21 @@ static void byte(Vt *v, int c)
                          * C1 controls, as in xterm. */
                         if (u < v->umin || (u >= 0xD800 && u <= 0xDFFF) ||
                             u > 0x10FFFF)
-                            put(v, 0xFFFD);
+                            not_utf8(v, v->ubuf, v->ulen);
                         else
                             ground_char(v, u);
                     }
                     return;
                 }
                 v->uneed = 0;
-                put(v, 0xFFFD);         /* a broken sequence */
+                not_utf8(v, v->ubuf, v->ulen);  /* a broken sequence */
+                if (v->state != S_GROUND) {
+                    byte(v, c);
+                    return;
+                }
             }
+            v->ulen = 1;
+            v->ubuf[0] = (uint8_t)c;
             if ((c & 0xE0) == 0xC0) {
                 v->uacc = c & 0x1F; v->uneed = 1; v->umin = 0x80;
             } else if ((c & 0xF0) == 0xE0) {
@@ -1350,12 +1376,16 @@ static void byte(Vt *v, int c)
             } else if ((c & 0xF8) == 0xF0) {
                 v->uacc = c & 0x07; v->uneed = 3; v->umin = 0x10000;
             } else
-                put(v, 0xFFFD);
+                not_utf8(v, v->ubuf, 1);
             return;
         }
         if (v->uneed) {
             v->uneed = 0;
-            put(v, 0xFFFD);
+            not_utf8(v, v->ubuf, v->ulen);
+            if (v->state != S_GROUND) {
+                byte(v, c);             /* a replayed 9B began a CSI */
+                return;
+            }
         }
         ground_char(v, (uint32_t)c);
         return;
@@ -1538,7 +1568,7 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
          * (colour changes, cursor moves - most of what programs send) */
         if (v->state == S_GROUND && !v->uneed &&
             ((c == 0x1B && i + 1 < len && buf[i + 1] == '[') ||
-             (c == 0x9B && !v->utf8 && !v->cp437))) {
+             (c == 0x9B && (!v->utf8 || v->amigamode) && !v->cp437))) {
             int j = i + (c == 0x1B ? 2 : 1), np = 0, ok = 0;
             int par[MAXPARAM];
             par[0] = -1;
@@ -1596,8 +1626,11 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
             put(v, cp437[c - 0x80]);
             continue;
         }
-        /* Latin-1 (the Amiga's ANSI): bytes 0x80-0x9F are C1 controls */
-        if (!v->utf8 && v->state == S_GROUND && c >= 0x80 && c < 0xA0) {
+        /* Latin-1 (the Amiga's ANSI): bytes 0x80-0x9F are C1 controls -
+         * in the Amiga Shell in UTF-8 too, where no character starts with
+         * one (the console's 0x9B CSI: line editing, Tab's menu) */
+        if ((!v->utf8 || (v->amigamode && !v->uneed)) &&
+            v->state == S_GROUND && c >= 0x80 && c < 0xA0) {
             c1(v, c);
             continue;
         }

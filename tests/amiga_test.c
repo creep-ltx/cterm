@@ -45,6 +45,23 @@ int main(void)
               vt_cursor_shape(v, &blink) == 2, "CSI 5 SP q sets a bar");
         feed(v, "\x9b" "2 q");
     }
+    {   /* the Shell switched to UTF-8 (the menu): the console's 9B CSI
+         * still works, Latin-1 bytes from programs show as Latin-1 */
+        int w;
+        const VtCell *l;
+        vt_set_utf8(v, 1);
+        feed(v, "\x0c" "\x9b" "2;1H" "z");
+        CHECK(at(v, 1, 0) == 'z', "UTF-8 Shell: 9B is still CSI");
+        feed(v, "\x0c" "\xe5" "x" "\xc3\xa5" "\xe5" "\x9b" "3;1H" "q" "\xe2\x94" "y");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 4 && l[0].cp == 0xE5 && l[1].cp == 'x' && l[2].cp == 0xE5 &&
+              l[3].cp == 0xE5, "UTF-8 Shell: Latin-1 bytes, UTF-8 letters");
+        CHECK(at(v, 2, 0) == 'q', "UTF-8 Shell: 9B after a Latin-1 letter");
+        l = vt_line(v, 2, 0, &w);
+        CHECK(w >= 3 && l[1].cp == 0xE2 && l[2].cp == 'y',
+              "UTF-8 Shell: a broken sequence: its bytes as Latin-1 (94: C1)");
+        vt_set_amiga(v, 1);             /* back to Latin-1, as the Shell starts */
+    }
     feed(v, "\x0c" "page");                      /* FF = clear page */
     CHECK(at(v, 0, 0) == 'p' && at(v, 0, 4) == ' ', "FF clears and homes");
 
