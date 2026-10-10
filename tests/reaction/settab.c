@@ -24,6 +24,7 @@
 #include <reaction/reaction_macros.h>
 #include <proto/exec.h>
 #include <proto/intuition.h>
+#include <proto/graphics.h>
 #include <proto/window.h>
 #include <proto/layout.h>
 #include <proto/clicktab.h>
@@ -123,6 +124,18 @@ static void ADD(Object *g, Object *child, STRPTR lab)
              lab ? label(lab) : NULL, TAG_END);
 }
 
+/* The Workbench's mode: something real for the test to show. */
+static ULONG wbmode(void)
+{
+    struct Screen *wb = LockPubScreen(NULL);
+    ULONG id = 0;
+    if (wb) {
+        id = GetVPModeID(&wb->ViewPort);
+        UnlockPubScreen(NULL, wb);
+    }
+    return id;
+}
+
 static Object *page_screen(void)
 {
     Object *o, *p = VLayoutObject, LAYOUT_SpaceOuter, TRUE, End;
@@ -137,10 +150,14 @@ static Object *page_screen(void)
     ADD(g, chooser(where, 1), "Screen");
     STEP("p1 add");
     o = GetScreenModeObject, GETSCREENMODE_TitleText, "CTerm's own screen",
-        GETSCREENMODE_DisplayID, 0x50031000, GETSCREENMODE_DoDepth, TRUE,
+        GETSCREENMODE_DisplayID, wbmode(), GETSCREENMODE_DoDepth, TRUE,
         GETSCREENMODE_DisplayDepth, 24, End;
     STEP("p1 smode");
-    ADD(g, o, "Screen mode");
+    /* one line high, like the choosers: left alone the monitor picture
+     * makes the row twice as tall */
+    SetAttrs(g, LAYOUT_AddChild, o, CHILD_WeightedHeight, 0,
+             CHILD_MaxHeight, 22, CHILD_Label, label("Screen mode"),
+             TAG_END);
     STEP("p1 smode added");
     ADD(g, check("Full screen", TRUE), NULL);
     STEP("p1 full");
