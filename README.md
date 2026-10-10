@@ -44,9 +44,20 @@ Amiga+V types the clipboard in.
 
 ## Settings
 
-The Settings menu: Amiga font, TrueType font, bigger/smaller text,
-Workbench window or own screen, full screen, scroll bar, UTF-8, PC BBS.
-They are kept in `ENVARC:CTerm.prefs`, with the window's place and size.
+Settings/Settings... (Right Amiga+S) opens one window for everything:
+
+- **Screen:** a Workbench window or CTerm's own screen (any screen mode
+  and number of colours), full screen, scroll bar.
+- **Text:** an Amiga font or TrueType, the TrueType size, line spacing,
+  and the characters (UTF-8, Latin-1, PC BBS).
+- **Colours:** a theme (Nord, Black, Workbench, Amber, Green, Light), and
+  your own text and background colour on top of it.
+
+Letters and colours change at once, so you see them; the screen changes
+on Use or Save. Save keeps them (ENVARC:CTerm.prefs), Use until the next
+reboot, Cancel puts everything back. The window's place and size are
+kept as well. The Settings menu still has the quick items (fonts, text
+size, screen, full screen, scroll bar).
 
 ## Building
 

@@ -74,20 +74,77 @@ void __chkabort(void) {}
  * Colours
  * ==================================================================== */
 
-/* The default text and background, and the 16 ANSI colours (Nord-like,
- * with brighter brights). */
-static ULONG deffg = 0xD8DEE9, defbg = 0x1A1D23;
-static const ULONG ansi16[16] = {
-    0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD, 0x88C0D0,
-    0xE5E9F0, 0x4C566A, 0xD57780, 0xB5D09E, 0xF0D399, 0x94B4D6, 0xC5A3C0,
-    0x8FBCBB, 0xFFFFFF
+/* Themes: the text and background, the 16 ANSI colours, and what the
+ * Amiga's pens 2-7 mean in the local Shell (Ed and friends use them). */
+struct Theme {
+    const char *name;
+    ULONG fg, bg, ansi[16], wbpens[6];
 };
+
+static const struct Theme themes[] = {
+    { "Nord", 0xD8DEE9, 0x1A1D23,
+      { 0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD,
+        0x88C0D0, 0xE5E9F0, 0x4C566A, 0xD57780, 0xB5D09E, 0xF0D399,
+        0x94B4D6, 0xC5A3C0, 0x8FBCBB, 0xFFFFFF },
+      { 0xFFFFFF, 0x88C0D0, 0x4C566A, 0xB48EAD, 0xA3BE8C, 0xEBCB8B } },
+    { "Black", 0xC0C0C0, 0x000000,
+      { 0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA,
+        0x00AAAA, 0xAAAAAA, 0x555555, 0xFF5555, 0x55FF55, 0xFFFF55,
+        0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF },
+      { 0xFFFFFF, 0x6688BB, 0x777777, 0xAA00AA, 0x00AA00, 0xAA5500 } },
+    { "Workbench", 0x000000, 0xAAAAAA,
+      { 0x000000, 0x990000, 0x006600, 0x885500, 0x002288, 0x772277,
+        0x006666, 0xDDDDDD, 0x444444, 0xCC2222, 0x228822, 0xAA7700,
+        0x2244CC, 0x993399, 0x118888, 0xFFFFFF },
+      { 0xFFFFFF, 0x6688BB, 0x777777, 0x772277, 0x006600, 0x885500 } },
+    { "Amber", 0xFFB000, 0x1A1000,
+      { 0x3A2800, 0xFF7A00, 0xD09000, 0xFFC840, 0xB07800, 0xE08800,
+        0xFFD070, 0xFFB000, 0x6A4800, 0xFF9A40, 0xE8A830, 0xFFE090,
+        0xC89040, 0xF0A040, 0xFFE0A0, 0xFFF0D0 },
+      { 0xFFE0A0, 0xD09000, 0x6A4800, 0xFF7A00, 0xE8A830, 0xFFC840 } },
+    { "Green", 0x33FF66, 0x001A08,
+      { 0x0A3A18, 0x22AA44, 0x33FF66, 0x88FF88, 0x22CC55, 0x44DD77,
+        0x66FF99, 0x33FF66, 0x115522, 0x55CC66, 0x77FF99, 0xBBFFBB,
+        0x44DD77, 0x66EE88, 0x99FFBB, 0xDDFFDD },
+      { 0xBBFFBB, 0x22CC55, 0x115522, 0x44DD77, 0x77FF99, 0x88FF88 } },
+    { "Light", 0x2E3440, 0xECEFF4,
+      { 0x2E3440, 0xBF616A, 0x5E8A3A, 0xB08A30, 0x3B6EA5, 0x8F5A8A,
+        0x3A8A8A, 0xD8DEE9, 0x4C566A, 0xD06070, 0x6A9A48, 0xC09A40,
+        0x4C7EB5, 0x9F6A9A, 0x4A9A9A, 0xFFFFFF },
+      { 0x000000, 0x3B6EA5, 0x9099A8, 0x8F5A8A, 0x5E8A3A, 0xB08A30 } },
+};
+#define NTHEMES (int)(sizeof themes / sizeof themes[0])
+
+/* The PC's own 16 colours (VGA): PC BBS art is drawn for these. */
+static const ULONG vga16[16] = {
+    0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA,
+    0xAAAAAA, 0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF,
+    0x55FFFF, 0xFFFFFF
+};
+
+static int theme;
+static BOOL ownfg, ownbg;               /* the person's own text/background */
+static ULONG myfg, mybg;
+static ULONG deffg = 0xD8DEE9, defbg = 0x1A1D23;
+static const ULONG *ansi16 = themes[0].ansi;
+static BOOL pcmode;                     /* a PC BBS: CP437, PC colours, bold
+                                           is bright, blink a bright
+                                           background (iCE colours) */
+
+static void apply_theme(void)
+{
+    if (theme < 0 || theme >= NTHEMES)
+        theme = 0;
+    deffg = ownfg ? myfg : themes[theme].fg;
+    defbg = ownbg ? mybg : themes[theme].bg;
+    ansi16 = themes[theme].ansi;
+}
 
 static ULONG index_rgb(int i)
 {
     static const UBYTE cube[6] = { 0, 95, 135, 175, 215, 255 };
     if (i < 16)
-        return ansi16[i];
+        return pcmode ? vga16[i] : ansi16[i];
     if (i < 232) {
         i -= 16;
         return ((ULONG)cube[i / 36] << 16) | ((ULONG)cube[(i / 6) % 6] << 8) |
@@ -114,6 +171,9 @@ static ULONG mix(ULONG a, ULONG b, int pct)       /* pct of b into a */
 
 enum { SCR_WB, SCR_OWN };
 static int scrmode = SCR_WB, owndepth = 8;
+static ULONG ownmode = INVALID_ID;      /* the own screen's mode; INVALID_ID:
+                                           the Workbench's, at owndepth */
+static LONG ownw, ownh;                 /* its size; 0: the mode's own */
 static BOOL fullscreen, scrollbar = TRUE;
 static struct Screen *ownscr, *scr;
 static struct DrawInfo *dri;
@@ -123,6 +183,7 @@ static struct TextFont *font, *ownfont;
 static char fontname[48];
 static int fontsize;
 static int cw, ch, cbase;               /* the cell */
+static int linespace;                   /* extra pixels between lines */
 
 /* TrueType, through ttengine.library: a .ttf file at a pixel size, with
  * its bold and italic files where there are any. */
@@ -244,9 +305,6 @@ static LONG pen_for(ULONG rgb)
  * full clear every plane outside the mask holds the background's bit
  * everywhere, so skipping it changes nothing (CCON's plane mask). */
 static BOOL painter;                    /* rows built in memory (RTG) */
-static BOOL pcmode;                     /* a PC BBS: CP437, PC colours, bold
-                                           is bright, blink a bright
-                                           background (iCE colours) */
 static LONG pbase = -1;                 /* the clear's pen; -1: no mask */
 static UBYTE pmask;
 
@@ -356,10 +414,8 @@ static void release_pens(void)
  * background, text, highlight, accent - not ANSI's. */
 static ULONG pen_rgb(int i)
 {
-    static const ULONG wb[8] = { 0, 0, 0xFFFFFF, 0x88C0D0, 0x4C566A,
-                                 0xB48EAD, 0xA3BE8C, 0xEBCB8B };
     if (local && i < 8)
-        return i == 0 ? defbg : i == 1 ? deffg : wb[i];
+        return i == 0 ? defbg : i == 1 ? deffg : themes[theme].wbpens[i - 2];
     return index_rgb(i);
 }
 
@@ -865,6 +921,10 @@ static void draw_cells(int r, int x0, int x1)
             if (m)
                 tt_run(u, ucol, m, y, fg, c->attr);
         } else {
+            if (linespace) {            /* Text() fills the font's rows only */
+                apen(bg);
+                RectFill(rp, ox + start * cw, y, ox + x * cw - 1, y + ch - 1);
+            }
             apen(fg);
             bpen(bg);
             PF_START(tt);
@@ -1073,9 +1133,9 @@ static void cell_bitmap_glyph(UBYTE c, ULONG fg, UWORD attr)
     w = loc & 0xFFFF;
     if (w > cw)
         w = cw;
-    for (y = 0; y < f->tf_YSize && y < ch; y++) {
+    for (y = 0; y < f->tf_YSize && y + cbase - f->tf_Baseline < ch; y++) {
         const UBYTE *row = (const UBYTE *)f->tf_CharData + y * f->tf_Modulo;
-        ULONG *dst = cellbuf + y * cellw;
+        ULONG *dst = cellbuf + (y + cbase - f->tf_Baseline) * cellw;
         int shift = attr & VT_ITALIC ? (f->tf_Baseline - y) / 2 : 0;
         for (b = 0; b < w; b++) {
             int bit = off + b;
@@ -2094,7 +2154,7 @@ static void key(struct IntuiMessage *m)
 
 enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
-       M_PC, M_CALL, M_COPY, M_PASTE };
+       M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS };
 
 static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
@@ -2106,6 +2166,8 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Copy", (STRPTR)"C", 0, 0, (APTR)M_COPY },
     {  NM_ITEM, (STRPTR)"Paste", (STRPTR)"V", 0, 0, (APTR)M_PASTE },
     { NM_TITLE, (STRPTR)"Settings", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Settings...", (STRPTR)"S", 0, 0, (APTR)M_SETTINGS },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Amiga font...", 0, 0, 0, (APTR)M_FONT },
     {  NM_ITEM, (STRPTR)"TrueType font...", (STRPTR)"T", 0, 0,
        (APTR)M_TTFONT },
@@ -2130,6 +2192,10 @@ static struct NewMenu newmenu[] = {
 };
 
 static void call_dialog(void);
+static void open_settings(void);
+static void close_settings(void);
+static void settings_events(void);
+static struct Window *setwin;
 static void sel_copy(void);
 static void paste(void);
 static void clip_close(void);
@@ -2172,12 +2238,14 @@ static BOOL open_own_screen(void)
     UWORD pens[] = { (UWORD)~0 };
     if (wb) {
         id = GetVPModeID(&wb->ViewPort);
-        if (depth > 8)
+        if (depth > 8 && ownmode == INVALID_ID)
             depth = wb->RastPort.BitMap->Depth > 8
                   ? wb->RastPort.BitMap->Depth : 8;
         UnlockPubScreen(NULL, wb);
     }
-    if (depth <= 8) {
+    if (ownmode != INVALID_ID)
+        id = ownmode;                   /* chosen in the settings */
+    else if (depth <= 8) {
         ULONG best = BestModeID(BIDTAG_SourceID, id, BIDTAG_Depth, depth,
                                 TAG_END);
         if (best != INVALID_ID)
@@ -2185,7 +2253,8 @@ static BOOL open_own_screen(void)
     }
     ownscr = OpenScreenTags(NULL,
         SA_DisplayID, id, SA_Depth, depth,
-        SA_Width, STDSCREENWIDTH, SA_Height, STDSCREENHEIGHT,
+        SA_Width, ownmode != INVALID_ID && ownw > 0 ? ownw : STDSCREENWIDTH,
+        SA_Height, ownmode != INVALID_ID && ownh > 0 ? ownh : STDSCREENHEIGHT,
         SA_Title, (ULONG)"CTerm", SA_PubName, (ULONG)"CTERM",
         SA_Type, PUBLICSCREEN, SA_Pens, (ULONG)pens, SA_SysFont, 1,
         SA_SharePens, TRUE, SA_Interleaved, TRUE,
@@ -2202,6 +2271,15 @@ static void close_own_screen(void)
         CloseScreen(ownscr);
         ownscr = NULL;
     }
+}
+
+/* The cell from the Amiga font, with the line spacing shared above and
+ * below the letters. */
+static void bitmap_metrics(void)
+{
+    cw = font->tf_XSize;
+    ch = font->tf_YSize + linespace;
+    cbase = font->tf_Baseline + linespace / 2;
 }
 
 static BOOL load_font(void)
@@ -2238,9 +2316,7 @@ static BOOL load_font(void)
     if (ownfont)
         CloseFont(ownfont);
     font = ownfont = f;
-    cw = f->tf_XSize;
-    ch = f->tf_YSize;
-    cbase = f->tf_Baseline;
+    bitmap_metrics();
     return TRUE;
 }
 
@@ -2251,9 +2327,33 @@ static BOOL load_font(void)
 #define PREFS_VAR "CTerm.prefs"
 static BOOL hadprefs;
 
+static ULONG hexval(const char *q)
+{
+    ULONG v = 0;
+    while ((*q >= '0' && *q <= '9') || ((*q | 32) >= 'a' && (*q | 32) <= 'f'))
+        v = v * 16 + (*q <= '9' ? *q - '0' : (*q | 32) - 'a' + 10), q++;
+    return v;
+}
+
+static void hex_cat(char *out, ULONG v, int digits)
+{
+    char t[9];
+    int i;
+    for (i = 0; i < digits; i++) {
+        int n = (v >> (4 * (digits - 1 - i))) & 15;
+        t[i] = n < 10 ? '0' + n : 'A' + n - 10;
+    }
+    t[digits] = 0;
+    strcat(out, t);
+}
+
+static BOOL envonly;                    /* Use: until a reboot, not saved */
+static BOOL used_only;                  /* the settings were Used, not Saved */
+static BOOL saved_pc;                   /* the setting; pcmode may be PC's */
+
 static void load_prefs(void)
 {
-    static char buf[800];
+    static char buf[1200];
     char *p = buf;
     /* the whole file: without GVF_BINARY_VAR, GetVar stops at the first
      * line break (every setting after "truetype" was lost) */
@@ -2293,6 +2393,29 @@ static void load_prefs(void)
             else if (!stricmp(p, "full")) fullscreen = val[0] == '1';
             else if (!stricmp(p, "scrollbar")) scrollbar = val[0] == '1';
             else if (!stricmp(p, "utf8")) utf8 = saved_utf8 = val[0] == '1';
+            else if (!stricmp(p, "theme")) {
+                int i;
+                for (i = 0; i < NTHEMES; i++)
+                    if (!stricmp(val, themes[i].name))
+                        theme = i;
+            }
+            else if (!stricmp(p, "fg")) { myfg = hexval(val); ownfg = TRUE; }
+            else if (!stricmp(p, "bg")) { mybg = hexval(val); ownbg = TRUE; }
+            else if (!stricmp(p, "spacing")) {
+                linespace = atoi(val);
+                if (linespace < 0 || linespace > 8) linespace = 0;
+            }
+            else if (!stricmp(p, "pc")) pcmode = saved_pc = val[0] == '1';
+            else if (!stricmp(p, "mode")) {     /* "hexid,w,h" */
+                const char *q = val;
+                ownmode = hexval(q);
+                while (*q && *q != ',') q++;
+                ownw = ownh = 0;
+                if (*q == ',') for (q++; *q >= '0' && *q <= '9'; q++)
+                    ownw = ownw * 10 + *q - '0';
+                if (*q == ',') for (q++; *q >= '0' && *q <= '9'; q++)
+                    ownh = ownh * 10 + *q - '0';
+            }
             else if (!stricmp(p, "calls")) {
                 strncpy(calls, val, sizeof calls - 1);
                 calls[sizeof calls - 1] = 0;
@@ -2325,7 +2448,9 @@ static void load_prefs(void)
 
 static void save_prefs(void)
 {
-    static char buf[800];
+    if (setwin)
+        return;                         /* the settings window decides */
+    static char buf[1200];
     buf[0] = 0;
     strcat(buf, "truetype="); strcat(buf, usett ? "1" : "0");
     strcat(buf, "\nttfile="); strcat(buf, ttfile);
@@ -2346,6 +2471,16 @@ static void save_prefs(void)
     strcat(buf, "\nfull="); strcat(buf, fullscreen ? "1" : "0");
     strcat(buf, "\nscrollbar="); strcat(buf, scrollbar ? "1" : "0");
     strcat(buf, "\nutf8="); strcat(buf, saved_utf8 ? "1" : "0");
+    strcat(buf, "\ntheme="); strcat(buf, themes[theme].name);
+    if (ownfg) { strcat(buf, "\nfg="); hex_cat(buf, myfg, 6); }
+    if (ownbg) { strcat(buf, "\nbg="); hex_cat(buf, mybg, 6); }
+    if (linespace) { strcat(buf, "\nspacing="); numstr_cat(buf, linespace); }
+    if (saved_pc) strcat(buf, "\npc=1");
+    if (ownmode != INVALID_ID) {
+        strcat(buf, "\nmode="); hex_cat(buf, ownmode, 8);
+        strcat(buf, ","); numstr_cat(buf, ownw);
+        strcat(buf, ","); numstr_cat(buf, ownh);
+    }
     if (calls[0]) {
         strcat(buf, "\ncalls=");
         strcat(buf, calls);
@@ -2358,7 +2493,8 @@ static void save_prefs(void)
         numstr_cat(buf, wh);
     }
     strcat(buf, "\n");
-    SetVar(PREFS_VAR, buf, -1, GVF_GLOBAL_ONLY | GVF_SAVE_VAR);
+    SetVar(PREFS_VAR, buf, -1,
+           GVF_GLOBAL_ONLY | (envonly ? 0 : GVF_SAVE_VAR));
 }
 
 static void close_tt(void)
@@ -2434,8 +2570,8 @@ static BOOL load_tt(void)
         return FALSE;
     }
     ttruns = ten == 10 * cw;
-    ch = top + bot;
-    cbase = top;
+    ch = top + bot + linespace;         /* the spacing shared above, below */
+    cbase = top + linespace / 2;
     return TRUE;
 }
 
@@ -2471,9 +2607,7 @@ static BOOL open_display(void)
     if (usett && !ttface[0] && !load_tt())
         usett = FALSE;
     if (!usett) {
-        cw = font->tf_XSize;
-        ch = font->tf_YSize;
-        cbase = font->tf_Baseline;
+        bitmap_metrics();
     }
 
     if (fullscreen) {
@@ -2559,6 +2693,8 @@ static void close_display(BOOL keep_screen)
 
 static void switch_display(void)
 {
+    if (setwin)
+        close_settings();               /* its screen may be going */
     BOOL keep = want_mode == SCR_OWN && scrmode == SCR_OWN &&
                 want_depth == owndepth;
     want_switch = FALSE;
@@ -2810,9 +2946,7 @@ static void ask_font(void)
         fontsize = req->fo_Attr.ta_YSize;
         if (load_font()) {
             usett = FALSE;
-            cw = font->tf_XSize;
-            ch = font->tf_YSize;
-            cbase = font->tf_Baseline;
+            bitmap_metrics();
             font_changed();
             save_prefs();
         }
@@ -2839,6 +2973,7 @@ static BOOL menu_pick(ULONG id)
     case M_SMALLER: tt_size(-2); break;
     case M_SPEED: speed_test(); break;
     case M_CALL: call_dialog(); break;
+    case M_SETTINGS: open_settings(); break;
     case M_COPY: sel_copy(); break;
     case M_PASTE: paste(); break;
     case M_ABOUT:
@@ -3333,6 +3468,515 @@ static void call_dialog(void)
     }
 }
 
+/* ======================================================================
+ * Settings: one window for the screen, the letters and the colours
+ *
+ * Letters and colours change at once, as a preview; where CTerm lives
+ * (screen, mode, full screen, scroll bar) changes on Use or Save, which
+ * open the window, and maybe the screen, again. Cancel puts everything
+ * back. Save keeps it after a reboot, Use until then (ENV: only).
+ * ==================================================================== */
+
+enum { S_WHERE = 1, S_MODE, S_MODETXT, S_FULL, S_BAR, S_LETTERS, S_FONT,
+       S_FONTTXT, S_TT, S_TTTXT, S_TTSIZE, S_SPACE, S_CHARS, S_THEME, S_PART,
+       S_R, S_G, S_B, S_RESET, S_SAVE, S_USE, S_CANCEL, S_N };
+
+static struct Gadget *setglist, *sg[S_N];
+static char modetxt[80], fonttxt[64], tttxt[64];
+static int setpart;                     /* 0 the text, 1 the background */
+static int pend_mode, pend_depth;
+static ULONG pend_id;
+static LONG pend_w, pend_h;
+static BOOL pend_full, pend_bar;
+
+static struct {                         /* what Cancel goes back to */
+    int theme, ttsize, fontsize, linespace;
+    BOOL ownfg, ownbg, usett, utf8, pc;
+    ULONG myfg, mybg;
+    char ttfile[160], fontname[48];
+} snap;
+
+static STRPTR wherelabels[] = { (STRPTR)"Workbench window",
+                                (STRPTR)"Own screen", NULL };
+static STRPTR letterlabels[] = { (STRPTR)"Amiga font", (STRPTR)"TrueType",
+                                 NULL };
+static STRPTR charlabels[] = { (STRPTR)"UTF-8", (STRPTR)"Latin-1",
+                               (STRPTR)"PC BBS (CP437)", NULL };
+static STRPTR partlabels[] = { (STRPTR)"Text", (STRPTR)"Background", NULL };
+static STRPTR themelabels[NTHEMES + 1];
+
+static void set_text(int id, char *t)
+{
+    if (setwin && sg[id])
+        GT_SetGadgetAttrs(sg[id], setwin, NULL, GTTX_Text, (ULONG)t, TAG_END);
+}
+
+static void describe_mode(void)
+{
+    if (pend_mode == SCR_WB) {
+        strcpy(modetxt, "the Workbench");
+        return;
+    }
+    modetxt[0] = 0;
+    if (pend_id != INVALID_ID) {
+        struct NameInfo ni;
+        if (GetDisplayInfoData(NULL, (UBYTE *)&ni, sizeof ni, DTAG_NAME,
+                               pend_id) > 0) {
+            strncpy(modetxt, (char *)ni.Name, 40);
+            modetxt[40] = 0;
+        }
+        if (pend_w > 0) {
+            strcat(modetxt, ", ");
+            numstr_cat(modetxt, pend_w);
+            strcat(modetxt, "x");
+            numstr_cat(modetxt, pend_h);
+        }
+    } else
+        strcpy(modetxt, "WB mode");
+    strcat(modetxt, ", ");
+    if (pend_depth > 8)
+        strcat(modetxt, "millions of");
+    else
+        numstr_cat(modetxt, 1L << pend_depth);
+    strcat(modetxt, " colours");
+}
+
+static void describe_fonts(void)
+{
+    const char *n = font ? font->tf_Message.mn_Node.ln_Name : "?";
+    strncpy(fonttxt, n ? n : "?", 40);
+    fonttxt[40] = 0;
+    if (strlen(fonttxt) > 5 &&
+        !stricmp(fonttxt + strlen(fonttxt) - 5, ".font"))
+        fonttxt[strlen(fonttxt) - 5] = 0;
+    strcat(fonttxt, " ");
+    numstr_cat(fonttxt, font ? font->tf_YSize : 0);
+    strncpy(tttxt, (char *)FilePart((STRPTR)ttfile), 40);
+    tttxt[40] = 0;
+    if (strlen(tttxt) > 4 && !stricmp(tttxt + strlen(tttxt) - 4, ".ttf"))
+        tttxt[strlen(tttxt) - 4] = 0;
+    if (!TTEngineBase)
+        strcpy(tttxt, "(no ttengine.library)");
+}
+
+static void set_sliders(void)
+{
+    ULONG c = setpart ? defbg : deffg;
+    if (!setwin)
+        return;
+    GT_SetGadgetAttrs(sg[S_R], setwin, NULL, GTSL_Level, (c >> 16) & 255,
+                      TAG_END);
+    GT_SetGadgetAttrs(sg[S_G], setwin, NULL, GTSL_Level, (c >> 8) & 255,
+                      TAG_END);
+    GT_SetGadgetAttrs(sg[S_B], setwin, NULL, GTSL_Level, c & 255, TAG_END);
+}
+
+static void colours_changed(void)
+{
+    apply_theme();
+    painter_forget();
+    redraw_all();
+}
+
+static int chars_now(void)
+{
+    return pcmode ? 2 : utf8 ? 0 : 1;
+}
+
+static void set_chars(int k)
+{
+    pcmode = k == 2;
+    utf8 = k == 0;
+    if (pcmode)
+        vt_set_cp437(vt, 1);
+    else
+        vt_set_utf8(vt, utf8);
+    painter_forget();
+    redraw_all();
+}
+
+/* The letters again after a font, size or spacing change. */
+static void letters_changed(void)
+{
+    if (usett && !load_tt())
+        usett = FALSE;
+    if (!usett)
+        bitmap_metrics();
+    font_changed();
+    describe_fonts();
+    set_text(S_FONTTXT, fonttxt);
+    set_text(S_TTTXT, tttxt);
+    if (setwin) {
+        GT_SetGadgetAttrs(sg[S_LETTERS], setwin, NULL, GTCY_Active, usett,
+                          TAG_END);
+        GT_SetGadgetAttrs(sg[S_TTSIZE], setwin, NULL, GA_Disabled, !usett,
+                          GTSL_Level, ttsize, TAG_END);
+    }
+}
+
+static void where_changed(void)
+{
+    GT_SetGadgetAttrs(sg[S_WHERE], setwin, NULL, GTCY_Active,
+                      pend_mode == SCR_OWN, TAG_END);
+    GT_SetGadgetAttrs(sg[S_FULL], setwin, NULL, GA_Disabled,
+                      pend_mode == SCR_WB, TAG_END);
+    GT_SetGadgetAttrs(sg[S_MODE], setwin, NULL, GA_Disabled,
+                      pend_mode == SCR_WB, TAG_END);
+    describe_mode();
+    set_text(S_MODETXT, modetxt);
+}
+
+static void ask_mode(void)
+{
+    struct ScreenModeRequester *req;
+    ULONG start = pend_id != INVALID_ID ? pend_id
+                : ownscr ? GetVPModeID(&ownscr->ViewPort) : INVALID_ID;
+    if (!AslBase)
+        return;
+    req = AllocAslRequestTags(ASL_ScreenModeRequest,
+        ASLSM_Window, (ULONG)setwin, ASLSM_SleepWindow, TRUE,
+        ASLSM_TitleText, (ULONG)"CTerm's own screen",
+        ASLSM_DoDepth, TRUE, ASLSM_MinDepth, 1, ASLSM_MaxDepth, 24,
+        ASLSM_DoWidth, TRUE, ASLSM_DoHeight, TRUE,
+        start != INVALID_ID ? ASLSM_InitialDisplayID : TAG_IGNORE, start,
+        ASLSM_InitialDisplayDepth, pend_depth > 8 ? 24 : pend_depth,
+        TAG_END);
+    if (!req)
+        return;
+    if (AslRequest(req, NULL)) {
+        pend_id = req->sm_DisplayID;
+        pend_w = req->sm_DisplayWidth;
+        pend_h = req->sm_DisplayHeight;
+        pend_depth = req->sm_DisplayDepth;
+        pend_mode = SCR_OWN;
+        where_changed();
+    }
+    FreeAslRequest(req);
+}
+
+static void close_settings(void)
+{
+    if (setwin) {
+        CloseWindow(setwin);
+        setwin = NULL;
+    }
+    if (setglist) {
+        FreeGadgets(setglist);
+        setglist = NULL;
+    }
+    memset(sg, 0, sizeof sg);
+}
+
+static void open_settings(void)
+{
+    struct NewGadget ng;
+    struct Gadget *g;
+    struct TextAttr *ta = scr->Font;
+    struct RastPort *srp = &scr->RastPort;
+    int th = ta->ta_YSize, lh = th + 7, i;
+    int ox = scr->WBorLeft + 10, oy = scr->WBorTop + th + 1 + 8;
+    int lw = TextLength(srp, (STRPTR)"TrueType size", 13) + 20;
+    int gx, gw = 340, bw, W, H, y;
+
+    if (setwin) {
+        WindowToFront(setwin);
+        ActivateWindow(setwin);
+        return;
+    }
+    gx = ox + lw;
+    bw = TextLength(srp, (STRPTR)"TrueType font...", 16) + 20;
+    for (i = 0; i < NTHEMES; i++)
+        themelabels[i] = (STRPTR)themes[i].name;
+    themelabels[NTHEMES] = NULL;
+
+    snap.theme = theme;
+    snap.ownfg = ownfg; snap.ownbg = ownbg;
+    snap.myfg = myfg; snap.mybg = mybg;
+    snap.usett = usett; snap.ttsize = ttsize;
+    strcpy(snap.ttfile, ttfile);
+    strcpy(snap.fontname, fontname);
+    snap.fontsize = fontsize;
+    snap.linespace = linespace;
+    snap.utf8 = utf8; snap.pc = pcmode;
+    pend_mode = scrmode;
+    pend_depth = owndepth;
+    pend_id = ownmode;
+    pend_w = ownw;
+    pend_h = ownh;
+    pend_full = fullscreen;
+    pend_bar = scrollbar;
+    describe_mode();
+    describe_fonts();
+
+    memset(&ng, 0, sizeof ng);
+    ng.ng_TextAttr = ta;
+    ng.ng_VisualInfo = visual;
+    ng.ng_Height = th + 5;
+    g = CreateContext(&setglist);
+    y = oy;
+#define NG(id, x, w, txt, fl) (ng.ng_LeftEdge = (x), ng.ng_TopEdge = y, \
+    ng.ng_Width = (w), ng.ng_GadgetText = (STRPTR)(txt), ng.ng_Flags = (fl), \
+    ng.ng_GadgetID = (id))
+
+    NG(S_WHERE, gx, gw, "Screen", PLACETEXT_LEFT);
+    g = sg[S_WHERE] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
+        (ULONG)wherelabels, GTCY_Active, pend_mode == SCR_OWN, TAG_END);
+    y += lh;
+    NG(S_MODE, gx, bw, "Screen mode...", PLACETEXT_IN);
+    g = sg[S_MODE] = CreateGadget(BUTTON_KIND, g, &ng,
+        GA_Disabled, pend_mode == SCR_WB, TAG_END);
+    NG(S_MODETXT, gx + bw + 6, gw - bw - 6, NULL, 0);
+    g = sg[S_MODETXT] = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
+        (ULONG)modetxt, GTTX_Border, TRUE, TAG_END);
+    y += lh;
+    NG(S_FULL, gx, 26, "Full screen", PLACETEXT_LEFT);
+    g = sg[S_FULL] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked,
+        pend_full, GTCB_Scaled, TRUE, GA_Disabled, pend_mode == SCR_WB,
+        TAG_END);
+    NG(S_BAR, gx + gw - 26, 26, "Scroll bar", PLACETEXT_LEFT);
+    g = sg[S_BAR] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked,
+        pend_bar, GTCB_Scaled, TRUE, TAG_END);
+    y += lh + 8;
+
+    NG(S_LETTERS, gx, gw, "Letters", PLACETEXT_LEFT);
+    g = sg[S_LETTERS] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
+        (ULONG)letterlabels, GTCY_Active, usett, TAG_END);
+    y += lh;
+    NG(S_FONT, gx, bw, "Amiga font...", PLACETEXT_IN);
+    g = sg[S_FONT] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+    NG(S_FONTTXT, gx + bw + 6, gw - bw - 6, NULL, 0);
+    g = sg[S_FONTTXT] = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
+        (ULONG)fonttxt, GTTX_Border, TRUE, TAG_END);
+    y += lh;
+    NG(S_TT, gx, bw, "TrueType font...", PLACETEXT_IN);
+    g = sg[S_TT] = CreateGadget(BUTTON_KIND, g, &ng,
+        GA_Disabled, !TTEngineBase, TAG_END);
+    NG(S_TTTXT, gx + bw + 6, gw - bw - 6, NULL, 0);
+    g = sg[S_TTTXT] = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
+        (ULONG)tttxt, GTTX_Border, TRUE, TAG_END);
+    y += lh;
+    NG(S_TTSIZE, gx, gw - 40, "TrueType size", PLACETEXT_LEFT);
+    g = sg[S_TTSIZE] = CreateGadget(SLIDER_KIND, g, &ng, GTSL_Min, 6,
+        GTSL_Max, 40, GTSL_Level, ttsize, GTSL_LevelFormat, (ULONG)"%2ld",
+        GTSL_MaxLevelLen, 2, GTSL_LevelPlace, PLACETEXT_RIGHT,
+        GA_RelVerify, TRUE, GA_Disabled, !usett, TAG_END);
+    y += lh;
+    NG(S_SPACE, gx, gw - 40, "Line spacing", PLACETEXT_LEFT);
+    g = sg[S_SPACE] = CreateGadget(SLIDER_KIND, g, &ng, GTSL_Min, 0,
+        GTSL_Max, 8, GTSL_Level, linespace, GTSL_LevelFormat, (ULONG)"%ld",
+        GTSL_MaxLevelLen, 2, GTSL_LevelPlace, PLACETEXT_RIGHT,
+        GA_RelVerify, TRUE, TAG_END);
+    y += lh;
+    NG(S_CHARS, gx, gw, "Characters", PLACETEXT_LEFT);
+    g = sg[S_CHARS] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
+        (ULONG)charlabels, GTCY_Active, chars_now(), TAG_END);
+    y += lh + 8;
+
+    NG(S_THEME, gx, gw, "Theme", PLACETEXT_LEFT);
+    g = sg[S_THEME] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
+        (ULONG)themelabels, GTCY_Active, theme, TAG_END);
+    y += lh;
+    NG(S_PART, gx, gw, "Colour of", PLACETEXT_LEFT);
+    g = sg[S_PART] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
+        (ULONG)partlabels, GTCY_Active, setpart, TAG_END);
+    y += lh;
+    {
+        static const char *const rgbname[3] = { "Red", "Green", "Blue" };
+        ULONG c = setpart ? defbg : deffg;
+        int k;
+        for (k = 0; k < 3; k++) {
+            NG(S_R + k, gx, gw - 40, rgbname[k], PLACETEXT_LEFT);
+            g = sg[S_R + k] = CreateGadget(SLIDER_KIND, g, &ng,
+                GTSL_Min, 0, GTSL_Max, 255,
+                GTSL_Level, (c >> (16 - 8 * k)) & 255,
+                GTSL_LevelFormat, (ULONG)"%3ld", GTSL_MaxLevelLen, 3,
+                GTSL_LevelPlace, PLACETEXT_RIGHT, GA_RelVerify, TRUE,
+                TAG_END);
+            y += lh;
+        }
+    }
+    NG(S_RESET, gx, gw, "Back to the theme's colours", PLACETEXT_IN);
+    g = sg[S_RESET] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+    y += lh + 10;
+    W = gx + gw + 10 + scr->WBorRight;
+    {
+        int b3 = (W - scr->WBorLeft - scr->WBorRight - 20 - 2 * 20) / 3;
+        if (b3 > 110) b3 = 110;
+        NG(S_SAVE, ox, b3, "Save", PLACETEXT_IN);
+        g = sg[S_SAVE] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+        NG(S_USE, (W - b3) / 2, b3, "Use", PLACETEXT_IN);
+        g = sg[S_USE] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+        NG(S_CANCEL, W - scr->WBorRight - 10 - b3, b3, "Cancel",
+           PLACETEXT_IN);
+        g = sg[S_CANCEL] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+    }
+#undef NG
+    H = y + lh + 4 + scr->WBorBottom;
+    if (!g) {
+        close_settings();
+        return;
+    }
+    setwin = OpenWindowTags(NULL,
+        WA_Left, (scr->Width - W) / 2, WA_Top, (scr->Height - H) / 2,
+        WA_Width, W, WA_Height, H, WA_Title, (ULONG)"CTerm Settings",
+        scr == ownscr ? WA_CustomScreen : WA_PubScreen, (ULONG)scr,
+        WA_Gadgets, (ULONG)setglist, WA_DragBar, TRUE, WA_DepthGadget, TRUE,
+        WA_CloseGadget, TRUE, WA_Activate, TRUE, WA_SmartRefresh, TRUE,
+        WA_IDCMP, BUTTONIDCMP | CYCLEIDCMP | CHECKBOXIDCMP | SLIDERIDCMP |
+                  IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW, TAG_END);
+    if (!setwin) {
+        close_settings();
+        return;
+    }
+    GT_RefreshWindow(setwin, NULL);
+}
+
+/* Use (1), Save (2) or Cancel (3). */
+static void finish_settings(int how)
+{
+    close_settings();
+    if (how == 3) {
+        BOOL letters = snap.usett != usett || snap.ttsize != ttsize ||
+                       strcmp(snap.ttfile, ttfile) ||
+                       strcmp(snap.fontname, fontname) ||
+                       snap.fontsize != fontsize ||
+                       snap.linespace != linespace;
+        theme = snap.theme;
+        ownfg = snap.ownfg; ownbg = snap.ownbg;
+        myfg = snap.myfg; mybg = snap.mybg;
+        if (snap.utf8 != utf8 || snap.pc != pcmode)
+            set_chars(snap.pc ? 2 : snap.utf8 ? 0 : 1);
+        if (letters) {
+            usett = snap.usett;
+            ttsize = snap.ttsize;
+            strcpy(ttfile, snap.ttfile);
+            strcpy(fontname, snap.fontname);
+            fontsize = snap.fontsize;
+            linespace = snap.linespace;
+            load_font();
+            letters_changed();
+        }
+        colours_changed();
+        return;
+    }
+    saved_utf8 = utf8;
+    saved_pc = pcmode;
+    if (pend_mode != scrmode || pend_full != fullscreen ||
+        pend_bar != scrollbar ||
+        (pend_mode == SCR_OWN && (pend_id != ownmode ||
+         pend_depth != owndepth || pend_w != ownw || pend_h != ownh))) {
+        if (pend_mode == SCR_OWN && scrmode == SCR_OWN &&
+            (pend_id != ownmode || pend_depth != owndepth ||
+             pend_w != ownw || pend_h != ownh)) {
+            /* a different own screen: leave this one first */
+            want_mode = SCR_WB;
+            want_full = FALSE;
+            want_depth = owndepth;
+            want_bar = scrollbar;
+            switch_display();
+        }
+        ownmode = pend_id;
+        ownw = pend_w;
+        ownh = pend_h;
+        want_mode = pend_mode;
+        want_depth = pend_depth;
+        want_full = pend_mode == SCR_OWN && pend_full;
+        want_bar = pend_bar;
+        want_switch = TRUE;             /* the main loop does it */
+    }
+    used_only = how == 1;               /* Use: until a reboot, even on quit */
+    envonly = used_only;
+    save_prefs();
+    envonly = FALSE;
+}
+
+static void settings_events(void)
+{
+    struct IntuiMessage *m;
+    int how = 0;
+    while (setwin && (m = GT_GetIMsg(setwin->UserPort))) {
+        ULONG cl = m->Class;
+        UWORD code = m->Code;
+        struct Gadget *g = (struct Gadget *)m->IAddress;
+        GT_ReplyIMsg(m);
+        if (cl == IDCMP_REFRESHWINDOW) {
+            GT_BeginRefresh(setwin);
+            GT_EndRefresh(setwin, TRUE);
+            continue;
+        }
+        if (cl == IDCMP_CLOSEWINDOW) {
+            how = 3;
+            break;
+        }
+        if (cl != IDCMP_GADGETUP || !g)
+            continue;
+        switch (g->GadgetID) {
+        case S_WHERE:
+            pend_mode = code ? SCR_OWN : SCR_WB;
+            where_changed();
+            break;
+        case S_MODE: ask_mode(); break;
+        case S_FULL: pend_full = (g->Flags & GFLG_SELECTED) != 0; break;
+        case S_BAR: pend_bar = (g->Flags & GFLG_SELECTED) != 0; break;
+        case S_LETTERS:
+            usett = code && TTEngineBase;
+            if (!usett)
+                load_font();
+            letters_changed();
+            break;
+        case S_FONT:
+            ask_font();
+            letters_changed();
+            break;
+        case S_TT:
+            ask_ttfont();
+            letters_changed();
+            break;
+        case S_TTSIZE:
+            if (usett && code != ttsize) {
+                ttsize = code;
+                letters_changed();
+            }
+            break;
+        case S_SPACE:
+            if (code != linespace) {
+                linespace = code;
+                letters_changed();
+            }
+            break;
+        case S_CHARS: set_chars(code); break;
+        case S_THEME:
+            theme = code;
+            ownfg = ownbg = FALSE;
+            colours_changed();
+            set_sliders();
+            break;
+        case S_PART: setpart = code; set_sliders(); break;
+        case S_R: case S_G: case S_B: {
+            int sh = g->GadgetID == S_R ? 16 : g->GadgetID == S_G ? 8 : 0;
+            ULONG c = setpart ? defbg : deffg;
+            c = (c & ~(255UL << sh)) | ((ULONG)(code & 255) << sh);
+            if (setpart) { mybg = c; ownbg = TRUE; }
+            else { myfg = c; ownfg = TRUE; }
+            colours_changed();
+            break;
+        }
+        case S_RESET:
+            ownfg = ownbg = FALSE;
+            colours_changed();
+            set_sliders();
+            break;
+        case S_SAVE: how = 2; break;
+        case S_USE: how = 1; break;
+        case S_CANCEL: how = 3; break;
+        }
+        if (how)
+            break;
+    }
+    if (how)
+        finish_settings(how);
+}
+
 static BOOL window_events(void)
 {
     struct IntuiMessage *m;
@@ -3553,7 +4197,9 @@ static void run(void)
         fd_set rd;
         LONG fd = sock >= 0 ? sock : lfd, n, wait = -1, c;
         ULONG winsig = 1UL << win->UserPort->mp_SigBit;
-        ULONG sigs = winsig | SIGBREAKF_CTRL_C | (local ? con_sigmask() : 0);
+        ULONG setsig = setwin ? 1UL << setwin->UserPort->mp_SigBit : 0;
+        ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C |
+                     (local ? con_sigmask() : 0);
         struct timeval tv;
         FD_ZERO(&rd);
         if (fd >= 0)
@@ -3585,6 +4231,8 @@ static void run(void)
             quitting = TRUE;
             con_stop();
         }
+        if (setwin && (sigs & setsig))
+            settings_events();
         if ((sigs & winsig) && !window_events()) {
             if (!local)
                 break;
@@ -3754,6 +4402,7 @@ int main(int argc, char **argv)
     TTEngineBase = OpenLibrary("ttengine.library", 6);
     CyberGfxBase = OpenLibrary("cybergraphics.library", 40);
     load_prefs();
+    apply_theme();
     if (arg_pc)
         pcmode = TRUE;
     if (arg_latin1)
@@ -3790,6 +4439,7 @@ int main(int argc, char **argv)
             wl = win->LeftEdge; wt = win->TopEdge;
             ww = win->Width; wh = win->Height;
         }
+        envonly = used_only;
         save_prefs();
     }
     if (local) {
@@ -3801,6 +4451,7 @@ int main(int argc, char **argv)
         }
         con_free();
     }
+    close_settings();
     clip_close();
     if (sshmode && sock >= 0)
         ssh_close();
