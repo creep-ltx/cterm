@@ -655,16 +655,31 @@ static void delete_chars(Vt *v, int n)
 
 /* ---- the alternate screen --------------------------------------------- */
 
+static VtCell **alloc_screen(int cols, int rows);
+static void free_screen(VtCell **l, int rows);
+
+/* The alternate screen exists only while it is in use: on a stock A1200
+ * a whole screen of cells (37 KB at 77x30) is a lot to keep for a
+ * program that may never come. No memory for it: the main screen stays. */
 static void use_alt(Vt *v, int on, int clear)
 {
     if (on == v->alt)
         return;
+    if (on && !v->lines[1]) {
+        if (!(v->lines[1] = alloc_screen(v->cols, v->rows)))
+            return;
+        v->base[1] = 0;
+    }
     v->alt = on;
     v->cur = v->lines[on];
     if (on && clear) {
         int y;
         for (y = 0; y < v->rows; y++)
             blank_range(v->cur[y], 0, v->cols, blank_of(v));
+    }
+    if (!on) {
+        free_screen(v->lines[1], v->rows);
+        v->lines[1] = NULL;
     }
     dirty_all(v);
 }
@@ -693,7 +708,7 @@ static void full_reset(Vt *v)
     use_alt(v, 0, 0);
     for (i = 0; i < 2; i++) {
         int y;
-        for (y = 0; y < v->rows; y++)
+        for (y = 0; v->lines[i] && y < v->rows; y++)
             blank_range(v->lines[i][y], 0, v->cols, blank_of(v));
     }
     v->x = v->y = v->pending = 0;
@@ -1537,7 +1552,7 @@ Vt *vt_new(int cols, int rows, int scrollback)
     v->cols = cols;
     v->rows = rows;
     v->lines[0] = alloc_screen(cols, rows);
-    v->lines[1] = alloc_screen(cols, rows);
+    v->lines[1] = NULL;                 /* made when first used */
     v->tabs = calloc(cols, 1);
     v->dirty = calloc(rows, 1);
     v->dx0 = calloc(rows, 2);
@@ -1547,7 +1562,7 @@ Vt *vt_new(int cols, int rows, int scrollback)
         v->hist = calloc(scrollback, sizeof *v->hist);
         v->hist_w = calloc(scrollback, sizeof *v->hist_w);
     }
-    if (!v->lines[0] || !v->lines[1] || !v->tabs || !v->dirty ||
+    if (!v->lines[0] || !v->tabs || !v->dirty ||
         !v->dx0 || !v->dx1 ||
         (scrollback > 0 && (!v->hist || !v->hist_w))) {
         vt_free(v);
@@ -1756,12 +1771,12 @@ void vt_resize(Vt *v, int cols, int rows)
     if (cols < 2) cols = 2;
     if (rows < 2) rows = 2;
     ng[0] = alloc_screen(cols, rows);
-    ng[1] = alloc_screen(cols, rows);
+    ng[1] = v->lines[1] ? alloc_screen(cols, rows) : NULL;
     nt = calloc(cols, 1);
     nd = calloc(rows, 1);
     nx0 = calloc(rows, 2);
     nx1 = calloc(rows, 2);
-    if (!ng[0] || !ng[1] || !nt || !nd || !nx0 || !nx1) {
+    if (!ng[0] || (v->lines[1] && !ng[1]) || !nt || !nd || !nx0 || !nx1) {
         free_screen(ng[0], rows); free_screen(ng[1], rows);
         free(nt); free(nd); free(nx0); free(nx1);
         return;
@@ -1784,6 +1799,8 @@ void vt_resize(Vt *v, int cols, int rows)
         shift[1] = v->y - rows + 1;     /* the alternate screen's: dropped */
     w = cols < v->cols ? cols : v->cols;
     for (i = flowed ? 1 : 0; i < 2; i++) {
+        if (!v->lines[i])
+            continue;
         for (y = 0; y < rows && y + shift[i] < v->rows; y++) {
             int oi = v->base[i] + y + shift[i];
             const VtCell *o;

@@ -3,6 +3,7 @@
  * the scroll bar, the layout and the picture behind the text.
  */
 #include "cterm.h"
+#include "ppaint.h"
 #include <graphics/regions.h>
 
 struct CEntry;
@@ -32,6 +33,8 @@ static APTR tt_for(UWORD attr);
 static void tt_run(const ULONG *u, const int *cols, int n, int y, ULONG fg, UWORD attr);
 static BOOL sel_span(int r, int *s0, int *s1);
 static void draw_cells(int r, int x0, int x1);
+static BOOL pp_cells(int r, int a, int b);
+static BOOL ppon;                       /* the planar painter in use */
 static int area_right(void);
 static void paint_row(int r);
 static BOOL backdrop_put(LONG x, LONG y, LONG w, LONG h);
@@ -763,12 +766,16 @@ static void draw_cells(int r, int x0, int x1)
     int w, x, y = oy + r * ch;
     const VtCell *line = vt_line(vt, r, back, &w);
 
-    int s0 = -1, s1 = -2, xend = x1;
+    int s0 = -1, s1 = -2, xend = x1, runs = 0;
     BOOL insel;
     sel_span(r, &s0, &s1);
     drmd(JAM2);
     x = x0;
     while (x <= xend) {
+        /* a colourful row: the rest by the planar painter, which costs
+         * the same for any number of colours (Text() is a call a run) */
+        if (++runs == 3 && ppon && pp_cells(r, x, xend))
+            break;
         const VtCell *c = x < w && line ? &line[x] : &empty;
         ULONG fg, bg, cp = c->cp;
         int n = 0, start = x;
@@ -879,16 +886,243 @@ static void draw_cells(int r, int x0, int x1)
             }
             apen(fg);
             bpen(bg);
-            PF_START(tt);
             softstyle(style);
             Move(rp, ox + start * cw, y + cbase);
             Text(rp, (STRPTR)text, n);
-            PF_ADD(pf_text, tt);
         }
         if (c->attr & VT_STRIKE)
             hline(ox + start * cw, ox + x * cw - 1, y + ch / 2, 1);
     }
     softstyle(0);
+}
+
+#define CMAX 4096
+struct CEntry {
+    ULONG cp, fg, bg;
+    UWORD attr;
+    UBYTE wide, used;                   /* used: 1, 2 asked for again */
+    ULONG *pix;
+};
+
+/* ======================================================================
+ * The planar painter: letters straight into the bitplanes
+ *
+ * On a plain (OCS/ECS/AGA) screen with an 8-pixel-wide Amiga font, a row
+ * is written by the CPU (ppaint.s) instead of a Text() per colour run.
+ * Every look a cell can have - a letter in a style, a box line, a block,
+ * a shade - is drawn once by make_cell (as the RTG painter's pictures
+ * are) and kept as one bit per pixel in ppaint.c's glyph store; colours
+ * are not part of a glyph, the asm puts them in per plane. Only where
+ * the window is not covered: else Text() as before.
+ * ==================================================================== */
+
+static BOOL chunky;                     /* the painter in pens: 8-bit card */
+BOOL nopp;                              /* TEXTDRAW: Text() as before */
+static struct TextFont *pp_font;        /* what the glyphs were made for */
+static int pp_fch, pp_fbase;
+static ULONG *pp_lat[256];              /* plain Latin-1: its block (NULL: none) */
+static BOOL pp_all;                     /* every row (fast RAM); else colourful ones */
+#define PPH 512                         /* the rest: (cp, style) -> slot */
+#define PPSLOTS 256                     /* a stock A1200 has no room to spare */
+static struct { ULONG cp; UWORD st, slot; } pph[PPH];
+
+static void pp_reset(void)
+{
+    int i;
+    pp_clear();
+    for (i = 0; i < 256; i++)
+        pp_lat[i] = i <= ' ' ? pp_blank : NULL;
+    for (i = 0; i < PPH; i++)
+        pph[i].slot = 0xFFFF;
+}
+
+/* A cell's look as one bit per pixel: drawn white on black. */
+static UWORD pp_make(ULONG cp, UWORD st)
+{
+    static ULONG pix[8 * 32];
+    struct CEntry e;
+    UBYTE lines[32];
+    int x, y, slot;
+    e.cp = cp; e.fg = 0xFFFFFF; e.bg = 0; e.attr = st; e.wide = 0;
+    e.pix = pix;
+    make_cell(&e);
+    for (y = 0; y < ch; y++) {
+        UBYTE v = 0;
+        for (x = 0; x < 8; x++)
+            if (pix[y * 8 + x] == 0xFFFFFF)
+                v |= 0x80 >> x;
+        lines[y] = v;
+    }
+    slot = pp_add(lines);
+    return slot < 0 ? 0 : slot;
+}
+
+static ULONG *pp_glyph(ULONG cp, UWORD st)
+{
+    ULONG h;
+    if ((cp <= ' ' || cp == VT_WIDE_TAIL) &&
+        !(st & (VT_UNDERLINE | VT_STRIKE)))
+        return pp_blank;
+    if (cp == VT_WIDE_TAIL || cp < ' ')
+        cp = ' ';
+    if (cp < 256 && !st) {
+        if (!pp_lat[cp])
+            pp_lat[cp] = PP_BLOCK(pp_make(cp, 0));
+        return pp_lat[cp];
+    }
+    h = (cp * 2654435761UL) ^ ((ULONG)st << 7);
+    h = (h ^ (h >> 15)) & (PPH - 1);
+    while (pph[h].slot != 0xFFFF) {
+        if (pph[h].cp == cp && pph[h].st == st)
+            return PP_BLOCK(pph[h].slot);
+        h = (h + 1) & (PPH - 1);
+    }
+    pph[h].cp = cp;
+    pph[h].st = st;
+    pph[h].slot = pp_make(cp, st);
+    return PP_BLOCK(pph[h].slot);
+}
+
+/* For this screen and font? (painter_setup) */
+static void pp_setup(void)
+{
+    struct BitMap *bm = scr->RastPort.BitMap;
+    ppon = (planar || chunky) && !usett && cw == 8 && ch <= 32 && bm &&
+           (chunky || bm->Depth <= 8) && cols < PPSLOTS - 8 && !nopp;
+    if (!ppon) {
+        pp_free();
+        pp_font = NULL;
+        return;
+    }
+    if (pp_font != font || pp_fch != ch || pp_fbase != cbase) {
+        if (!pp_init(ch, PPSLOTS)) {
+            ppon = FALSE;
+            pp_font = NULL;
+            return;
+        }
+        pp_font = font;
+        pp_fch = ch;
+        pp_fbase = cbase;
+        pp_reset();
+    }
+    /* with no fast RAM (a stock A1200) this code and its data are read
+     * from chip RAM against the display, and for a row in one colour
+     * the blitter behind Text() is as quick; the painter wins where the
+     * colours change (measured, conbench sgr-perchar 5.4 -> 4.0 s) */
+    pp_all = (TypeOfMem((APTR)pp_setup) & MEMF_FAST) != 0;
+}
+
+/* A run's pens as the asm wants them (fx<<8 | fb), its glyph style, and
+ * the planes they need: called only where the colours change. */
+static __attribute__((noinline)) UWORD pp_pens(const VtCell *c, BOOL insel,
+                                               UWORD *st, UBYTE *used)
+{
+    ULONG fg, bg;
+    LONG fp, bp;
+    UWORD s;
+    cell_rgb(c, &fg, &bg);
+    if (insel) {
+        ULONG t = fg; fg = bg; bg = t;
+    }
+    fp = pen_for(fg);
+    bp = pen_for(bg);
+    *used |= (UBYTE)(fp ^ pbase) | (UBYTE)(bp ^ pbase);
+    s = c->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE);
+    if (pcmode)
+        s &= ~VT_BOLD;
+    *st = s;
+    return (UWORD)(((fp ^ bp) & 255) << 8 | (bp & 255));
+}
+
+/* Columns a..b of row r into the planes. FALSE: not here (the window
+ * is covered there, say) - the caller draws them with Text(). */
+static BOOL pp_cells(int r, int a, int b)
+{
+    if (chunky)
+        return FALSE;
+    static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
+    struct Layer *ly = rp->Layer;
+    struct BitMap *bm = rp->BitMap;
+    struct ClipRect *cr;
+    const VtCell *line, *prev = NULL;
+    UWORD pw = 0, st = 0;
+    UBYTE used = 0;
+    BOOL psel = FALSE;
+    LONG X, Y;
+    int n = b - a + 1, i, w, s0 = -1, s1 = -2;
+    if (!ppon || !ly || !bm || n <= 0 || n > PP_MAXCOLS)
+        return FALSE;
+    X = ly->bounds.MinX + ox + a * 8;
+    Y = ly->bounds.MinY + oy + r * ch;
+    LockLayerRom(ly);
+    for (cr = ly->ClipRect; cr; cr = cr->Next)
+        if (!cr->obscured && cr->bounds.MinX <= X &&
+            cr->bounds.MaxX >= X + 8 * n - 1 && cr->bounds.MinY <= Y &&
+            cr->bounds.MaxY >= Y + ch - 1)
+            break;
+    if (!cr) {
+        UnlockLayerRom(ly);
+        return FALSE;
+    }
+    if (pp_room() < n)
+        pp_reset();
+    line = vt_line(vt, r, back, &w);
+    sel_span(r, &s0, &s1);
+    if (s1 >= a && s0 <= b) {
+        /* marked cells in the span: cell by cell */
+        for (i = 0; i < n; i++) {
+            int x = a + i;
+            const VtCell *c = x < w && line ? &line[x] : &empty;
+            BOOL insel = x >= s0 && x <= s1;
+            if (!prev || c->fg != prev->fg || c->bg != prev->bg ||
+                c->attr != prev->attr || insel != psel) {
+                pw = pp_pens(c, insel, &st, &used);
+                psel = insel;
+            }
+            prev = c;
+            pp_gp[i] = pp_glyph(c->cp, st);
+            pp_pw[i] = pw;
+        }
+    } else {
+        /* the common case, kept small and in registers: on a stock
+         * A1200 every memory access is a chip access (the stack too) */
+        ULONG **gp = pp_gp, **lat = pp_lat;
+        UWORD *pwp = pp_pw;
+        const VtCell *c = line ? line + a : &empty;
+        int k = line ? (w - 1 < b ? w - a : n) : 0;
+        ULONG cf = ~0UL, cb = ~0UL;
+        UWORD ca = 0xFFFF;
+        for (i = 0; i < k; i++, c++) {
+            ULONG cp, *g;
+            if (c->fg != cf || c->bg != cb || c->attr != ca) {
+                pw = pp_pens(c, FALSE, &st, &used);
+                cf = c->fg;
+                cb = c->bg;
+                ca = c->attr;
+            }
+            cp = c->cp;
+            if (cp > 255 || st || !(g = lat[cp]))
+                g = pp_glyph(cp, st);
+            *gp++ = g;
+            *pwp++ = pw;
+        }
+        if (i < n) {                    /* past the row's end: blanks */
+            pw = pp_pens(&empty, FALSE, &st, &used);
+            for (; i < n; i++) {
+                *gp++ = pp_blank;
+                *pwp++ = pw;
+            }
+        }
+    }
+    if (pbase >= 0 && (pmask | used) != pmask) {
+        pmask |= used;                  /* as mask_pen: scrolls carry them */
+        SetWriteMask(rp, pmask);
+    }
+    WaitBlit();                         /* a scroll may still be moving */
+    pp_paint(bm->Planes, bm->Depth, pbase >= 0 ? pmask : 0xFF,
+             bm->BytesPerRow, X, Y, n);
+    UnlockLayerRom(ly);
+    return TRUE;
 }
 
 /* The text area's edges: the margin left of column 0 and whatever is
@@ -948,8 +1182,12 @@ static void draw_span(int r, int a, int b)
     if (last < a && a == 0 && b == cols - 1 &&
         r < (int)sizeof shown_blank && shown_blank[r])
         return;
-    if (last >= a)
-        draw_cells(r, a, last);
+    if (last >= a) {
+        PF_START(tt);
+        if (!pp_all || !pp_cells(r, a, last))
+            draw_cells(r, a, last);
+        PF_ADD(pf_text, tt);
+    }
     {
     PF_START(tf);
     apen(defbg);
@@ -1101,13 +1339,6 @@ static LONG rowbuf_n;
  * than a quarter of the largest free block - smaller again if that
  * fails. 8x16 at 80x25: 1024 + 128 wide, 0.6 MB (it was 4096 pictures
  * of 2 cells each, 4 MB; TrueType at 72 pixels 120 MB). */
-#define CMAX 4096
-struct CEntry {
-    ULONG cp, fg, bg;
-    UWORD attr;
-    UBYTE wide, used;                   /* used: 1, 2 asked for again */
-    ULONG *pix;
-};
 static struct CEntry *ccache, *wcache;
 static ULONG *cpool, *wpool;
 static int cmask, wmask;                /* entries - 1 */
@@ -1371,6 +1602,63 @@ static void forget_shown(void)
     memset(shown_blank, 0, sizeof shown_blank);
 }
 
+/* One text row on a 256-colour card: per cell and line, the glyph's byte
+ * becomes eight pens through a 16-entry table of nibbles (four pens a
+ * long) for the cell's colours, made again only when the colours change. */
+static void paint_row8(int r, int cx, int cy, int cshape, int ps0, int ps1)
+{
+    static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
+    static ULONG nib[16];
+    static LONG nfg = -1, nbg = -1;
+    int w, x, rw = cols * 8, ml = rw / 4;
+    const VtCell *line = vt_line(vt, r, back, &w), *prev = NULL;
+    UBYTE *rb = (UBYTE *)rowbuf;
+    LONG fp = 0, bp = 0;
+    UWORD st = 0;
+    if (pp_room() < cols)
+        pp_reset();
+    for (x = 0; x < cols; x++) {
+        const VtCell *c = x < w && line ? &line[x] : &empty;
+        BOOL rev = (r == cy && x == cx && cshape == 0) ^ (x >= ps0 && x <= ps1);
+        const UBYTE *g;
+        ULONG *d;
+        int y;
+        if (rev || !prev || c->fg != prev->fg || c->bg != prev->bg ||
+            c->attr != prev->attr) {
+            ULONG fg, bg;
+            cell_rgb(c, &fg, &bg);
+            if (rev) {
+                ULONG t = fg; fg = bg; bg = t;
+            }
+            fp = pen_for(fg) & 255;
+            bp = pen_for(bg) & 255;
+            st = c->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE);
+            if (pcmode)
+                st &= ~VT_BOLD;
+            if (fp != nfg || bp != nbg) {
+                int k;
+                for (k = 0; k < 16; k++)
+                    nib[k] = (k & 8 ? fp : bp) << 24 | (k & 4 ? fp : bp) << 16 |
+                             (k & 2 ? fp : bp) << 8 | (k & 1 ? fp : bp);
+                nfg = fp;
+                nbg = bp;
+            }
+        }
+        prev = rev ? NULL : c;
+        g = pp_lines(pp_glyph(c->cp, st));
+        d = (ULONG *)(rb + x * 8);
+        for (y = 0; y < ch; y++, d += ml) {
+            UBYTE b = g[y];
+            d[0] = nib[b >> 4];
+            d[1] = nib[b & 15];
+        }
+    }
+    WriteChunkyPixels(rp, ox, oy + r * ch, ox + rw - 1, oy + r * ch + ch - 1,
+                      rb, rw);
+    if (r == cy && cshape && cx < cols)
+        cursor_mark(cx, cy);            /* an underline or a bar on top */
+}
+
 /* One text row: put together from cell pictures, written in one go. */
 static void paint_row(int r)
 {
@@ -1421,6 +1709,10 @@ static void paint_row(int r)
     }
     if (r < (int)sizeof shown_blank)
         shown_blank[r] = 0;
+    if (chunky) {
+        paint_row8(r, cx, cy, cshape, ps0, ps1);
+        return;
+    }
     for (x = 0; x < cols; x++) {
         const VtCell *c = x < w && line ? &line[x] : &empty;
         ULONG fg, bg, cp = c->cp;
@@ -1519,12 +1811,33 @@ void painter_setup(void)
 {
     struct BitMap *bm = scr->RastPort.BitMap;
     LONG need = (LONG)cols * cw * ch;
-    painter = FALSE;
+    painter = chunky = FALSE;
     planar = !CyberGfxBase || !GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX);
-    if (planar || GetCyberMapAttr(bm, CYBRMATTR_DEPTH) < 15) {
-        cache_free();                   /* Text() draws here: no pictures */
+    if (!planar && GetCyberMapAttr(bm, CYBRMATTR_DEPTH) <= 8 && !usett &&
+        cw == 8 && !nopp) {
+        /* a graphics card in 256 colours: rows of pens, made from the
+         * glyph store, one WriteChunkyPixels each - never ScrollRaster,
+         * which reads the card's memory back (~10 ms a line, PiStorm) */
+        cache_free();
+        backdrop_free();
+        chunky = TRUE;
+        pp_setup();
+        if (ppon && need > rowbuf_n) {
+            if (rowbuf) FreeVec(rowbuf);
+            rowbuf = AllocVec(need, MEMF_ANY);  /* a byte a pixel */
+            rowbuf_n = rowbuf ? need : 0;
+        }
+        painter = ppon && rowbuf_n >= need;
+        if (!painter)
+            chunky = FALSE;
         return;
     }
+    if (planar || GetCyberMapAttr(bm, CYBRMATTR_DEPTH) < 15) {
+        cache_free();                   /* no pictures: the planes, or Text() */
+        pp_setup();
+        return;
+    }
+    pp_setup();                         /* off: not planar */
     if (!cache_fits() && !cache_alloc())
         return;
     if (need > rowbuf_n) {
@@ -1533,6 +1846,8 @@ void painter_setup(void)
         rowbuf_n = rowbuf ? need : 0;
     }
     painter = rowbuf != NULL;
+    if (rowbuf_n < need)
+        painter = FALSE;
     backdrop_make();                    /* the picture for this window */
 }
 

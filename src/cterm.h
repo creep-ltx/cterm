@@ -127,7 +127,7 @@
 /* make PROFILE=1 PROFILE_ECLOCK=1: the CIA E clock (709379 Hz on PAL),
  * for a stock Amiga or an emulator; TPMS: ticks per millisecond */
 #include <proto/timer.h>
-extern extern struct Device *TimerBase;
+extern struct Device *TimerBase;
 #define TPMS 709
 static ULONG ticks(void)
 {
@@ -257,6 +257,7 @@ extern int fontsize;
 extern int cw, ch, cbase;
 extern int linespace;
 extern BOOL usett;
+extern BOOL nopp;
 extern char ttfile[160];
 extern BOOL pcfont;
 extern BOOL altmeta;

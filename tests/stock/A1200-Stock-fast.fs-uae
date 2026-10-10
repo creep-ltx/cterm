@@ -1,0 +1,33 @@
+# FS-UAE configuration saved by FS-UAE Launcher
+# A1200-Stock + emulated bsdsocket, for driving the machine over wasabi (CCON perf work, 4.10.26)
+
+[fs-uae]
+amiga_model = A1200
+accuracy = 1
+chip_memory = 2048
+fast_memory = 8192
+floppy_image_0 = $HOME/UAE/ADF/Backdrops3.2.adf
+floppy_image_1 = $HOME/UAE/ADF/Classes3.2.adf
+floppy_image_10 = $HOME/UAE/ADF/MMULibs.adf
+floppy_image_11 = $HOME/UAE/ADF/ModulesA1200_3.2.adf
+floppy_image_12 = $HOME/UAE/ADF/Storage3.2.adf
+floppy_image_13 = $HOME/UAE/ADF/Workbench3.2.adf
+floppy_image_14 = $HOME/UAE/ADF/Locale.adf
+floppy_image_2 = $HOME/UAE/ADF/DiskDoctor.adf
+floppy_image_3 = $HOME/UAE/ADF/Extras3.2.adf
+floppy_image_4 = $HOME/UAE/ADF/Fonts.adf
+floppy_image_5 = $HOME/UAE/ADF/GlowIcons3.2.adf
+floppy_image_6 = $HOME/UAE/ADF/HDSetup3.2.adf
+floppy_image_7 = $HOME/UAE/ADF/Install3.2.adf
+floppy_image_8 = $HOME/UAE/ADF/Locale-EN.adf
+floppy_image_9 = $HOME/UAE/ADF/Locale-SE.adf
+hard_drive_0 = /home/creep/FS-UAE/Hard Drives/AmigaOS3.2
+hard_drive_1 = /home/creep/Documents/Amiga
+joystick_port_1 = none
+keep_aspect = 1
+kickstart_file = /home/creep/UAE/ROM/kicka1200.rom
+save_disk = 0
+scanlines = 1
+window_height = 900
+window_width = 1200
+bsdsocket_library = 1

@@ -41,6 +41,27 @@ static void tab_drop(struct Tab *t);
 static void quit_all(void);
 static void host_input(UBYTE *buf, LONG size);
 static void run(void);
+#ifdef MEMLOG
+static char mlbuf[1024];
+static int mll;
+void memlog(const char *what)
+{
+    ULONG a = AvailMem(MEMF_ANY);
+    static ULONG last;
+    if (mll < 960)
+        mll += sprintf(mlbuf + mll, "%-12s %7lu  %+7ld\n", what, (unsigned long)a,
+                       last ? (long)a - (long)last : 0L);
+    last = a;
+}
+static void memlog_save(void)
+{
+    BPTR f = Open((STRPTR)"SYS:T/ctmem.txt", MODE_NEWFILE);
+    if (f) { Write(f, mlbuf, mll); Close(f); }
+}
+#define ML(x) memlog(x)
+#else
+#define ML(x)
+#endif
 static int cterm_main(int argc, char **argv);
 static void __attribute__((noinline)) cterm_main_(void);
 int main(int argc, char **argv);
@@ -717,6 +738,7 @@ static void run(void)
         if (l)
             UnLock(l);
         T->con = con_start(l ? script : NULL, T);
+        ML("shell");
         if (!T->con) {
             /* no Shell: say so and wait for the window to be closed -
              * never fall into the network loop, there is no network */
@@ -998,9 +1020,10 @@ static int cterm_main(int argc, char **argv)
     (void)version;
     (void)argv;
     if (argc > 0) {
-        LONG args[11] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        LONG args[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
         struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,"
-                                      "FROM/K,HOST/K,PC/S,SSH/K,KEY/K,BOOK/K",
+                                      "FROM/K,HOST/K,PC/S,SSH/K,KEY/K,BOOK/K,"
+                                      "TEXTDRAW/S",
                                       args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
@@ -1025,6 +1048,7 @@ static int cterm_main(int argc, char **argv)
             if (!args[3]) want_cols = 80;
         }
         if (args[7]) arg_pc = TRUE;
+        if (args[11]) nopp = TRUE;      /* letters by Text(): to compare */
         if (args[8]) {                  /* ssh to user@host[:port] */
             strncpy(dialhost, (char *)args[8], sizeof dialhost - 1);
             strcpy(dialtitle, "CTerm: ssh ");
@@ -1077,12 +1101,15 @@ static int cterm_main(int argc, char **argv)
 #endif
     /* the network only when there is one to talk to: the local Shell
      * needs no TCP/IP stack at all */
+    ML("start");
     if (!local)
         SocketBase = OpenLibrary("bsdsocket.library", 4);
     KeymapBase = OpenLibrary("keymap.library", 37);
     GadToolsBase = OpenLibrary("gadtools.library", 37);
     CyberGfxBase = OpenLibrary("cybergraphics.library", 40);
+    ML("libs");
     load_prefs();
+    ML("prefs");
     apply_theme();
     if (bgfile[0] && !load_picture(bgfile))
         bgfile[0] = 0;
@@ -1097,7 +1124,9 @@ static int cterm_main(int argc, char **argv)
     /* first start: TrueType if it is installed (DejaVu Sans Mono) */
     if (!hadprefs)
         usett = tt_installed() && file_exists(ttfile);
+    ML("book");
     con_timer_init();
+    ML("timer");
     {
         /* history takes at most a quarter of free memory (a line of 80
          * cells is 1280 bytes): a stock A1200 keeps room to run things */
@@ -1111,6 +1140,7 @@ static int cterm_main(int argc, char **argv)
         if (local)
             vt_set_amiga(vt, 1);        /* the Amiga console's ways */
     }
+    ML("vt");
     want_bar = scrollbar;
     if (!local && !SocketBase) {
         PutStr("CTerm HOST and LISTEN need a TCP/IP stack (bsdsocket.library)\n");
@@ -1126,8 +1156,13 @@ static int cterm_main(int argc, char **argv)
     } else {
         if (pcmode)
             tab_letters(TRUE);
+        ML("display");
         run();
     }
+#ifdef MEMLOG
+    ML("quit");
+    memlog_save();
+#endif
     settings_cancel();                  /* else save_prefs would not save */
     if (win) {
         if (remember && !fullscreen && scr != ownscr) {

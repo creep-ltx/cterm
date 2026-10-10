@@ -17,19 +17,29 @@ TP = third_party
 SSHINC = -I$(TP)/amiga -I$(TP)/AmiSSL/Developer/include -I$(TP)/libssh2-1.11.1/include
 SSHLIB = $(TP)/lib/libssh2.a -L$(TP)/AmiSSL/Developer/lib/AmigaOS3 -lamisslstubs -lm
 
-SRC = src/main.c src/draw.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c
-HDR = src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h
+SRC = src/main.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c
+HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h
 
 # CTerm: everything but ssh (small enough for a stock A1200)
 # -flto: the parts (split into files) inlined across files again - the
 # split had cost a stock A1200 ~1 s of conbench's 42 (measured 2026-10-10)
-CTerm: $(SRC) $(HDR)
-	$(CC) $(CFLAGS) -flto -DNO_SSH $(SRC) -o CTerm
+CTerm: $(SRC) $(HDR) src/ppaint.o
+	$(CC) $(CFLAGS) -flto -DNO_SSH $(SRC) src/ppaint.o -o CTerm
 
 # CTermSSH: the same with ssh (libssh2 on AmiSSL), started by CTerm for ssh
-CTermSSH: $(SRC) $(HDR) src/ssh.c $(TP)/lib/libssh2.a
+CTermSSH: $(SRC) $(HDR) src/ssh.c src/ppaint.o $(TP)/lib/libssh2.a
 	$(CC) $(CFLAGS) $(SSHINC) -c src/ssh.c -o src/ssh.o
-	$(CC) $(CFLAGS) -flto $(SRC) src/ssh.o $(SSHLIB) -o CTermSSH
+	$(CC) $(CFLAGS) -flto $(SRC) src/ssh.o src/ppaint.o $(SSHLIB) -o CTermSSH
+
+# The hand-written inner loops (vasm, Motorola syntax)
+src/ppaint.o: src/ppaint.s
+	vasmm68k_mot -Faout -m68020 -quiet -o $@ $<
+
+# The planar painter's asm against its C reference, under vamos
+tests/pptest: tests/pptest.c src/ppaint.c src/ppaint.h src/ppaint.o
+	$(CC) $(CFLAGS) tests/pptest.c src/ppaint.c src/ppaint.o -o $@
+pptest: tests/pptest
+	vamos -C 68020 -m 8192 tests/pptest 3000
 
 # libssh2 and the AmiSSL SDK (downloaded by third_party/fetch.sh)
 $(TP)/lib/libssh2.a:
