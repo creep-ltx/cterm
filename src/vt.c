@@ -292,6 +292,7 @@ static void push_history(Vt *v, const VtCell *line)
     }
     memcpy(copy, line, RLEN(line) * sizeof(VtCell));
     RLEN(copy) = RLEN(line);
+    RWRAP(copy) = RWRAP(line);          /* a reflow joins it on again */
     v->hist_w[slot] = RLEN(line);
 }
 

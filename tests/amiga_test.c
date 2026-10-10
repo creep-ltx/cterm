@@ -211,6 +211,17 @@ int main(void)
         CHECK(vt_take_clip(o, &len) == NULL, "a query is not answered");
         vt_free(o);
     }
+    {   /* a wrapped line pushed out by a lower window joins again */
+        Vt *f = vt_new(10, 5, 50);
+        vt_set_amiga(f, 1);
+        feed(f, "0123456789ABC\nx\ny");
+        vt_resize(f, 10, 2);
+        CHECK(vt_history(f) == 2, "two rows to the history");
+        vt_resize(f, 20, 2);
+        CHECK(vt_history(f) == 1 && at(f, 0, 0) == 'x',
+              "wider: the history's wrapped line is one again");
+        vt_free(f);
+    }
     {   /* CHT stops at the last column; a huge OSC number is no title */
         Vt *t = vt_new(20, 3, 0);
         int x, y, vis, ch;
