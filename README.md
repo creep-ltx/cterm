@@ -1,6 +1,6 @@
 # CTerm
 
-A terminal for AmigaOS 3.2, in C: the Amiga Shell in a window of its own,
+A terminal for AmigaOS 3.2 and up, in C: the Amiga Shell in a window of its own,
 and a terminal for other computers (telnet, ssh, BBSes, programs on a PC),
 in one program. VT100/xterm emulation, Amiga and TrueType fonts, 2 to 16
 million colours, Latin-1, UTF-8 and the PC's character set.
@@ -81,7 +81,9 @@ as they came, colour codes and all, so a BBS screen plays back from it.
 
 ## Settings
 
-Settings/Settings... (Right Amiga+S) opens one window for everything:
+Settings/Settings... (Right Amiga+S) opens one window for everything,
+in four tabs (it is built with OS 3.2's own window classes, so it looks
+like the system's settings programs):
 
 - **Screen:** a Workbench window or CTerm's own screen (any screen mode
   and number of colours), full screen, scroll bar. In full screen a thin
@@ -92,7 +94,9 @@ Settings/Settings... (Right Amiga+S) opens one window for everything:
   the PC's own font.
 - **Colours:** a theme (Nord, Black, Workbench, Amber, Green, Light), and
   your own text and background colour on top of it.
-- **Picture:** a picture behind the text (any format the Amiga's
+- **Keys:** what the Alt key does (Meta for programs on other
+  computers, or the Amiga's own Alt characters).
+- **Picture** (on the Colours tab): a picture behind the text (any format the Amiga's
   datatypes read: PNG, JPEG, IFF...), and how much of it shows through
   the background, 0 to 100 %. It covers the window without stretching,
   stays still while the text scrolls over it, and costs no speed. It

@@ -44,6 +44,51 @@
 #include <datatypes/pictureclass.h>
 #include <proto/datatypes.h>
 #include <proto/alib.h>
+#include <classes/window.h>
+#include <gadgets/layout.h>
+#include <gadgets/clicktab.h>
+#include <gadgets/chooser.h>
+#include <gadgets/checkbox.h>
+#include <gadgets/slider.h>
+#include <gadgets/button.h>
+#include <gadgets/getfile.h>
+#include <gadgets/getfont.h>
+#include <gadgets/getscreenmode.h>
+#include <images/label.h>
+#include <images/bevel.h>
+#include <reaction/reaction_macros.h>
+#include <proto/window.h>
+#include <proto/layout.h>
+#include <proto/clicktab.h>
+#include <proto/chooser.h>
+#include <proto/checkbox.h>
+#include <proto/slider.h>
+#include <proto/button.h>
+#include <proto/getfile.h>
+#include <proto/getfont.h>
+#include <proto/getscreenmode.h>
+#include <proto/label.h>
+
+/* The ReAction macros (LayoutObject ... End) spread one NewObject call
+ * over macros, which the inline NewObject can't take: functions instead.
+ * Not static - at -O2 gcc rewrote static ones and &tag1 no longer met
+ * the caller's tags (Knowledge/amiga/toolchain-and-testing.md). */
+#undef NewObject
+#undef SetAttrs
+#define NewObject RNewObject
+#define SetAttrs RSetAttrs
+APTR RNewObject(struct IClass *c, CONST_STRPTR id, ULONG tag1, ...);
+ULONG RSetAttrs(APTR o, ULONG tag1, ...);
+__attribute__((noinline)) __stdargs APTR RNewObject(struct IClass *c,
+                                                    CONST_STRPTR id,
+                                                    ULONG tag1, ...)
+{
+    return NewObjectA(c, id, (struct TagItem *)&tag1);
+}
+__attribute__((noinline)) __stdargs ULONG RSetAttrs(APTR o, ULONG tag1, ...)
+{
+    return SetAttrsA(o, (struct TagItem *)&tag1);
+}
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -2986,7 +3031,7 @@ static void save_prefs(void)
     }
     strcat(buf, "\n");
     SetVar(PREFS_VAR, buf, -1,
-           GVF_GLOBAL_ONLY | (envonly ? 0 : GVF_SAVE_VAR));
+           GVF_GLOBAL_ONLY | (envonly || used_only ? 0 : GVF_SAVE_VAR));
 }
 
 static void close_tt(void)
@@ -4167,18 +4212,30 @@ static void call_dialog(void)
  * back. Save keeps it after a reboot, Use until then (ENV: only).
  * ==================================================================== */
 
-enum { S_WHERE = 1, S_MODE, S_MODETXT, S_FULL, S_BAR, S_LETTERS, S_FONT,
-       S_FONTTXT, S_TT, S_TTTXT, S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT, S_ALT,
-       S_THEME, S_PART,
-       S_R, S_G, S_B, S_RESET, S_PIC, S_PICTXT, S_NOPIC, S_SEE, S_SAVE, S_USE, S_CANCEL, S_N };
+enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
+       S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT, S_ALT, S_THEME, S_PART,
+       S_R, S_G, S_B, S_RESET, S_PIC, S_NOPIC, S_SEE, S_SAVE, S_USE,
+       S_CANCEL, S_N };
 
-static struct Gadget *setglist, *sg[S_N];
-static char modetxt[80], fonttxt[64], tttxt[64], pictxt[64];
+/* OS 3.2's window classes: opened the first time the window opens. Given
+ * a value, so libnix does not try to open them itself (by wrong names). */
+struct Library *WindowBase = NULL, *LayoutBase = NULL, *ClickTabBase = NULL,
+    *ChooserBase = NULL, *CheckBoxBase = NULL, *SliderBase = NULL,
+    *ButtonBase = NULL, *GetFileBase = NULL, *GetFontBase = NULL,
+    *GetScreenModeBase = NULL, *LabelBase = NULL;
+
+static Object *setobj, *sg[S_N];        /* the window object, its gadgets */
+static struct List settabs;             /* the tabs' names */
+static struct TextAttr setfont;         /* what the font button shows */
 static int setpart;                     /* 0 the text, 1 the background */
+static int setpage;                     /* the tab last shown */
 static int pend_mode, pend_depth;
 static ULONG pend_id;
 static LONG pend_w, pend_h;
 static BOOL pend_full, pend_bar;
+static ULONG like_id;                   /* "Own screen" with no mode chosen: */
+static LONG like_w, like_h;             /* the Workbench's mode, size and */
+static int like_depth;                  /* colours (24 for a card's 32) */
 
 static struct {                         /* what Cancel goes back to */
     int theme, ttsize, fontsize, linespace, bgsee;
@@ -4197,131 +4254,127 @@ static STRPTR charlabels[] = { (STRPTR)"UTF-8", (STRPTR)"Latin-1",
 static STRPTR partlabels[] = { (STRPTR)"Text", (STRPTR)"Background", NULL };
 static STRPTR altlabels[] = { (STRPTR)"Meta for hosts (bash, emacs)",
                               (STRPTR)"Amiga characters everywhere", NULL };
+static STRPTR tablabels[] = { (STRPTR)"Screen", (STRPTR)"Text",
+                              (STRPTR)"Colours", (STRPTR)"Keys", NULL };
 static STRPTR themelabels[NTHEMES + 1];
 
-static void set_text(int id, char *t)
+static BOOL reaction_open(void)
 {
-    if (setwin && sg[id])
-        GT_SetGadgetAttrs(sg[id], setwin, NULL, GTTX_Text, (ULONG)t, TAG_END);
+    static const char *const name[] = {
+        "window.class", "gadgets/layout.gadget", "gadgets/clicktab.gadget",
+        "gadgets/chooser.gadget", "gadgets/checkbox.gadget",
+        "gadgets/slider.gadget", "gadgets/button.gadget",
+        "gadgets/getfile.gadget", "gadgets/getfont.gadget",
+        "gadgets/getscreenmode.gadget", "images/label.image" };
+    struct Library **base[] = { &WindowBase, &LayoutBase, &ClickTabBase,
+        &ChooserBase, &CheckBoxBase, &SliderBase, &ButtonBase, &GetFileBase,
+        &GetFontBase, &GetScreenModeBase, &LabelBase };
+    int i;
+    for (i = 0; i < 11; i++)
+        if (!*base[i] && !(*base[i] = OpenLibrary((STRPTR)name[i], 45)))
+            return FALSE;
+    return TRUE;
 }
 
-static void describe_mode(void)
+static void reaction_close(void)
 {
-    if (pend_mode == SCR_WB) {
-        strcpy(modetxt, "the Workbench");
-        return;
-    }
-    modetxt[0] = 0;
-    if (pend_id != INVALID_ID) {
-        struct NameInfo ni;
-        if (GetDisplayInfoData(NULL, (UBYTE *)&ni, sizeof ni, DTAG_NAME,
-                               pend_id) > 0) {
-            strncpy(modetxt, (char *)ni.Name, 40);
-            modetxt[40] = 0;
+    struct Library **base[] = { &WindowBase, &LayoutBase, &ClickTabBase,
+        &ChooserBase, &CheckBoxBase, &SliderBase, &ButtonBase, &GetFileBase,
+        &GetFontBase, &GetScreenModeBase, &LabelBase };
+    int i;
+    for (i = 0; i < 11; i++)
+        if (*base[i]) {
+            CloseLibrary(*base[i]);
+            *base[i] = NULL;
         }
-        if (pend_w > 0) {
-            strcat(modetxt, ", ");
-            numstr_cat(modetxt, pend_w);
-            strcat(modetxt, "x");
-            numstr_cat(modetxt, pend_h);
-        }
-    } else
-        strcpy(modetxt, "WB mode");
-    strcat(modetxt, ", ");
-    if (pend_depth > 8)
-        strcat(modetxt, "millions of");
-    else
-        numstr_cat(modetxt, 1L << pend_depth);
-    strcat(modetxt, " colours");
 }
 
-static void describe_fonts(void)
+/* A gadget's attribute, changed in the open window / read. */
+static void set_attr(int id, ULONG tag, ULONG val)
 {
-    const char *n = font ? font->tf_Message.mn_Node.ln_Name : "?";
-    strncpy(fonttxt, n ? n : "?", 40);
-    fonttxt[40] = 0;
-    if (strlen(fonttxt) > 5 &&
-        !stricmp(fonttxt + strlen(fonttxt) - 5, ".font"))
-        fonttxt[strlen(fonttxt) - 5] = 0;
-    strcat(fonttxt, " ");
-    numstr_cat(fonttxt, font ? font->tf_YSize : 0);
-    strncpy(tttxt, (char *)FilePart((STRPTR)ttfile), 40);
-    tttxt[40] = 0;
-    if (strlen(tttxt) > 4 && !stricmp(tttxt + strlen(tttxt) - 4, ".ttf"))
-        tttxt[strlen(tttxt) - 4] = 0;
-    if (!TTEngineBase)
-        strcpy(tttxt, "(no ttengine.library)");
+    /* a nonzero answer: the gadget wants drawing again itself */
+    if (setwin && sg[id] &&
+        SetGadgetAttrs((struct Gadget *)sg[id], setwin, NULL, tag, val,
+                       TAG_END))
+        RefreshGList((struct Gadget *)sg[id], setwin, NULL, 1);
 }
 
-static void describe_pic(void)
+static ULONG get_attr(int id, ULONG tag)
 {
-    if (!painter)
-        strcpy(pictxt, "(needs 16 or more bits of colour)");
-    else if (!bgfile[0])
-        strcpy(pictxt, "(none)");
-    else {
-        strncpy(pictxt, (char *)FilePart((STRPTR)bgfile), 40);
-        pictxt[40] = 0;
-    }
+    ULONG v = 0;
+    if (sg[id])
+        GetAttr(tag, sg[id], &v);
+    return v;
 }
 
-/* The picture behind the text, again (a new one, or none). */
-static void picture_changed(void)
+/* ---- the pieces the pages are made of ---- */
+
+static Object *r_label(const char *t)
 {
-    if (bgfile[0] && !load_picture(bgfile))
-        bgfile[0] = 0;
-    if (!bgfile[0] && bgsrc) {
-        FreeVec(bgsrc);
-        bgsrc = NULL;
-    }
-    backdrop_make();
-    redraw_all();
-    describe_pic();
-    set_text(S_PICTXT, pictxt);
+    return LabelObject, LABEL_Text, (ULONG)t, LabelEnd;
 }
 
-static void ask_picture(void)
+static Object *r_chooser(int id, STRPTR *l, int sel)
 {
-    struct FileRequester *req;
-    char dir[256];
-    if (!AslBase)
-        return;
-    strcpy(dir, bgfile[0] ? bgfile : "SYS:Prefs/Presets/Backdrops");
-    *(char *)PathPart((STRPTR)dir) = 0;
-    req = AllocAslRequestTags(ASL_FileRequest,
-        ASLFR_Window, (ULONG)setwin, ASLFR_SleepWindow, TRUE,
-        ASLFR_TitleText, (ULONG)"CTerm: a picture behind the text",
-        ASLFR_InitialDrawer, (ULONG)dir,
-        ASLFR_InitialFile, (ULONG)(bgfile[0] ? (char *)FilePart((STRPTR)bgfile)
-                                             : ""),
-        ASLFR_RejectIcons, TRUE, TAG_END);
-    if (!req)
-        return;
-    if (AslRequest(req, NULL) && req->fr_File[0]) {
-        char path[256];
-        strncpy(path, (char *)req->fr_Drawer, sizeof path - 1);
-        path[sizeof path - 1] = 0;
-        AddPart((STRPTR)path, req->fr_File, sizeof path);
-        strcpy(bgfile, path);
-        picture_changed();
-        if (!bgfile[0]) {
-            strcpy(pictxt, "(could not read that picture)");
-            set_text(S_PICTXT, pictxt);
-        }
-    }
-    FreeAslRequest(req);
+    return sg[id] = ChooserObject, GA_ID, id, GA_RelVerify, TRUE,
+        CHOOSER_LabelArray, (ULONG)l, CHOOSER_Selected, sel,
+        CHOOSER_DropDown, FALSE, End;
 }
+
+static Object *r_slider(int id, int min, int max, int lev, const char *fmt)
+{
+    return sg[id] = SliderObject, GA_ID, id, GA_RelVerify, TRUE,
+        SLIDER_Min, min, SLIDER_Max, max, SLIDER_Level, lev,
+        SLIDER_Orientation, SLIDER_HORIZONTAL, SLIDER_LevelFormat, (ULONG)fmt,
+        SLIDER_LevelPlace, PLACETEXT_RIGHT, SLIDER_LevelMaxLen, 4, End;
+}
+
+static Object *r_check(int id, const char *t, BOOL on)
+{
+    return sg[id] = CheckBoxObject, GA_ID, id, GA_RelVerify, TRUE,
+        GA_Text, (ULONG)t, CHECKBOX_Checked, on, End;
+}
+
+static Object *r_button(int id, const char *t)
+{
+    return sg[id] = ButtonObject, GA_ID, id, GA_RelVerify, TRUE,
+        GA_Text, (ULONG)t, End;
+}
+
+static Object *r_group(const char *title)
+{
+    return VLayoutObject, LAYOUT_BevelStyle, BVS_GROUP,
+        LAYOUT_Label, (ULONG)title, LAYOUT_SpaceOuter, TRUE, End;
+}
+
+static Object *r_page(void)
+{
+    return VLayoutObject, LAYOUT_SpaceOuter, TRUE, End;
+}
+
+/* A child into a layout, with its label on the left (or none). */
+static void r_add(Object *g, Object *child, const char *lab)
+{
+    if (g && child)
+        SetAttrs(g, LAYOUT_AddChild, (ULONG)child,
+                 lab ? CHILD_Label : TAG_IGNORE, lab ? (ULONG)r_label(lab) : 0,
+                 TAG_END);
+}
+
+static void r_disable(int id, BOOL off)
+{
+    if (sg[id])
+        SetAttrs(sg[id], GA_Disabled, off, TAG_END);
+}
+
+/* ---- keeping the controls and CTerm in step ---- */
 
 static void set_sliders(void)
 {
     ULONG c = setpart ? defbg : deffg;
-    if (!setwin)
-        return;
-    GT_SetGadgetAttrs(sg[S_R], setwin, NULL, GTSL_Level, (c >> 16) & 255,
-                      TAG_END);
-    GT_SetGadgetAttrs(sg[S_G], setwin, NULL, GTSL_Level, (c >> 8) & 255,
-                      TAG_END);
-    GT_SetGadgetAttrs(sg[S_B], setwin, NULL, GTSL_Level, c & 255, TAG_END);
+    set_attr(S_R, SLIDER_Level, (c >> 16) & 255);
+    set_attr(S_G, SLIDER_Level, (c >> 8) & 255);
+    set_attr(S_B, SLIDER_Level, c & 255);
 }
 
 static void colours_changed(void)
@@ -4349,6 +4402,18 @@ static void set_chars(int k)
     redraw_all();
 }
 
+static void font_attr(void)
+{
+    /* none chosen: the default one CTerm falls back on (load_font) */
+    struct TextFont *d = GfxBase->DefaultFont;
+    BOOL none = !fontname[0] && d;
+    setfont.ta_Name = none ? (STRPTR)d->tf_Message.mn_Node.ln_Name
+                           : (STRPTR)fontname;
+    setfont.ta_YSize = none ? d->tf_YSize : fontsize;
+    setfont.ta_Style = 0;
+    setfont.ta_Flags = 0;
+}
+
 /* The letters again after a font, size or spacing change. */
 static void letters_changed(void)
 {
@@ -4357,88 +4422,179 @@ static void letters_changed(void)
     if (!usett)
         bitmap_metrics();
     font_changed();
-    describe_fonts();
-    set_text(S_FONTTXT, fonttxt);
-    set_text(S_TTTXT, tttxt);
-    if (setwin) {
-        GT_SetGadgetAttrs(sg[S_LETTERS], setwin, NULL, GTCY_Active, usett,
-                          TAG_END);
-        GT_SetGadgetAttrs(sg[S_TTSIZE], setwin, NULL, GA_Disabled, !usett,
-                          GTSL_Level, ttsize, TAG_END);
-    }
+    font_attr();
+    set_attr(S_LETTERS, CHOOSER_Selected, usett);
+    set_attr(S_TTSIZE, GA_Disabled, !usett);
+    set_attr(S_TTSIZE, SLIDER_Level, ttsize);
+    set_attr(S_FONT, GETFONT_TextAttr, (ULONG)&setfont);
+    set_attr(S_TT, GETFILE_FullFile, (ULONG)ttfile);
 }
 
 static void where_changed(void)
 {
-    GT_SetGadgetAttrs(sg[S_WHERE], setwin, NULL, GTCY_Active,
-                      pend_mode == SCR_OWN, TAG_END);
-    GT_SetGadgetAttrs(sg[S_FULL], setwin, NULL, GA_Disabled,
-                      pend_mode == SCR_WB, TAG_END);
-    GT_SetGadgetAttrs(sg[S_MODE], setwin, NULL, GA_Disabled,
-                      pend_mode == SCR_WB, TAG_END);
-    describe_mode();
-    set_text(S_MODETXT, modetxt);
+    set_attr(S_WHERE, CHOOSER_Selected, pend_mode == SCR_OWN);
+    set_attr(S_FULL, GA_Disabled, pend_mode == SCR_WB);
+    set_attr(S_MODE, GA_Disabled, pend_mode == SCR_WB);
 }
 
-static void ask_mode(void)
+/* The picture behind the text, again (a new one, or none). */
+static void picture_changed(void)
 {
-    struct ScreenModeRequester *req;
-    ULONG start = pend_id != INVALID_ID ? pend_id
-                : ownscr ? GetVPModeID(&ownscr->ViewPort) : INVALID_ID;
-    if (!AslBase)
-        return;
-    req = AllocAslRequestTags(ASL_ScreenModeRequest,
-        ASLSM_Window, (ULONG)setwin, ASLSM_SleepWindow, TRUE,
-        ASLSM_TitleText, (ULONG)"CTerm's own screen",
-        ASLSM_DoDepth, TRUE, ASLSM_MinDepth, 1, ASLSM_MaxDepth, 24,
-        ASLSM_DoWidth, TRUE, ASLSM_DoHeight, TRUE,
-        start != INVALID_ID ? ASLSM_InitialDisplayID : TAG_IGNORE, start,
-        ASLSM_InitialDisplayDepth, pend_depth > 8 ? 24 : pend_depth,
-        TAG_END);
-    if (!req)
-        return;
-    if (AslRequest(req, NULL)) {
-        pend_id = req->sm_DisplayID;
-        pend_w = req->sm_DisplayWidth;
-        pend_h = req->sm_DisplayHeight;
-        pend_depth = req->sm_DisplayDepth;
-        pend_mode = SCR_OWN;
-        where_changed();
+    if (bgfile[0] && !load_picture(bgfile))
+        bgfile[0] = 0;
+    if (!bgfile[0] && bgsrc) {
+        FreeVec(bgsrc);
+        bgsrc = NULL;
     }
-    FreeAslRequest(req);
+    backdrop_make();
+    redraw_all();
+    set_attr(S_PIC, GETFILE_FullFile, (ULONG)bgfile);
 }
 
 static void close_settings(void)
 {
-    if (setwin) {
-        CloseWindow(setwin);
-        setwin = NULL;
+    struct Node *n;
+    if (setobj) {
+        if (sg[S_TABS])
+            setpage = get_attr(S_TABS, CLICKTAB_Current);
+        DisposeObject(setobj);          /* the window and every gadget */
+        setobj = NULL;
     }
-    if (setglist) {
-        FreeGadgets(setglist);
-        setglist = NULL;
-    }
+    setwin = NULL;
     memset(sg, 0, sizeof sg);
+    if (settabs.lh_Head)
+        while ((n = RemHead(&settabs)))
+            FreeClickTabNode(n);
+}
+
+static Object *page_screen(void)
+{
+    Object *o, *p = r_page(), *g = r_group("Where CTerm opens");
+    ULONG id = pend_id;
+    struct Screen *wb = LockPubScreen(NULL);
+    like_id = INVALID_ID;
+    if (wb) {
+        struct BitMap *bm = wb->RastPort.BitMap;
+        int d = bm->Depth;
+        if (CyberGfxBase && GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX))
+            d = GetCyberMapAttr(bm, CYBRMATTR_DEPTH);
+        like_id = GetVPModeID(&wb->ViewPort);
+        like_w = wb->Width;
+        like_h = wb->Height;
+        like_depth = d > 24 ? 24 : d;
+        UnlockPubScreen(NULL, wb);
+    }
+    if (id == INVALID_ID) {
+        id = like_id;
+        if (pend_w <= 0) { pend_w = like_w; pend_h = like_h; }
+    }
+    r_add(g, r_chooser(S_WHERE, wherelabels, pend_mode == SCR_OWN),
+          "Screen");
+    o = sg[S_MODE] = GetScreenModeObject, GA_ID, S_MODE, GA_RelVerify, TRUE,
+        GETSCREENMODE_TitleText, (ULONG)"CTerm's own screen",
+        GETSCREENMODE_DisplayID, id,
+        GETSCREENMODE_DoWidth, TRUE, GETSCREENMODE_DoHeight, TRUE,
+        pend_w > 0 ? GETSCREENMODE_DisplayWidth : TAG_IGNORE, pend_w,
+        pend_h > 0 ? GETSCREENMODE_DisplayHeight : TAG_IGNORE, pend_h,
+        GETSCREENMODE_DoDepth, TRUE, GETSCREENMODE_MinDepth, 1,
+        GETSCREENMODE_MaxDepth, 24,
+        GETSCREENMODE_DisplayDepth,
+        pend_id == INVALID_ID ? like_depth : pend_depth > 8 ? 24 : pend_depth,
+        End;
+    /* one line high: left alone its monitor picture makes it two */
+    if (o)
+        SetAttrs(g, LAYOUT_AddChild, (ULONG)o, CHILD_WeightedHeight, 0,
+                 CHILD_MaxHeight, 22, CHILD_Label,
+                 (ULONG)r_label("Screen mode"), TAG_END);
+    r_add(g, r_check(S_FULL, "Full screen", pend_full), NULL);
+    r_disable(S_MODE, pend_mode == SCR_WB);
+    r_disable(S_FULL, pend_mode == SCR_WB);
+    r_add(p, g, NULL);
+    g = r_group("The window");
+    r_add(g, r_check(S_BAR, "Scroll bar", pend_bar), NULL);
+    r_add(p, g, NULL);
+    return p;
+}
+
+static Object *page_text(void)
+{
+    Object *p = r_page(), *g = r_group("Letters");
+    font_attr();
+    r_add(g, r_chooser(S_LETTERS, letterlabels, usett), "Letters");
+    r_disable(S_LETTERS, !TTEngineBase);
+    r_add(g, sg[S_FONT] = GetFontObject, GA_ID, S_FONT, GA_RelVerify, TRUE,
+          GETFONT_TextAttr, (ULONG)&setfont, GETFONT_FixedWidthOnly, TRUE,
+          GETFONT_TitleText, (ULONG)"CTerm's font (fixed width)", End,
+          "Amiga font");
+    r_add(g, sg[S_TT] = GetFileObject, GA_ID, S_TT, GA_RelVerify, TRUE,
+          GETFILE_FullFile, (ULONG)ttfile, GETFILE_ReadOnly, TRUE,
+          GETFILE_TitleText, (ULONG)"A TrueType font (fixed width)",
+          GETFILE_Pattern, (ULONG)"#?.ttf", GETFILE_DoPatterns, TRUE,
+          GETFILE_RejectIcons, TRUE, End, "TrueType font");
+    r_disable(S_TT, !TTEngineBase);
+    r_add(g, r_slider(S_TTSIZE, 6, 40, ttsize, "%ld"), "TrueType size");
+    r_disable(S_TTSIZE, !usett);
+    r_add(g, r_slider(S_SPACE, 0, 8, linespace, "%ld"), "Line spacing");
+    r_add(p, g, NULL);
+    g = r_group("Characters");
+    r_add(g, r_chooser(S_CHARS, charlabels, chars_now()), "Characters");
+    r_add(g, r_check(S_PCFONT, "The IBM VGA font in PC BBS mode", pcfont),
+          NULL);
+    r_add(p, g, NULL);
+    return p;
+}
+
+static Object *page_colours(void)
+{
+    Object *h, *p = r_page(), *g = r_group("Colours");
+    ULONG c = setpart ? defbg : deffg;
+    r_add(g, r_chooser(S_THEME, themelabels, theme), "Theme");
+    r_add(g, r_chooser(S_PART, partlabels, setpart), "Colour of");
+    r_add(g, r_slider(S_R, 0, 255, (c >> 16) & 255, "%3ld"), "Red");
+    r_add(g, r_slider(S_G, 0, 255, (c >> 8) & 255, "%3ld"), "Green");
+    r_add(g, r_slider(S_B, 0, 255, c & 255, "%3ld"), "Blue");
+    r_add(g, r_button(S_RESET, "Back to the theme's colours"), NULL);
+    r_add(p, g, NULL);
+    g = r_group(painter ? "A picture behind the text"
+                        : "A picture (needs 16 or more bits of colour)");
+    h = HLayoutObject, End;
+    r_add(h, sg[S_PIC] = GetFileObject, GA_ID, S_PIC, GA_RelVerify, TRUE,
+          GETFILE_FullFile, (ULONG)bgfile, GETFILE_ReadOnly, TRUE,
+          GETFILE_TitleText, (ULONG)"A picture behind the text",
+          GETFILE_RejectIcons, TRUE, End, NULL);
+    if (h && r_button(S_NOPIC, "None"))
+        SetAttrs(h, LAYOUT_AddChild, (ULONG)sg[S_NOPIC],
+                 CHILD_WeightedWidth, 0, TAG_END);
+    r_add(g, h, "Picture");
+    r_add(g, r_slider(S_SEE, 0, 100, bgsee, "%3ld%%"), "Picture shows");
+    r_disable(S_PIC, !painter);
+    r_disable(S_NOPIC, !painter);
+    r_disable(S_SEE, !painter);
+    r_add(p, g, NULL);
+    return p;
+}
+
+static Object *page_keys(void)
+{
+    Object *p = r_page(), *g = r_group("Keys");
+    r_add(g, r_chooser(S_ALT, altlabels, !altmeta), "Alt key");
+    r_add(p, g, NULL);
+    return p;
 }
 
 static void open_settings(void)
 {
-    struct NewGadget ng;
-    struct Gadget *g;
-    struct TextAttr *ta = scr->Font;
-    struct RastPort *srp = &scr->RastPort;
-    int th = ta->ta_YSize, lh = th + 7, i;
-    int ox = scr->WBorLeft + 10, oy = scr->WBorTop + th + 1 + 8;
-    int lw = TextLength(srp, (STRPTR)"TrueType size", 13) + 20;
-    int gx, gw = 340, bw, W, H, y;
-
-    if (setwin) {
+    Object *pages, *root, *buttons;
+    int i;
+    if (setobj) {
         WindowToFront(setwin);
         ActivateWindow(setwin);
         return;
     }
-    gx = ox + lw;
-    bw = TextLength(srp, (STRPTR)"TrueType font...", 16) + 20;
+    if (!reaction_open()) {
+        say("\r\n[the settings window needs AmigaOS 3.2's window classes]\r\n");
+        return;
+    }
     for (i = 0; i < NTHEMES; i++)
         themelabels[i] = (STRPTR)themes[i].name;
     themelabels[NTHEMES] = NULL;
@@ -4464,161 +4620,50 @@ static void open_settings(void)
     pend_h = ownh;
     pend_full = fullscreen;
     pend_bar = scrollbar;
-    describe_mode();
-    describe_fonts();
-    describe_pic();
 
-    memset(&ng, 0, sizeof ng);
-    ng.ng_TextAttr = ta;
-    ng.ng_VisualInfo = visual;
-    ng.ng_Height = th + 5;
-    g = CreateContext(&setglist);
-    y = oy;
-#define NG(id, x, w, txt, fl) (ng.ng_LeftEdge = (x), ng.ng_TopEdge = y, \
-    ng.ng_Width = (w), ng.ng_GadgetText = (STRPTR)(txt), ng.ng_Flags = (fl), \
-    ng.ng_GadgetID = (id))
-
-    NG(S_WHERE, gx, gw, "Screen", PLACETEXT_LEFT);
-    g = sg[S_WHERE] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
-        (ULONG)wherelabels, GTCY_Active, pend_mode == SCR_OWN, TAG_END);
-    y += lh;
-    NG(S_MODE, gx, bw, "Screen mode...", PLACETEXT_IN);
-    g = sg[S_MODE] = CreateGadget(BUTTON_KIND, g, &ng,
-        GA_Disabled, pend_mode == SCR_WB, TAG_END);
-    NG(S_MODETXT, gx + bw + 6, gw - bw - 6, NULL, 0);
-    g = sg[S_MODETXT] = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
-        (ULONG)modetxt, GTTX_Border, TRUE, TAG_END);
-    y += lh;
-    NG(S_FULL, gx, 26, "Full screen", PLACETEXT_LEFT);
-    g = sg[S_FULL] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked,
-        pend_full, GTCB_Scaled, TRUE, GA_Disabled, pend_mode == SCR_WB,
-        TAG_END);
-    NG(S_BAR, gx + gw - 26, 26, "Scroll bar", PLACETEXT_LEFT);
-    g = sg[S_BAR] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked,
-        pend_bar, GTCB_Scaled, TRUE, TAG_END);
-    y += lh + 8;
-
-    NG(S_LETTERS, gx, gw, "Letters", PLACETEXT_LEFT);
-    g = sg[S_LETTERS] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
-        (ULONG)letterlabels, GTCY_Active, usett, TAG_END);
-    y += lh;
-    NG(S_FONT, gx, bw, "Amiga font...", PLACETEXT_IN);
-    g = sg[S_FONT] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
-    NG(S_FONTTXT, gx + bw + 6, gw - bw - 6, NULL, 0);
-    g = sg[S_FONTTXT] = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
-        (ULONG)fonttxt, GTTX_Border, TRUE, TAG_END);
-    y += lh;
-    NG(S_TT, gx, bw, "TrueType font...", PLACETEXT_IN);
-    g = sg[S_TT] = CreateGadget(BUTTON_KIND, g, &ng,
-        GA_Disabled, !TTEngineBase, TAG_END);
-    NG(S_TTTXT, gx + bw + 6, gw - bw - 6, NULL, 0);
-    g = sg[S_TTTXT] = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
-        (ULONG)tttxt, GTTX_Border, TRUE, TAG_END);
-    y += lh;
-    NG(S_TTSIZE, gx, gw - 40, "TrueType size", PLACETEXT_LEFT);
-    g = sg[S_TTSIZE] = CreateGadget(SLIDER_KIND, g, &ng, GTSL_Min, 6,
-        GTSL_Max, 40, GTSL_Level, ttsize, GTSL_LevelFormat, (ULONG)"%2ld",
-        GTSL_MaxLevelLen, 2, GTSL_LevelPlace, PLACETEXT_RIGHT,
-        GA_RelVerify, TRUE, GA_Disabled, !usett, TAG_END);
-    y += lh;
-    NG(S_SPACE, gx, gw - 40, "Line spacing", PLACETEXT_LEFT);
-    g = sg[S_SPACE] = CreateGadget(SLIDER_KIND, g, &ng, GTSL_Min, 0,
-        GTSL_Max, 8, GTSL_Level, linespace, GTSL_LevelFormat, (ULONG)"%ld",
-        GTSL_MaxLevelLen, 2, GTSL_LevelPlace, PLACETEXT_RIGHT,
-        GA_RelVerify, TRUE, TAG_END);
-    y += lh;
-    NG(S_CHARS, gx, gw, "Characters", PLACETEXT_LEFT);
-    g = sg[S_CHARS] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
-        (ULONG)charlabels, GTCY_Active, chars_now(), TAG_END);
-    y += lh;
-    NG(S_PCFONT, gx, 26, "PC font", PLACETEXT_LEFT);
-    g = sg[S_PCFONT] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked,
-        pcfont, GTCB_Scaled, TRUE, TAG_END);
-    NG(0, gx + 34, gw - 34, NULL, 0);
-    g = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
-        (ULONG)"the IBM VGA font in PC BBS mode", TAG_END);
-    y += lh;
-    NG(S_ALT, gx, gw, "Alt key", PLACETEXT_LEFT);
-    g = sg[S_ALT] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
-        (ULONG)altlabels, GTCY_Active, !altmeta, TAG_END);
-    y += lh + 8;
-
-    NG(S_THEME, gx, gw, "Theme", PLACETEXT_LEFT);
-    g = sg[S_THEME] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
-        (ULONG)themelabels, GTCY_Active, theme, TAG_END);
-    y += lh;
-    NG(S_PART, gx, gw, "Colour of", PLACETEXT_LEFT);
-    g = sg[S_PART] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
-        (ULONG)partlabels, GTCY_Active, setpart, TAG_END);
-    y += lh;
-    {
-        static const char *const rgbname[3] = { "Red", "Green", "Blue" };
-        ULONG c = setpart ? defbg : deffg;
-        int k;
-        for (k = 0; k < 3; k++) {
-            NG(S_R + k, gx, gw - 40, rgbname[k], PLACETEXT_LEFT);
-            g = sg[S_R + k] = CreateGadget(SLIDER_KIND, g, &ng,
-                GTSL_Min, 0, GTSL_Max, 255,
-                GTSL_Level, (c >> (16 - 8 * k)) & 255,
-                GTSL_LevelFormat, (ULONG)"%3ld", GTSL_MaxLevelLen, 3,
-                GTSL_LevelPlace, PLACETEXT_RIGHT, GA_RelVerify, TRUE,
-                TAG_END);
-            y += lh;
-        }
+    NewList(&settabs);
+    for (i = 0; tablabels[i]; i++) {
+        struct Node *n = AllocClickTabNode(TNA_Text, (ULONG)tablabels[i],
+                                           TNA_Number, i, TAG_END);
+        if (n)
+            AddTail(&settabs, n);
     }
-    NG(S_RESET, gx, gw, "Back to the theme's colours", PLACETEXT_IN);
-    g = sg[S_RESET] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
-    y += lh + 8;
-    {
-        int nw = TextLength(srp, (STRPTR)"None", 4) + 20;
-        NG(S_PIC, gx, bw, "Picture...", PLACETEXT_IN);
-        g = sg[S_PIC] = CreateGadget(BUTTON_KIND, g, &ng,
-            GA_Disabled, !painter, TAG_END);
-        NG(S_PICTXT, gx + bw + 6, gw - bw - 12 - nw, NULL, 0);
-        g = sg[S_PICTXT] = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
-            (ULONG)pictxt, GTTX_Border, TRUE, TAG_END);
-        NG(S_NOPIC, gx + gw - nw, nw, "None", PLACETEXT_IN);
-        g = sg[S_NOPIC] = CreateGadget(BUTTON_KIND, g, &ng,
-            GA_Disabled, !painter, TAG_END);
-    }
-    y += lh;
-    NG(S_SEE, gx, gw - 48, "Picture shows", PLACETEXT_LEFT);
-    g = sg[S_SEE] = CreateGadget(SLIDER_KIND, g, &ng, GTSL_Min, 0,
-        GTSL_Max, 100, GTSL_Level, bgsee, GTSL_LevelFormat, (ULONG)"%3ld%%",
-        GTSL_MaxLevelLen, 4, GTSL_LevelPlace, PLACETEXT_RIGHT,
-        GA_RelVerify, TRUE, GA_Disabled, !painter, TAG_END);
-    y += lh + 10;
-    W = gx + gw + 10 + scr->WBorRight;
-    {
-        int b3 = (W - scr->WBorLeft - scr->WBorRight - 20 - 2 * 20) / 3;
-        if (b3 > 110) b3 = 110;
-        NG(S_SAVE, ox, b3, "Save", PLACETEXT_IN);
-        g = sg[S_SAVE] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
-        NG(S_USE, (W - b3) / 2, b3, "Use", PLACETEXT_IN);
-        g = sg[S_USE] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
-        NG(S_CANCEL, W - scr->WBorRight - 10 - b3, b3, "Cancel",
-           PLACETEXT_IN);
-        g = sg[S_CANCEL] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
-    }
-#undef NG
-    H = y + lh + 4 + scr->WBorBottom;
-    if (!g) {
+    pages = PageObject, PAGE_Add, (ULONG)page_screen(),
+        PAGE_Add, (ULONG)page_text(), PAGE_Add, (ULONG)page_colours(),
+        PAGE_Add, (ULONG)page_keys(), PAGE_Current, setpage, End;
+    buttons = HLayoutObject, LAYOUT_EvenSize, TRUE, End;
+    r_add(buttons, r_button(S_SAVE, "_Save"), NULL);
+    r_add(buttons, r_button(S_USE, "_Use"), NULL);
+    r_add(buttons, r_button(S_CANCEL, "_Cancel"), NULL);
+    root = VLayoutObject, LAYOUT_SpaceOuter, TRUE, LAYOUT_DeferLayout, TRUE,
+        End;
+    sg[S_TABS] = ClickTabObject, GA_ID, S_TABS, CLICKTAB_Labels,
+        (ULONG)&settabs, CLICKTAB_Current, setpage,
+        CLICKTAB_PageGroup, (ULONG)pages, End;
+    r_add(root, sg[S_TABS], NULL);
+    if (root && buttons)
+        SetAttrs(root, LAYOUT_AddChild, (ULONG)buttons,
+                 CHILD_WeightedHeight, 0, TAG_END);
+    if (!root || !sg[S_TABS] || !buttons) {
+        DisposeObject(root);
+        memset(sg, 0, sizeof sg);
         close_settings();
         return;
     }
-    setwin = OpenWindowTags(NULL,
-        WA_Left, (scr->Width - W) / 2, WA_Top, (scr->Height - H) / 2,
-        WA_Width, W, WA_Height, H, WA_Title, (ULONG)"CTerm Settings",
+    setobj = WindowObject, WA_Title, (ULONG)"CTerm Settings",
         scr == ownscr ? WA_CustomScreen : WA_PubScreen, (ULONG)scr,
-        WA_Gadgets, (ULONG)setglist, WA_DragBar, TRUE, WA_DepthGadget, TRUE,
-        WA_CloseGadget, TRUE, WA_Activate, TRUE, WA_SmartRefresh, TRUE,
-        WA_IDCMP, BUTTONIDCMP | CYCLEIDCMP | CHECKBOXIDCMP | SLIDERIDCMP |
-                  IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW, TAG_END);
-    if (!setwin) {
+        WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
+        WA_SizeGadget, TRUE, WA_Activate, TRUE,
+        WINDOW_Position, WPOS_CENTERSCREEN, WINDOW_Layout, (ULONG)root, End;
+    if (!setobj) {
+        DisposeObject(root);
+        memset(sg, 0, sizeof sg);
         close_settings();
         return;
     }
-    GT_RefreshWindow(setwin, NULL);
+    setwin = (struct Window *)DoMethod(setobj, WM_OPEN);
+    if (!setwin)
+        close_settings();
 }
 
 static void finish_settings_(int how);
@@ -4697,105 +4742,169 @@ static void finish_settings_(int how)
     envonly = FALSE;
 }
 
+/* One control was used: 1 Use, 2 Save, 3 Cancel, 0 stay open. */
+static int settings_gadget(int id)
+{
+    ULONG v;
+    switch (id) {
+    case S_WHERE:
+        pend_mode = get_attr(S_WHERE, CHOOSER_Selected) ? SCR_OWN : SCR_WB;
+        if (pend_mode == SCR_OWN && ownmode == INVALID_ID &&
+            pend_id == INVALID_ID && like_id != INVALID_ID) {
+            pend_id = like_id;          /* what the mode box shows */
+            pend_w = like_w;
+            pend_h = like_h;
+            pend_depth = like_depth;
+        }
+        where_changed();
+        break;
+    case S_MODE:
+        if (DoMethod(sg[S_MODE], GSM_REQUEST, (ULONG)setwin)) {
+            pend_id = get_attr(S_MODE, GETSCREENMODE_DisplayID);
+            pend_w = get_attr(S_MODE, GETSCREENMODE_DisplayWidth);
+            pend_h = get_attr(S_MODE, GETSCREENMODE_DisplayHeight);
+            pend_depth = get_attr(S_MODE, GETSCREENMODE_DisplayDepth);
+            pend_mode = SCR_OWN;
+            where_changed();
+        }
+        break;
+    case S_FULL: pend_full = get_attr(S_FULL, GA_Selected) != 0; break;
+    case S_BAR: pend_bar = get_attr(S_BAR, GA_Selected) != 0; break;
+    case S_LETTERS:
+        usett = get_attr(S_LETTERS, CHOOSER_Selected) && TTEngineBase;
+        if (!usett)
+            load_font();
+        letters_changed();
+        break;
+    case S_FONT:
+        if (DoMethod(sg[S_FONT], GFONT_REQUEST, (ULONG)setwin)) {
+            struct TextAttr *ta =
+                (struct TextAttr *)get_attr(S_FONT, GETFONT_TextAttr);
+            if (ta && ta->ta_Name) {
+                strncpy(fontname, (char *)ta->ta_Name, sizeof fontname - 1);
+                fontname[sizeof fontname - 1] = 0;
+                fontsize = ta->ta_YSize;
+                if (load_font())
+                    usett = FALSE;
+            }
+            letters_changed();
+        }
+        break;
+    case S_TT:
+        if (DoMethod(sg[S_TT], GFILE_REQUEST, (ULONG)setwin)) {
+            const char *f = (const char *)get_attr(S_TT, GETFILE_FullFile);
+            char old[160];
+            strcpy(old, ttfile);
+            if (f && f[0]) {
+                strncpy(ttfile, f, sizeof ttfile - 1);
+                ttfile[sizeof ttfile - 1] = 0;
+                usett = TRUE;
+                if (!load_tt()) {
+                    DisplayBeep(scr);   /* it would not open */
+                    strcpy(ttfile, old);
+                    usett = load_tt();
+                    if (!usett)
+                        load_font();
+                }
+            }
+            letters_changed();
+        }
+        break;
+    case S_TTSIZE:
+        v = get_attr(S_TTSIZE, SLIDER_Level);
+        if (usett && (int)v != ttsize) {
+            ttsize = v;
+            letters_changed();
+        }
+        break;
+    case S_SPACE:
+        v = get_attr(S_SPACE, SLIDER_Level);
+        if ((int)v != linespace) {
+            linespace = v;
+            letters_changed();
+        }
+        break;
+    case S_CHARS:
+        set_chars(get_attr(S_CHARS, CHOOSER_Selected));
+        pc_font(FALSE);                 /* shown on closing */
+        break;
+    case S_PCFONT: pcfont = get_attr(S_PCFONT, GA_Selected) != 0; break;
+    case S_ALT: altmeta = get_attr(S_ALT, CHOOSER_Selected) == 0; break;
+    case S_THEME:
+        theme = get_attr(S_THEME, CHOOSER_Selected);
+        ownfg = ownbg = FALSE;
+        colours_changed();
+        set_sliders();
+        break;
+    case S_PART:
+        setpart = get_attr(S_PART, CHOOSER_Selected);
+        set_sliders();
+        break;
+    case S_R: case S_G: case S_B: {
+        int sh = id == S_R ? 16 : id == S_G ? 8 : 0;
+        ULONG c = setpart ? defbg : deffg;
+        v = get_attr(id, SLIDER_Level);
+        c = (c & ~(255UL << sh)) | ((v & 255) << sh);
+        if (setpart) { mybg = c; ownbg = TRUE; }
+        else { myfg = c; ownfg = TRUE; }
+        colours_changed();
+        break;
+    }
+    case S_RESET:
+        ownfg = ownbg = FALSE;
+        colours_changed();
+        set_sliders();
+        break;
+    case S_PIC:
+        if (!bgfile[0])                 /* start where the backdrops are */
+            SetAttrs(sg[S_PIC], GETFILE_Drawer,
+                     (ULONG)"SYS:Prefs/Presets/Backdrops", TAG_END);
+        if (DoMethod(sg[S_PIC], GFILE_REQUEST, (ULONG)setwin)) {
+            const char *f = (const char *)get_attr(S_PIC, GETFILE_FullFile);
+            if (f && f[0]) {
+                strncpy(bgfile, f, sizeof bgfile - 1);
+                bgfile[sizeof bgfile - 1] = 0;
+                picture_changed();
+                if (!bgfile[0])
+                    DisplayBeep(scr);   /* not a picture it could read */
+            }
+        }
+        break;
+    case S_NOPIC:
+        bgfile[0] = 0;
+        picture_changed();
+        break;
+    case S_SEE:
+        v = get_attr(S_SEE, SLIDER_Level);
+        if ((int)v != bgsee) {
+            bgsee = v;
+            backdrop_make();
+            redraw_all();
+        }
+        break;
+    case S_SAVE: return 2;
+    case S_USE: return 1;
+    case S_CANCEL: return 3;
+    }
+    return 0;
+}
+
 static void settings_events(void)
 {
-    struct IntuiMessage *m;
+    ULONG res;
+    UWORD code;
     int how = 0;
-    while (setwin && (m = GT_GetIMsg(setwin->UserPort))) {
-        ULONG cl = m->Class;
-        UWORD code = m->Code;
-        struct Gadget *g = (struct Gadget *)m->IAddress;
-        GT_ReplyIMsg(m);
-        if (cl == IDCMP_REFRESHWINDOW) {
-            GT_BeginRefresh(setwin);
-            GT_EndRefresh(setwin, TRUE);
-            continue;
-        }
-        if (cl == IDCMP_CLOSEWINDOW) {
+    while (setobj && !how &&
+           (res = DoMethod(setobj, WM_HANDLEINPUT, (ULONG)&code)) !=
+           WMHI_LASTMSG) {
+        switch (res & WMHI_CLASSMASK) {
+        case WMHI_CLOSEWINDOW:
             how = 3;
             break;
-        }
-        if (cl != IDCMP_GADGETUP || !g)
-            continue;
-        switch (g->GadgetID) {
-        case S_WHERE:
-            pend_mode = code ? SCR_OWN : SCR_WB;
-            where_changed();
-            break;
-        case S_MODE: ask_mode(); break;
-        case S_FULL: pend_full = (g->Flags & GFLG_SELECTED) != 0; break;
-        case S_BAR: pend_bar = (g->Flags & GFLG_SELECTED) != 0; break;
-        case S_LETTERS:
-            usett = code && TTEngineBase;
-            if (!usett)
-                load_font();
-            letters_changed();
-            break;
-        case S_FONT:
-            ask_font();
-            letters_changed();
-            break;
-        case S_TT:
-            ask_ttfont();
-            letters_changed();
-            break;
-        case S_TTSIZE:
-            if (usett && code != ttsize) {
-                ttsize = code;
-                letters_changed();
-            }
-            break;
-        case S_SPACE:
-            if (code != linespace) {
-                linespace = code;
-                letters_changed();
-            }
-            break;
-        case S_CHARS:
-            set_chars(code);
-            pc_font(FALSE);             /* shown on closing */
-            break;
-        case S_PCFONT: pcfont = (g->Flags & GFLG_SELECTED) != 0; break;
-        case S_ALT: altmeta = code == 0; break;
-        case S_THEME:
-            theme = code;
-            ownfg = ownbg = FALSE;
-            colours_changed();
-            set_sliders();
-            break;
-        case S_PART: setpart = code; set_sliders(); break;
-        case S_R: case S_G: case S_B: {
-            int sh = g->GadgetID == S_R ? 16 : g->GadgetID == S_G ? 8 : 0;
-            ULONG c = setpart ? defbg : deffg;
-            c = (c & ~(255UL << sh)) | ((ULONG)(code & 255) << sh);
-            if (setpart) { mybg = c; ownbg = TRUE; }
-            else { myfg = c; ownfg = TRUE; }
-            colours_changed();
+        case WMHI_GADGETUP:
+            how = settings_gadget(res & WMHI_GADGETMASK);
             break;
         }
-        case S_RESET:
-            ownfg = ownbg = FALSE;
-            colours_changed();
-            set_sliders();
-            break;
-        case S_PIC: ask_picture(); break;
-        case S_NOPIC:
-            bgfile[0] = 0;
-            picture_changed();
-            break;
-        case S_SEE:
-            if (code != bgsee) {
-                bgsee = code;
-                backdrop_make();
-                redraw_all();
-            }
-            break;
-        case S_SAVE: how = 2; break;
-        case S_USE: how = 1; break;
-        case S_CANCEL: how = 3; break;
-        }
-        if (how)
-            break;
     }
     if (how)
         finish_settings(how);
@@ -5654,6 +5763,7 @@ int main(int argc, char **argv)
             con_free(spent[--nspent]);
     }
     close_settings();
+    reaction_close();
     clip_close();
     close_display(FALSE);
     if (ownfont) CloseFont(ownfont);

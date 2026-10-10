@@ -122,7 +122,9 @@ CTerm's own console handler is new C code; it takes CCON's knowledge
 ## Still to do
 
 In the order the user and I agreed (2026-10-10):
-- **The settings window in tabs** (the user's wish): one page each for
+- **Done 2026-10-10:** the settings window in tabs (ReAction, real
+  clicktab tabs; the user chose the look from a test). Was:
+  **the settings window in tabs** (the user's wish): one page each for
   Screen, Text, Colours and picture, Keys, so it is not one long cluttered
   window. The bottom limit is AmigaOS 3.2 (the user, 2026-10-10), so the
   plan is the whole window in ReAction with the real clicktab tabs; first
