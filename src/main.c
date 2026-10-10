@@ -13,6 +13,8 @@
  *   screen.c   screens, windows and menus
  *   keys.c     the keyboard, and the mouse for programs on hosts
  *   net.c      telnet, calling out, the Call window, phone book calls
+ *   serial.c   serial lines: a null modem, a modem's dial-up
+ *   serwin.c   a serial line's settings, a window of their own
  *   ssh.c      ssh (libssh2 on AmiSSL), in CTermSSH only
  *   clip.c     copy and paste, and the log
  *   setwin.c   the settings window (ReAction, in tabs)
@@ -76,7 +78,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-static const char version[] = "$VER: CTerm 0.3b7 (10.10.2026)";
+static const char version[] = "$VER: CTerm 0.3b8 (10.10.2026)";
 
 struct Library *SocketBase;
 struct Library *KeymapBase;
@@ -334,7 +336,7 @@ BOOL saved_pc;                   /* the setting; pcmode may be PC's */
 
 static void load_prefs(void)
 {
-    static char buf[2400];
+    static char buf[3600];
     char *p = buf;
     /* the whole file: without GVF_BINARY_VAR, GetVar stops at the first
      * line break (every setting after "truetype" was lost) */
@@ -403,6 +405,8 @@ static void load_prefs(void)
                 bgfile[sizeof bgfile - 1] = 0;
             }
             else if (!stricmp(p, "bgsee")) bgsee = atoi(val);
+            else if (ser_pref(p, val))
+                ;                       /* the serial line, the modem */
             else if (!stricmp(p, "mode")) {     /* "hexid,w,h" */
                 const char *q = val;
                 ownmode = hexval(q);
@@ -447,7 +451,7 @@ void save_prefs(void)
 {
     if (setwin)
         return;                         /* the settings window decides */
-    static char buf[2400];
+    static char buf[3600];
     buf[0] = 0;
     strcat(buf, "truetype=");
     strcat(buf, (fontover ? keepfont.usett : usett) ? "1" : "0");
@@ -497,6 +501,7 @@ void save_prefs(void)
         strcat(buf, ","); numstr_cat(buf, ownw);
         strcat(buf, ","); numstr_cat(buf, ownh);
     }
+    ser_prefs_save(buf);
     if (calls[0]) {
         strcat(buf, "\ncalls=");
         strcat(buf, calls);
@@ -688,6 +693,7 @@ static void tab_drop(struct Tab *t)
         CloseSocket(lfd);
         lfd = -1;
     }
+    serial_close();                     /* a modem hung up, the line shut */
     if (T->con) {
         /* its signals and memory go back now; only the port is kept
          * (signal-less, polled) while processes may still open "*" */
@@ -851,7 +857,8 @@ static void run(void)
             }
         }
     } else if (dialhost[0]) {
-        say("\x1b[2m[calling ");
+        say(T->t_serial && !T->t_phone[0] ? "\x1b[2m[opening "
+                                           : "\x1b[2m[calling ");
         say(dialhost);
         say("... Esc gives up]\x1b[0m\r\n");
         refresh();
@@ -929,8 +936,9 @@ BOOL loop_round(LONG xfd, LONG ms)
     LONG maxfd = -1, n = 0;
     ULONG winsig = 1UL << win->UserPort->mp_SigBit;
     ULONG setsig = setwin ? 1UL << setwin->UserPort->mp_SigBit : 0;
+    ULONG sersig = serial_sigmask();
     ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
-                 xwin_sigmask() | bookwin_sigmask();
+                 xwin_sigmask() | bookwin_sigmask() | sersig;
     BOOL hostdata = FALSE, ready = FALSE;
     ULONG consigs = 0;
     int i;
@@ -952,11 +960,16 @@ BOOL loop_round(LONG xfd, LONG ms)
         if (xfd > maxfd)
             maxfd = xfd;
     }
-    if (maxfd < 0 && ms < 0) {
+    if (maxfd < 0 && ms == 0 && !SocketBase) {
+        sigs = SetSignal(0, sigs) & sigs;   /* a look, no wait */
+    } else if (maxfd < 0 && (ms < 0 || !SocketBase)) {
         /* no network: the plain Amiga wait - the socket library's
          * WaitSelect costs far more per round, and a flood of tiny
-         * writes is all rounds */
+         * writes is all rounds. A serial line's transfer waits here
+         * too when there is no TCP/IP stack: the line's timer ends it. */
         ULONG all = sigs;
+        if (ms > 0)
+            serial_alarm(ms);
         for (;;) {
             PF_START(tw);
             sigs = Wait(all);
@@ -972,6 +985,8 @@ BOOL loop_round(LONG xfd, LONG ms)
                 con_render_ready())
                 break;
         }
+        if (ms > 0)
+            serial_alarm(-1);
     } else {
         struct timeval tv;
         tv.tv_sec = ms > 0 ? ms / 1000 : 0;
@@ -988,6 +1003,7 @@ BOOL loop_round(LONG xfd, LONG ms)
     }
     if (xfd >= 0 && n > 0 && FD_ISSET(xfd, &rd))
         ready = TRUE;
+    serial_poll();                      /* every line: what came */
     /* anything but the Shells and the frame timer may look at the text */
     if (sigs & ~(con_timer_sig() | consigs))
         term_sync_all();
@@ -1019,6 +1035,12 @@ BOOL loop_round(LONG xfd, LONG ms)
             if (!con_alive(T->con))
                 T->ended = TRUE;    /* the Shell ended */
         }
+        if (T->t_ser && !T->t_xfer && serial_due() &&
+            (hostbuf || (hostbuf = AllocVec(16384, MEMF_ANY)))) {
+            serial_input(hostbuf, 16384);
+            if (T == shown)
+                hostdata = TRUE;
+        }
         if (n > 0 && !T->t_xfer) {
             LONG fd = sock >= 0 ? sock : lfd;
             if (fd >= 0 && FD_ISSET(fd, &rd) &&
@@ -1044,7 +1066,9 @@ BOOL loop_round(LONG xfd, LONG ms)
     return ready;
 }
 
-static BOOL arg_pc, arg_latin1;
+static BOOL arg_pc, arg_latin1, arg_serial, arg_hasunit;
+static char arg_dev[48];
+static LONG arg_unit, arg_baud;
 static int arg_book = -1;
 /* asl.library and diskfont.library come from disk and take some 100 KB:
  * opened the first time a requester or a disk font is wanted, so a stock
@@ -1159,10 +1183,11 @@ static int cterm_main(int argc, char **argv)
     (void)version;
     (void)argv;
     if (argc > 0) {
-        LONG args[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        LONG args[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
         struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,"
                                       "FROM/K,HOST/K,PC/S,SSH/K,KEY/K,BOOK/K,"
-                                      "TEXTDRAW/S",
+                                      "TEXTDRAW/S,SERIAL/S,DEVICE/K,UNIT/N,"
+                                      "BAUD/N",
                                       args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
@@ -1199,7 +1224,24 @@ static int cterm_main(int argc, char **argv)
         }
         if (args[9])
             ssh_set_key((char *)args[9]);
+        if (args[12] || args[13]) {     /* a serial line (after the prefs) */
+            arg_serial = TRUE;
+            if (args[13]) {
+                strncpy(arg_dev, (char *)args[13], sizeof arg_dev - 1);
+                arg_dev[sizeof arg_dev - 1] = 0;
+            }
+            if (args[14]) arg_unit = *(LONG *)args[14];
+            if (args[15]) arg_baud = *(LONG *)args[15];
+            arg_hasunit = args[14] != 0;
+            local = FALSE;
+            remember = FALSE;
+            T->t_serial = TRUE;
+            strcpy(dialhost, "serial");  /* the real name once prefs are in */
+            if (!args[3]) want_cols = 80;
+        }
         if (args[10]) {                 /* a phone book entry to call */
+            load_prefs();               /* its serial line starts as the
+                                         * settings' (book_blank) */
             book_load();
             arg_book = book_find((char *)args[10]);
             if (arg_book < 0) {
@@ -1241,7 +1283,7 @@ static int cterm_main(int argc, char **argv)
     /* the network only when there is one to talk to: the local Shell
      * needs no TCP/IP stack at all */
     ML("start");
-    if (!local)
+    if (!local && !T->t_serial)         /* a serial line needs none */
         SocketBase = OpenLibrary("bsdsocket.library", 4);
     KeymapBase = OpenLibrary("keymap.library", 37);
     GadToolsBase = OpenLibrary("gadtools.library", 37);
@@ -1260,6 +1302,9 @@ static int cterm_main(int argc, char **argv)
         tab_from_book(&book[arg_book]);
     else
         book_load();
+    if (arg_serial)
+        serial_tab_setup(arg_dev[0] ? arg_dev : NULL,
+                         arg_hasunit ? &arg_unit : NULL, &arg_baud);
     /* first start: TrueType if it is installed (DejaVu Sans Mono) */
     if (!hadprefs)
         usett = tt_installed() && file_exists(ttfile);
@@ -1281,7 +1326,7 @@ static int cterm_main(int argc, char **argv)
     }
     ML("vt");
     want_bar = scrollbar;
-    if (!local && !SocketBase) {
+    if (!local && !SocketBase && !T->t_serial) {
         PutStr("CTerm HOST and LISTEN need a TCP/IP stack (bsdsocket.library)\n");
         rc = RETURN_FAIL;
     } else if (!vt || !KeymapBase || !GadToolsBase ||

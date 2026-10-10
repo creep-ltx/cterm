@@ -7,7 +7,8 @@
 #include "cterm.h"
 
 enum { B_LIST = 1, B_NEW, B_COPY, B_DEL, B_NAME, B_HOST, B_PORT, B_KIND,
-       B_USER, B_PASS, B_LET, B_CHR, B_DOWN, B_UP, B_CALL, B_CLOSE, B_N };
+       B_USER, B_PASS, B_LET, B_CHR, B_DOWN, B_UP, B_CALL, B_CLOSE,
+       B_PHONE, B_LINE, B_N };
 
 static Object *bwobj, *bg[B_N], *bwlayout;
 static struct Window *bwwin;
@@ -15,7 +16,8 @@ static struct List bwlist;              /* the places' names */
 static int bcur = -1;                   /* the entry shown: -1 none */
 static WORD bwleft = -1, bwtop;         /* where it was */
 
-static STRPTR kindlabels[] = { (STRPTR)"telnet", (STRPTR)"ssh", NULL };
+static STRPTR kindlabels[] = { (STRPTR)"telnet", (STRPTR)"ssh",
+                               (STRPTR)"serial", NULL };
 static STRPTR lettlabels[] = { (STRPTR)"CTerm's setting",
                                (STRPTR)"Amiga font", (STRPTR)"TrueType",
                                (STRPTR)"PC font (IBM VGA)", NULL };
@@ -23,7 +25,8 @@ static STRPTR chrlabels[] = { (STRPTR)"UTF-8", (STRPTR)"Latin-1",
                               (STRPTR)"PC BBS (CP437)", NULL };
 /* the controls that mean nothing with no entry chosen */
 static const int entry_ids[] = { B_NAME, B_HOST, B_PORT, B_KIND, B_USER,
-    B_PASS, B_LET, B_CHR, B_DOWN, B_UP, B_COPY, B_DEL, B_CALL };
+    B_PASS, B_LET, B_CHR, B_DOWN, B_UP, B_COPY, B_DEL, B_CALL, B_PHONE,
+    B_LINE };
 #define NENTRY ((int)(sizeof entry_ids / sizeof entry_ids[0]))
 
 ULONG bookwin_sigmask(void)
@@ -94,6 +97,7 @@ static void entry_read(void)
     TXT(B_HOST, e->host);
     TXT(B_USER, e->user);
     TXT(B_PASS, e->pass);
+    TXT(B_PHONE, e->phone);
 #undef TXT
     if ((t = (const char *)bget(B_DOWN, GETFILE_Drawer))) {
         strncpy(e->down, t, sizeof e->down - 1);
@@ -104,10 +108,21 @@ static void entry_read(void)
         e->up[sizeof e->up - 1] = 0;
     }
     e->port = bget(B_PORT, INTEGER_Number);
-    e->ssh = bget(B_KIND, CHOOSER_Selected);
+    e->ssh = bget(B_KIND, CHOOSER_Selected) == 1;
+    e->serial = bget(B_KIND, CHOOSER_Selected) == 2;
     e->letters = bget(B_LET, CHOOSER_Selected);
     e->chars = bget(B_CHR, CHOOSER_Selected);
     book_tidy(e);
+}
+
+/* The fields that mean something for the kind of place: an address and
+ * port for telnet and ssh, a phone number and a line for serial. */
+static void kind_fields(const BookEntry *e, BOOL none)
+{
+    bset(B_HOST, GA_Disabled, none || e->serial);
+    bset(B_PORT, GA_Disabled, none || e->serial);
+    bset(B_PHONE, GA_Disabled, none || !e->serial);
+    bset(B_LINE, GA_Disabled, none || !e->serial);
 }
 
 /* The entry shown, into the fields (none: empty and asleep). */
@@ -119,7 +134,8 @@ static void entry_show(void)
     bset(B_NAME, STRINGA_TextVal, (ULONG)e->name);
     bset(B_HOST, STRINGA_TextVal, (ULONG)e->host);
     bset(B_PORT, INTEGER_Number, e->port);
-    bset(B_KIND, CHOOSER_Selected, e->ssh);
+    bset(B_KIND, CHOOSER_Selected, e->serial ? 2 : e->ssh);
+    bset(B_PHONE, STRINGA_TextVal, (ULONG)e->phone);
     bset(B_USER, STRINGA_TextVal, (ULONG)e->user);
     bset(B_PASS, STRINGA_TextVal, (ULONG)e->pass);
     bset(B_LET, CHOOSER_Selected, e->letters);
@@ -128,6 +144,7 @@ static void entry_show(void)
     bset(B_UP, GETFILE_Drawer, (ULONG)e->up);
     for (i = 0; i < NENTRY; i++)
         bset(entry_ids[i], GA_Disabled, e == &none);
+    kind_fields(e, e == &none);
 }
 
 /* ---- building it ---- */
@@ -251,8 +268,16 @@ static void bookwin_open_(void)
     add(h, bg[B_PORT] = IntegerObject, GA_ID, B_PORT, GA_RelVerify, TRUE,
         GA_TabCycle, TRUE, INTEGER_Number, e->port, INTEGER_Minimum, 0,
         INTEGER_Maximum, 65535, INTEGER_Arrows, FALSE, End, NULL);
-    add(h, chooser(B_KIND, kindlabels, e->ssh), "Connection");
+    add(h, chooser(B_KIND, kindlabels, e->serial ? 2 : e->ssh), "Connection");
     add(g, h, "Port");
+    /* a serial line: the number a modem dials (none: a null modem), and
+     * the line's settings in a window of their own */
+    h = HLayoutObject, End;
+    add(h, string(B_PHONE, e->phone, sizeof e->phone - 1, FALSE), NULL);
+    if (h && button(B_LINE, "Line..."))
+        SetAttrs(h, LAYOUT_AddChild, (ULONG)bg[B_LINE],
+                 CHILD_WeightedWidth, 0, TAG_END);
+    add(g, h, "Phone");
     add(g, string(B_USER, e->user, sizeof e->user - 1, FALSE), "User");
     add(g, string(B_PASS, e->pass, sizeof e->pass - 1, TRUE), "Password");
     add(g, chooser(B_LET, lettlabels, e->letters), "Letters");
@@ -297,6 +322,16 @@ static void bookwin_open_(void)
         for (i = 0; i < NENTRY; i++)
             if (bg[entry_ids[i]])
                 SetAttrs(bg[entry_ids[i]], GA_Disabled, TRUE, TAG_END);
+    {   /* what the kind of place does not use, asleep */
+        static const int tcp[] = { B_HOST, B_PORT }, ser[] = { B_PHONE,
+                                                               B_LINE };
+        for (i = 0; i < 2; i++) {
+            if (bg[tcp[i]] && e->serial)
+                SetAttrs(bg[tcp[i]], GA_Disabled, TRUE, TAG_END);
+            if (bg[ser[i]] && !e->serial)
+                SetAttrs(bg[ser[i]], GA_Disabled, TRUE, TAG_END);
+        }
+    }
     bwobj = WindowObject, WA_Title, (ULONG)"CTerm Phone book",
         scr == ownscr ? WA_CustomScreen : WA_PubScreen, (ULONG)scr,
         WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
@@ -341,7 +376,7 @@ static void entry_call(void)
 {
     int i = bcur;
     entry_read();
-    if (i < 0 || i >= nbook || !book[i].host[0]) {
+    if (i < 0 || i >= nbook || (!book[i].host[0] && !book[i].serial)) {
         DisplayBeep(scr);
         return;
     }
@@ -396,6 +431,18 @@ static void bookwin_events_(void)
             case B_HOST:
                 entry_read();
                 entry_show();           /* a URL taken apart */
+                break;
+            case B_KIND:
+                entry_read();
+                if (bcur >= 0 && bcur < nbook)
+                    kind_fields(&book[bcur], FALSE);
+                break;
+            case B_LINE:
+                entry_read();
+                if (bcur >= 0 && bcur < nbook) {
+                    BookEntry *e = &book[bcur];
+                    serwin_edit(&e->line, e->init, e->dial, bwwin);
+                }
                 break;
             case B_DOWN: case B_UP:
                 DoMethod(bg[res & WMHI_GADGETMASK], GFILE_REQUEST,

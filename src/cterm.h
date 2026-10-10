@@ -91,6 +91,7 @@
 #include "boxtable.h"
 #include "console.h"
 #include "ssh.h"
+#include "serial.h"
 #include "book.h"
 #include "dbg.h"
 
@@ -206,7 +207,16 @@ struct Tab {
                                            parsed (term_take, term_sync) */
     LONG t_plen;
     struct Xfer *t_xfer;                /* a transfer in it, or NULL */
+    BOOL t_serial;                      /* a serial line, not TCP */
+    SerLine t_line;                     /* its line */
+    char t_phone[48];                   /* a modem dials it (empty: the
+                                           line is the connection) */
+    char t_init[64], t_dialpre[24];     /* its own init, dial prefix */
+    struct Ser *t_ser;                  /* its device, open */
 };
+
+/* The tab has its host or line: something to send to. */
+#define linked    (sock >= 0 || T->t_ser != NULL)
 
 /* Themes: the text and background, the 16 ANSI colours, and what the
  * Amiga's pens 2-7 mean in the local Shell (Ed and friends use them). */
@@ -221,13 +231,15 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
        M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
        M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS, M_YRECV, M_XRECV, M_YSEND,
-       M_XSEND, M_HSEND, M_XWIN, M_BOOK };
+       M_XSEND, M_HSEND, M_XWIN, M_BOOK, M_SERIAL, M_ANSWER };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT, S_ALT, S_THEME, S_PART,
        S_R, S_G, S_B, S_RESET, S_PIC, S_NOPIC, S_SEE, S_KUSER, S_KPASS,
        S_DLDIR, S_ULDIR,
+       S_MINIT, S_MINIT2, S_MDIALK, S_MDIAL, S_MSUFFIX, S_MHANG, S_MHANGCMD,
+       S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE,
        S_SAVE, S_USE, S_CANCEL, S_N };
 
 /* ---- shared state ---- */
@@ -412,6 +424,23 @@ void bookwin_events(void);
 void bookwin_close(void);               /* the book saved */
 ULONG bookwin_sigmask(void);
 void send_login(BOOL pass);
+BOOL net_gives_up(void);                /* Esc or the close gadget, waiting */
+/* serial.c: calls over a serial line, null modem or dial-up */
+BOOL serial_call(void);                 /* T's line opened (and dialled) */
+void serial_close(void);                /* T's line hung up and closed */
+ULONG serial_sigmask(void);
+void serial_alarm(LONG ms);             /* a timed wait without TCP/IP */
+void serial_poll(void);                 /* every line: what came */
+BOOL serial_due(void);                  /* T's line has news */
+void serial_input(UBYTE *buf, LONG size);
+LONG serial_take(UBYTE *b, LONG max);   /* T's bytes: -1 the line is gone */
+void serial_write(const UBYTE *b, LONG n);
+void serial_answer(void);
+void serial_terminal(BOOL newtab);
+void serial_tab_setup(const char *dev, LONG *unit, LONG *baud);
+void serial_tab_book(const BookEntry *e);
+/* serwin.c: a line's settings in a window of their own */
+BOOL serwin_edit(SerLine *l, char *init, char *dial, struct Window *over);
 void call_dialog(void);
 void reaction_close(void);
 void close_settings(void);

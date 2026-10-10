@@ -35,6 +35,7 @@ static Object *page_screen(void);
 static Object *page_text(void);
 static Object *page_colours(void);
 static Object *page_keys(void);
+static Object *page_modem(void);
 static void finish_settings_(int how);
 static void finish_settings(int how);
 static void finish_settings_(int how);
@@ -89,6 +90,8 @@ static struct {                         /* what Cancel goes back to */
     ULONG myfg, mybg;
     char ttfile[160], fontname[48];
     char userkey[2], passkey[2], dldir[160], uldir[160];
+    SerLine serdef;
+    Modem modem;
 } snap;
 
 static STRPTR wherelabels[] = { (STRPTR)"Workbench window",
@@ -102,7 +105,12 @@ static STRPTR altlabels[] = { (STRPTR)"Meta for hosts (bash, emacs)",
                               (STRPTR)"Amiga characters everywhere", NULL };
 static STRPTR tablabels[] = { (STRPTR)"Screen", (STRPTR)"Text",
                               (STRPTR)"Colours", (STRPTR)"Keys",
-                              (STRPTR)"Files", NULL };
+                              (STRPTR)"Files", (STRPTR)"Modem", NULL };
+static STRPTR dlabels[] = { (STRPTR)"Tone (ATDT)", (STRPTR)"Pulse (ATDP)",
+                            (STRPTR)"Own", NULL };
+static STRPTR hlabels[] = { (STRPTR)"+++, command, DTR",
+                            (STRPTR)"Dropping DTR", NULL };
+static char linetext[100];              /* what the Line button shows */
 static STRPTR themelabels[NTHEMES + 1];
 
 BOOL reaction_open(void)
@@ -348,6 +356,53 @@ static Object *page_files(void)
     return r_wrap(p);
 }
 
+static Object *r_int(int id, LONG n, LONG max)
+{
+    return sg[id] = IntegerObject, GA_ID, id, GA_RelVerify, TRUE,
+        GA_TabCycle, TRUE, INTEGER_Number, n, INTEGER_Minimum, 0,
+        INTEGER_Maximum, max, INTEGER_Arrows, FALSE, End;
+}
+
+static int dial_kind(const char *d)
+{
+    return !stricmp(d, "ATDT") ? 0 : !stricmp(d, "ATDP") ? 1 : 2;
+}
+
+/* The modem every dial-up place uses, and the serial terminal's line. */
+static Object *page_modem(void)
+{
+    Object *h, *p = r_page(),
+           *g = r_group("The modem (phone book places with a number)");
+    r_add(g, r_string(S_MINIT, modem.init, sizeof modem.init, FALSE),
+          "Init string");
+    r_add(g, r_string(S_MINIT2, modem.init2, sizeof modem.init2, FALSE),
+          "Second init");
+    h = HLayoutObject, End;
+    r_add(h, r_chooser(S_MDIALK, dlabels, dial_kind(modem.dial)), NULL);
+    r_add(h, r_string(S_MDIAL, modem.dial, sizeof modem.dial, FALSE), NULL);
+    r_add(h, r_string(S_MSUFFIX, modem.suffix, sizeof modem.suffix, FALSE),
+          "number, then");
+    r_add(g, h, "Dial");
+    h = HLayoutObject, End;
+    r_add(h, r_chooser(S_MHANG, hlabels, modem.hangup == SH_DTR), NULL);
+    r_add(h, r_string(S_MHANGCMD, modem.hangcmd, sizeof modem.hangcmd,
+                      FALSE), "command");
+    r_add(g, h, "Hang up by");
+    h = HLayoutObject, End;
+    r_add(h, r_int(S_MWAIT, modem.wait, 999), NULL);
+    r_add(h, r_int(S_MREDIAL, modem.redial, 99), "Redial (times)");
+    r_add(h, r_int(S_MPAUSE, modem.pause, 999), "pause (s)");
+    r_add(g, h, "Give up after (s)");
+    r_add(g, r_check(S_MANSWER, "Answer when it rings (ATA)",
+                     modem.answer), NULL);
+    r_put(p, g);
+    g = r_group("The serial terminal (Project/Serial terminal)");
+    ser_line_text(&serdef, linetext, sizeof linetext);
+    r_add(g, r_button(S_SERLINE, linetext), "Line");
+    r_put(p, g);
+    return r_wrap(p);
+}
+
 static void close_settings_(void)
 {
     struct Node *n;
@@ -523,6 +578,8 @@ static void open_settings_(void)
     strcpy(snap.passkey, passkey);
     strcpy(snap.dldir, dldir);
     strcpy(snap.uldir, uldir);
+    snap.serdef = serdef;
+    snap.modem = modem;
     pend_mode = scrmode;
     pend_depth = owndepth;
     pend_id = ownmode;
@@ -540,7 +597,8 @@ static void open_settings_(void)
     }
     pages = PageObject, PAGE_Add, (ULONG)page_screen(),
         PAGE_Add, (ULONG)page_text(), PAGE_Add, (ULONG)page_colours(),
-        PAGE_Add, (ULONG)page_keys(), PAGE_Add, (ULONG)page_files(), PAGE_Current, setpage, End;
+        PAGE_Add, (ULONG)page_keys(), PAGE_Add, (ULONG)page_files(),
+        PAGE_Add, (ULONG)page_modem(), PAGE_Current, setpage, End;
     buttons = HLayoutObject, LAYOUT_EvenSize, TRUE, End;
     r_add(buttons, r_button(S_SAVE, "_Save"), NULL);
     r_add(buttons, r_button(S_USE, "_Use"), NULL);
@@ -621,6 +679,21 @@ static void finish_settings_(int how)
             strncpy(uldir, t, sizeof uldir - 1);
             uldir[sizeof uldir - 1] = 0;
         }
+#define MTXT(id, f) if ((t = (const char *)get_attr(id, STRINGA_TextVal))) { \
+        strncpy(f, t, sizeof f - 1); f[sizeof f - 1] = 0; }
+        MTXT(S_MINIT, modem.init);
+        MTXT(S_MINIT2, modem.init2);
+        MTXT(S_MDIAL, modem.dial);
+        MTXT(S_MSUFFIX, modem.suffix);
+        MTXT(S_MHANGCMD, modem.hangcmd);
+#undef MTXT
+        modem.hangup = get_attr(S_MHANG, CHOOSER_Selected) ? SH_DTR : SH_BOTH;
+        modem.wait = get_attr(S_MWAIT, INTEGER_Number);
+        if (modem.wait < 5)
+            modem.wait = 5;
+        modem.redial = get_attr(S_MREDIAL, INTEGER_Number);
+        modem.pause = get_attr(S_MPAUSE, INTEGER_Number);
+        modem.answer = get_attr(S_MANSWER, GA_Selected) != 0;
     }
     close_settings();
     if (how == 3) {
@@ -630,6 +703,8 @@ static void finish_settings_(int how)
                        snap.fontsize != fontsize ||
                        snap.linespace != linespace;
         theme = snap.theme;
+        serdef = snap.serdef;
+        modem = snap.modem;
         pcfont = snap.pcfont;
         altmeta = snap.altmeta;
         ownfg = snap.ownfg; ownbg = snap.ownbg;
@@ -883,6 +958,22 @@ static int settings_gadget(int id)
         break;
     case S_DLDIR: case S_ULDIR:
         DoMethod(sg[id], GFILE_REQUEST, (ULONG)setwin);
+        break;
+    case S_MDIALK:
+        v = get_attr(S_MDIALK, CHOOSER_Selected);
+        if (v < 2)
+            set_attr(S_MDIAL, STRINGA_TextVal, (ULONG)(v ? "ATDP" : "ATDT"));
+        break;
+    case S_MDIAL: {
+        const char *t = (const char *)get_attr(S_MDIAL, STRINGA_TextVal);
+        set_attr(S_MDIALK, CHOOSER_Selected, dial_kind(t ? t : ""));
+        break;
+    }
+    case S_SERLINE:
+        if (serwin_edit(&serdef, NULL, NULL, setwin)) {
+            ser_line_text(&serdef, linetext, sizeof linetext);
+            set_attr(S_SERLINE, GA_Text, (ULONG)linetext);
+        }
         break;
     case S_SAVE: return keys_clash() ? 0 : 2;
     case S_USE: return keys_clash() ? 0 : 1;

@@ -1,6 +1,6 @@
 /*
  * net - telnet over TCP, calling out, the Call window and the phone book
- * calls.
+ * calls (a serial line's own are serial.c's).
  */
 #include "cterm.h"
 
@@ -68,6 +68,11 @@ static BOOL user_gives_up(void)
             window_chore(m);
     }
     return out;
+}
+
+BOOL net_gives_up(void)
+{
+    return user_gives_up();
 }
 
 int net_wait(LONG fd, int rd, int wr, LONG secs)
@@ -305,6 +310,10 @@ void send_data(const UBYTE *b, LONG n)
 {
     static UBYTE buf[1024];
     LONG i, k = 0;
+    if (T->t_serial) {                  /* a serial line: as it is */
+        serial_write(b, n);
+        return;
+    }
     if (sshmode) {
         if (sock >= 0)
             ssh_write(T->ssh, b, n);
@@ -646,6 +655,10 @@ static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
  * started as a Shell has none open (and a call must not use a NULL base). */
 BOOL connect_out(void)
 {
+    if (T->t_serial) {
+        refresh();
+        return serial_call();
+    }
     if (!SocketBase)
         SocketBase = OpenLibrary("bsdsocket.library", 4);
     if (!SocketBase) {
@@ -905,11 +918,13 @@ static void call_tab(const char *host, BOOL pc, BOOL ssh)
 void tab_from_book(const BookEntry *e)
 {
     local = FALSE;
+    if (e->serial)
+        serial_tab_book(e);
     book_target(e, dialhost, sizeof dialhost);
     strcpy(dialtitle, "CTerm: ");
     strncat(dialtitle, e->name[0] ? e->name : dialhost,
             sizeof dialtitle - 10);
-    sshmode = e->ssh;
+    sshmode = e->ssh && !e->serial;
     pcmode = e->chars == BC_PC;
     utf8 = e->chars == BC_UTF8;
     if (vt) {
@@ -978,7 +993,7 @@ void call_book(int i, BOOL newtab)
 void send_login(BOOL pass)
 {
     const char *s = pass ? T->t_pass : T->t_user;
-    if (local || sock < 0 || !s[0]) {
+    if (local || !linked || !s[0]) {
         DisplayBeep(scr);
         return;
     }
@@ -988,13 +1003,14 @@ void send_login(BOOL pass)
 
 void call_dialog(void)
 {
-    enum { G_HOST, G_PC, G_SSH, G_NEWTAB, G_LIST, G_CALL, G_CANCEL };
-    struct Gadget *glist = NULL, *g, *gad[7];
+    enum { G_HOST, G_PC, G_SSH, G_NEWTAB, G_LIST, G_CALL, G_SERIAL,
+           G_CANCEL };
+    struct Gadget *glist = NULL, *g, *gad[8];
     struct NewGadget ng;
     struct Window *dw;
     struct TextAttr *ta = scr->Font;
     int th = ta->ta_YSize, n, W, H, x0, y, bw;
-    BOOL pc = pcmode, ssh = FALSE, done = FALSE, go = FALSE;
+    BOOL pc = pcmode, ssh = FALSE, done = FALSE, go = FALSE, line = FALSE;
     static BOOL newtab = TRUE;
     char host[128], booked[136];
     ULONG dsig;
@@ -1055,6 +1071,11 @@ void call_dialog(void)
     ng.ng_GadgetText = (STRPTR)"Call"; ng.ng_Flags = PLACETEXT_IN;
     ng.ng_GadgetID = G_CALL; ng.ng_LeftEdge = scr->WBorLeft + 8;
     g = gad[G_CALL] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+    /* the settings' serial line, typed to by hand (a modem's AT) */
+    ng.ng_LeftEdge = (W - 130) / 2; ng.ng_Width = 130;
+    ng.ng_GadgetText = (STRPTR)"Serial terminal"; ng.ng_GadgetID = G_SERIAL;
+    g = gad[G_SERIAL] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+    ng.ng_Width = bw;
     ng.ng_LeftEdge = W - scr->WBorRight - 8 - bw;
     ng.ng_GadgetText = (STRPTR)"Cancel"; ng.ng_GadgetID = G_CANCEL;
     g = gad[G_CANCEL] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
@@ -1138,6 +1159,7 @@ void call_dialog(void)
                     }
                     break;
                 case G_CALL: go = done = TRUE; break;
+                case G_SERIAL: line = done = TRUE; break;
                 case G_CANCEL: done = TRUE; break;
                 }
                 break;
@@ -1151,6 +1173,10 @@ void call_dialog(void)
     }
     CloseWindow(dw);
     FreeGadgets(glist);
+    if (line) {
+        serial_terminal(newtab);
+        return;
+    }
     if (go && pick >= 0 && !strcmp(host, booked)) {
         call_book(pick, newtab);        /* as the entry says, all of it */
         return;

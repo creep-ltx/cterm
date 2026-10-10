@@ -1,8 +1,8 @@
 # CTerm
 
 A terminal for AmigaOS 3.2 and up, in C: the Amiga Shell in a window of its own,
-and a terminal for other computers (telnet, ssh, BBSes, programs on a PC),
-in one program. VT100/xterm emulation, Amiga and TrueType fonts, 2 to 16
+and a terminal for other computers (telnet, ssh, a serial line or a modem,
+BBSes, programs on a PC), in one program. VT100/xterm emulation, Amiga and TrueType fonts, 2 to 16
 million colours, Latin-1, UTF-8 and the PC's character set.
 
 ## Starting it
@@ -19,6 +19,8 @@ million colours, Latin-1, UTF-8 and the PC's character set.
 | `COLS n` / `ROWS n` | the window's size in letters |
 | `FROM script` | the Shell runs this script first |
 | `BOOK name` | call a phone book entry |
+| `SERIAL` | a serial terminal on the Settings' line (Modem tab) |
+| `DEVICE name` / `UNIT n` / `BAUD n` | with SERIAL: another device, unit or speed |
 | `LISTEN` / `PORT n` | wait for the PC's relay (pc/cterm-relay.py) |
 
 LISTEN lets in only the PC named in `ENVARC:CTerm/relay_from`. The first
@@ -28,6 +30,52 @@ delete that file to choose another PC.
 Project/Call... (Right Amiga+K) asks for a host and remembers the last
 eight; the phone book's places are listed first. A call opens in a new
 tab (or a window of its own); when it ends, Return calls again.
+
+## Serial lines and modems
+
+CTerm calls over a serial line as well as over the network: a null-modem
+cable to another computer, or a modem dialling a BBS. Any device that
+works as serial.device does (a multi-serial card's own too), any unit.
+
+- **Serial terminal** (Project/Serial terminal, the Call window's Serial
+  terminal button, or `CTerm SERIAL`): the line opens in a tab and what
+  you type goes to it. With a modem on it you type the AT commands
+  yourself, as with the terminals of old; CTerm notices CONNECT (the call
+  is up) and NO CARRIER (it ended). The line is set on the Settings'
+  Modem tab (Line).
+- **A phone book place on a serial line** (Connection: serial): its
+  Phone is the number a modem dials; with no number the line itself is
+  the connection (a null modem, there at once). Line... sets the device,
+  unit, speed, data bits, parity, stop bits, flow control, the device's
+  buffer, and whether the speed is locked, and the place's own init
+  string and dial prefix.
+- **Dialling:** the modem's init strings (Settings, Modem: two, then the
+  place's own), each waiting for OK, then the dial prefix (Tone ATDT,
+  Pulse ATDP or your own), the number and the suffix (^M is Return). The
+  modem's own words show in the tab, CTerm's in dim brackets. CONNECT
+  means connected; BUSY and NO ANSWER call again if Settings says so (how
+  many times, the pause between; Esc stops); NO CARRIER, NO DIALTONE and
+  ERROR end the call. Numeric results (ATV0) are understood too. Esc
+  while dialling stops the modem and hangs up.
+- **Speeds:** every usual one from 300 to 460800 baud, or any other the
+  device takes. Without flow control a fast line can outrun the Amiga;
+  when bytes are lost CTerm says so (Zmodem and Hydra send them again). "Baud locked" (on
+  by default) keeps the line's speed; off, the line follows the speed in
+  "CONNECT 2400".
+- **Flow control:** RTS/CTS (the hardware's, the default, right for a
+  modem), XON/XOFF, or none (a three-wire null-modem cable). If the line
+  holds back what is sent (no CTS: the modem off, the cable out), CTerm
+  says so instead of waiting for ever.
+- **Hanging up:** closing the tab hangs up: "+++" with a second's quiet
+  each side, then ATH0 (or your own command), then the line closes,
+  which drops DTR (a modem set to AT&D2 hangs up on that alone; Settings
+  can say DTR only). When the far end hangs up (NO CARRIER, or the
+  carrier detect line going away) a phone book call ends: Return calls
+  again.
+- **Answering:** Project/Answer call (ATA) picks up; with "Answer when it
+  rings" on, CTerm answers a RING by itself.
+- File transfers (Zmodem, Ymodem, Xmodem, Hydra) work over a serial
+  line as over telnet, with Zmodem and Hydra starting by themselves.
 
 ## The tour
 
@@ -52,7 +100,8 @@ closes the book. Each place has
 
 - a name, the address (a host name, an IP number, or a `telnet://` or
   `ssh://user@host:port` link, which is taken apart) and the port;
-- telnet or ssh;
+- telnet, ssh or serial (a serial line: the phone number and the line's
+  settings, see Serial lines and modems);
 - your user name and password. At the host's prompt, Project/Send user
   name (Right Amiga+U) and Send password (Right Amiga+P) type them with
   Return; the keys can be changed on the Keys tab. An ssh login is given
@@ -157,7 +206,7 @@ as they came, colour codes and all, so a BBS screen plays back from it.
 ## Settings
 
 Settings/Settings... (Right Amiga+S) opens one window for everything,
-in five tabs (it is built with OS 3.2's own window classes, so it looks
+in six tabs (it is built with OS 3.2's own window classes, so it looks
 like the system's settings programs):
 
 - **Screen:** a Workbench window or CTerm's own screen (any screen mode
@@ -173,6 +222,9 @@ like the system's settings programs):
   computers, or the Amiga's own Alt characters), and the letters for
   sending the phone book's user name and password.
 - **Files:** where downloads go and where the upload requester opens.
+- **Modem:** the modem every dial-up place uses (init strings, dialling,
+  hanging up, how long a call may take, redialling, answering) and the
+  serial terminal's line.
 - **Picture** (on the Colours tab): a picture behind the text (any format the Amiga's
   datatypes read: PNG, JPEG, IFF...), and how much of it shows through
   the background, 0 to 100 %. It covers the window without stretching,
@@ -190,3 +242,5 @@ size, screen, full screen, scroll bar).
 `make` (bebbo's m68k-amigaos-gcc in ~/opt/amiga) builds CTerm and CTermSSH. The first build
 downloads the AmiSSL SDK and libssh2 (third_party/fetch.sh) and builds
 libssh2. `make test` checks the emulator core on Linux.
+`tests/serial/` tests serial calls in FS-UAE (its serial port on a TCP
+socket) against a pretend Hayes modem on the PC: see `fakemodem.py`.

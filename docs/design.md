@@ -23,6 +23,8 @@ VT100/xterm emulation. Decided 2026-10-09.
 | Display: window/screen/full screen, scroll bar, fonts, pens, drawing | `src/display.c` | Yes |
 | Keys: raw keys to xterm sequences | `src/keys.c` | Yes |
 | Connection: telnet over TCP (listen for the PC relay; later dial out) | `src/net.c` | Yes |
+| Serial lines: null modem, a modem's dial-up, answering | `src/serial.c`, `src/serial.h` | Yes |
+| A serial line's settings window (phone book, Settings) | `src/serwin.c` | Yes |
 | Main loop, settings, menus | `src/main.c` | Yes |
 | PC relay: runs a program in a pty, connects to the Amiga | `pc/cterm-relay.py` | PC |
 
@@ -160,6 +162,40 @@ In the order the user and I agreed (2026-10-10):
   for the batch, speed, time left, Stop); the tab's name shows the
   percentage. **Done 2026-10-10** (the user's go): a transfer waits in
   loop_round(), so CTerm goes on; panel, tab name, Transfers window.
+- **Done 2026-10-11: serial lines and modems** (the user's spec, 2026-10-10):
+  a serial tab per line (any device and unit), a phone book kind
+  "serial" (device, unit, speed, data bits, parity, stop bits, flow
+  control, buffer, baud locked, phone number, own init and dial prefix),
+  a modem profile on the Settings' Modem tab (two init strings, dial
+  prefix and suffix, hang-up by +++/command and DTR or DTR only, the
+  call's time limit, redial on BUSY/NO ANSWER, answer on RING), Project/
+  Serial terminal and Answer call (ATA), `CTerm SERIAL [DEVICE UNIT BAUD]`.
+  How it works (serial.c): one 1-byte CMD_READ always out; when it comes
+  back, SDCMD_QUERY says what else waits and that is read at once into
+  the line's 4 KB buffer; every line's requests and two timers (waits,
+  the 1 s carrier check) reply to one port, whose signal is in
+  loop_round's wait; a transfer takes the bytes from the buffer itself
+  (serial_take), no telnet anywhere. Writes are SendIO and a wait with
+  Esc and a time limit. Tested in FS-UAE through tests/serial/fakemodem.py
+  (verified, 2026-10-11): null modem both ways; dial, CONNECT, the far
+  end's NO CARRIER, Return calls again; BUSY with 2 redials; Esc while
+  dialling (CR, ATH0); +++/ATH0 on closing; RING answered; 7E1 seen as
+  even parity bits on the PC side; the speed following CONNECT; Zmodem
+  down (370 KB, md5 identical, twice) and up (226 KB), Hydra down; telnet
+  still the same. Traps found: 3.2's serial.device fills the request at
+  OpenDevice without the SERF_7WIRE asked for - SETPARAMS must ask again
+  or RTS/CTS is silently off; overrun/parity/break read errors are lost
+  bytes, not a dead device; FS-UAE's TCP serial swallows everything sent
+  with 7WIRE on, and reports CD off always (carrier loss there is seen by
+  NO CARRIER only). Left open:
+  - RTS/CTS and carrier detect on a real modem (the emulator cannot);
+    the escalation for a write CTS holds (AbortIO, then CMD_RESET) is
+    untested - serial.device returned such writes at once in FS-UAE;
+  - Ymodem/Xmodem over serial not run (same XferIO path as Zmodem);
+  - SERF_RAD_BOOGIE for 57600+ not used (unverified on hardware);
+  - the serial code is ~25 KB of CTerm (serial.c 9 KB at -Os, serwin.c
+    3 KB, the Modem tab and the book's fields); a protocol-style module
+    loaded on demand would save ~12 KB if it matters.
 - Later idea: Hydra's chat with the other side during a transfer
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
 - Also: an ssh password login tried against a real server, ARexx,

@@ -10,15 +10,18 @@ static void bar_pull(int y);
 /* After a call ended: Return calls again; other keys do nothing. */
 static BOOL redial_key(const char *b)
 {
-    if (local || !dialhost[0] || sock >= 0)
+    if (local || !dialhost[0] || linked)
         return FALSE;
     if (b[0] == '\r') {
-        say("\x1b[2m[calling ");
+        say(T->t_serial && !T->t_phone[0] ? "\x1b[2m[opening "
+                                           : "\x1b[2m[calling ");
         say(dialhost);
         say("... Esc gives up]\x1b[0m\r\n");
         refresh();
-        if (connect_out())
-            say("\x1b[2m[connected]\x1b[0m\r\n");
+        if (connect_out()) {
+            if (!T->t_serial)           /* a line says its own */
+                say("\x1b[2m[connected]\x1b[0m\r\n");
+        }
         else
             say("\x1b[2m[Return calls again]\x1b[0m\r\n");
         refresh();                      /* the screen waited with the call */
@@ -218,7 +221,7 @@ static BOOL mreporting;                 /* ReportMouse is on */
 BOOL mouse_to_host(UWORD q)
 {
     int sgr;
-    return !local && sock >= 0 && vt_mouse(vt, &sgr) &&
+    return !local && linked && vt_mouse(vt, &sgr) &&
            !(q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT));
 }
 
@@ -275,7 +278,7 @@ static void bar_pull(int y)
 
 void mouse_reporting(void)
 {
-    int sgr, mode = !local && sock >= 0 ? vt_mouse(vt, &sgr) : 0;
+    int sgr, mode = !local && linked ? vt_mouse(vt, &sgr) : 0;
     BOOL want = sel_drag || bardrag || mode == 1003 ||
                 (mode == 1002 && mbutton >= 0);
     if (want != mreporting && win) {
@@ -355,7 +358,7 @@ BOOL window_events(void)
         }
         case IDCMP_ACTIVEWINDOW:
         case IDCMP_INACTIVEWINDOW:
-            if (!local && sock >= 0 && vt_focus(vt))
+            if (!local && linked && vt_focus(vt))
                 send_data((UBYTE *)(copy.Class == IDCMP_ACTIVEWINDOW
                                         ? "\x1b[I" : "\x1b[O"), 3);
             break;

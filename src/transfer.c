@@ -2,7 +2,8 @@
  * transfer - file transfers in a host's tab, CTerm's side. It notices a
  * Zmodem or Hydra start in what the host sends (Ymodem and Xmodem the
  * person starts from the Transfer menu), then gives the protocol engine
- * (zmodem.c, xymodem.c, hydra.c) the connection - telnet or ssh - and
+ * (zmodem.c, xymodem.c, hydra.c) the connection - telnet, ssh or a
+ * serial line - and
  * AmigaDOS files. Downloads go to the tab's phone book drawer, else the
  * Files tab's, else PROGDIR:Downloads; uploads are chosen in a requester.
  *
@@ -214,6 +215,11 @@ static long x_get(void *u, unsigned char *b, long max, long ms)
             if (k != 0)
                 return k < 0 ? -1 : k;
         }
+        if (T->t_serial) {              /* the line's buffer, as it is */
+            k = serial_take(b, max);
+            if (k != 0)
+                return k;
+        }
         if (c->x.stop || T->ended || quitting)
             return 0;                   /* x_stop says why */
         now = ticks50();
@@ -221,10 +227,16 @@ static long x_get(void *u, unsigned char *b, long max, long ms)
             return 0;
         /* wait the way CTerm always does: the window and the other tabs
          * are served meanwhile */
-        ready = loop_round(sock, ms > 0 ? (LONG)(until - now) * 20 : 0);
+        ready = loop_round(T->t_serial ? -1 : sock,
+                           ms > 0 ? (LONG)(until - now) * 20 : 0);
         T = c->tab;
         if (c->x.stop || T->ended || quitting)
             return 0;
+        if (T->t_serial) {              /* serial_take above */
+            if (ms == 0)
+                return serial_take(b, max);
+            continue;
+        }
         if (!ready) {
             if (ms == 0)
                 return 0;
@@ -696,6 +708,19 @@ static void drain(struct XCtx *c)
     ULONG until = ticks50() + 150;
     UBYTE b[512];
     T = c->tab;
+    if (T->t_serial) {
+        ULONG quiet = ticks50() + 25;
+        while (ticks50() < until && ticks50() < quiet) {
+            LONG k = serial_take(b, sizeof b);
+            if (k < 0)
+                break;
+            if (k > 0)
+                quiet = ticks50() + 25;
+            else
+                Delay(2);
+        }
+        return;
+    }
     while (sock >= 0 && ticks50() < until) {
         fd_set rd;
         struct timeval tv;
@@ -785,7 +810,7 @@ void transfer_menu(int what)
         refresh();
         return;
     }
-    if (local || sock < 0) {
+    if (local || !linked) {
         say("\r\n\x1b[2m[transfers are with a host: call one first]\x1b[0m\r\n");
         refresh();
         return;
@@ -894,7 +919,7 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         return TRUE;
     }
     if (at > 0) {
-        if (sshmode) {
+        if (sshmode || T->t_serial) {
             log_bytes(buf, at);
             vt_write(vt, buf, at);
         } else
@@ -915,7 +940,7 @@ BOOL transfer_take(UBYTE *buf, LONG n)
     /* the start header and what followed it, telnet taken off */
     pre = buf + at;                     /* decoded where it lies */
     pn = n - at;
-    if (!sshmode)
+    if (!sshmode && !T->t_serial)
         pn = tel_decode(&c->tel, pre, pn);
     if (kind == 3) {
         const char *paths[NUP];
