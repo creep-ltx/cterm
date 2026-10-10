@@ -688,10 +688,41 @@ static void shows(struct XCtx *c)
     x_redraw(c, TRUE);
 }
 
+/* After a stop the sender's data already on its way still comes (500 KB
+ * a second over the relay): it is thrown away until the line has been
+ * quiet half a second, at most 3 s - not shown as screens of noise. */
+static void drain(struct XCtx *c)
+{
+    ULONG until = ticks50() + 150;
+    UBYTE b[512];
+    T = c->tab;
+    while (sock >= 0 && ticks50() < until) {
+        fd_set rd;
+        struct timeval tv;
+        if (sshmode) {
+            LONG k = ssh_read(T->ssh, b, sizeof b);
+            if (k < 0)
+                break;
+            if (k > 0)
+                continue;
+        }
+        FD_ZERO(&rd);
+        FD_SET(sock, &rd);
+        tv.tv_sec = 0;
+        tv.tv_usec = 500000;
+        if (WaitSelect(sock + 1, &rd, NULL, NULL, &tv, NULL) <= 0)
+            break;
+        if (!sshmode && recv(sock, b, sizeof b, 0) <= 0)
+            break;
+    }
+}
+
 /* How it ended, in the tab; the panel goes. */
 static void finish(struct XCtx *c, int got)
 {
     T = c->tab;
+    if (got < 0 && c->x.stop)
+        drain(c);
     T->t_xfer = NULL;
     if (got < 0)
         say(c->x.stop ? "\x1b[1;31m[transfer stopped]\x1b[0m\r\n"
@@ -705,7 +736,8 @@ static void finish(struct XCtx *c, int got)
         strcat(s, " KB]\x1b[0m\r\n");
         say(s);
     }
-    if (c->nrest) {                     /* the host's prompt, say */
+    if (c->nrest && got >= 0) {         /* the host's prompt, say (not a
+                                         * stopped one's protocol leftovers) */
         log_bytes(c->rest, c->nrest);
         vt_write(vt, c->rest, c->nrest);
     }

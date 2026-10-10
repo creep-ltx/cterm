@@ -820,8 +820,15 @@ BOOL loop_round(LONG xfd, LONG ms)
         struct timeval tv;
         tv.tv_sec = ms > 0 ? ms / 1000 : 0;
         tv.tv_usec = ms > 0 ? (ms % 1000) * 1000 : 0;
+        ULONG want = sigs;
         n = WaitSelect(maxfd + 1, &rd, NULL, NULL, ms >= 0 ? &tv : NULL,
                        &sigs);
+        /* a socket already readable returns at once without the signals
+         * (lwip-amiga, seen on the A1200): during a stream of host data
+         * the window was never served - Esc did not stop a transfer. The
+         * signals waiting are taken here as well. */
+        if (n > 0)
+            sigs |= SetSignal(0, want) & want;
     }
     if (xfd >= 0 && n > 0 && FD_ISSET(xfd, &rd))
         ready = TRUE;
