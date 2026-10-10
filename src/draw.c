@@ -33,7 +33,7 @@ static BOOL sel_span(int r, int *s0, int *s1);
 static void draw_cells(int r, int x0, int x1);
 static int area_right(void);
 static void paint_row(int r);
-static void backdrop_put(LONG x, LONG y, LONG w, LONG h);
+static BOOL backdrop_put(LONG x, LONG y, LONG w, LONG h);
 static void draw_span(int r, int a, int b);
 static void cursor_mark(int x, int y);
 static BOOL cache_alloc(void);
@@ -47,7 +47,7 @@ static void paint_row(int r);
 static APTR mksysi(ULONG which, int sysz);
 static void mkarrow(struct Gadget *g, APTR im, int le, int te, int id);
 static void __attribute__((noinline)) load_pic_(void);
-static void backdrop_put(LONG x, LONG y, LONG w, LONG h);
+static BOOL backdrop_put(LONG x, LONG y, LONG w, LONG h);
 static void forget_shown(void);
 
 const struct Theme themes[NTHEMES] = {
@@ -1375,8 +1375,14 @@ static void paint_row(int r)
     const VtCell *prev = NULL;
     ULONG pfg = 0, pbg = 0;
     struct CEntry *pe = NULL;
+    BOOL bk;
     if (r < 0 || r >= rows)
         return;
+    /* the picture under this row - all of it: a tiny window keeps at
+     * least 10x3 cells, which can reach past the window (and the
+     * backdrop); such a row goes without */
+    bk = backdrop && ox >= bkx && ox + rw <= bkx + bkw &&
+         oy + r * ch >= bky && oy + r * ch + ch <= bky + bkh;
     vt_cursor(vt, &cx, &cy, &vis);
     cshape = vt_cursor_shape(vt, &blink);
     if (!vis || back > 0)
@@ -1393,7 +1399,7 @@ static void paint_row(int r)
         if (blank) {
             if (r < (int)sizeof shown_blank && shown_blank[r])
                 return;
-            if (backdrop)
+            if (bk)
                 backdrop_put(ox, oy + r * ch, rw, ch);
             else {
                 apen(defbg);
@@ -1444,7 +1450,7 @@ static void paint_row(int r)
         if (x * cw + n > rw)
             n = rw - x * cw;
         dst = rowbuf + x * cw;
-        if (backdrop && bg == defbg) {
+        if (bk && bg == defbg) {
             /* over the picture: the cell as a mask (white on nothing),
              * its letter's colour mixed onto the backdrop by it */
             const ULONG *bk = backdrop + (oy + r * ch - bky) * bkw +
@@ -1616,9 +1622,7 @@ void update_knob(void)
     LONG total = vt_history(vt) + rows, top = vt_history(vt) - back;
     if (fullscreen && win) {
         int x0 = win->Width - POSBAR, y0 = oy, h = rows * ch, a, b;
-        if (backdrop)
-            backdrop_put(x0 - 1, y0, win->Width - x0 + 1, h);
-        else {
+        if (!backdrop_put(x0 - 1, y0, win->Width - x0 + 1, h)) {
             apen(defbg);
             RectFill(rp, x0 - 1, y0, win->Width - 1, y0 + h - 1);
         }
@@ -1874,13 +1878,14 @@ void backdrop_make(void)
 }
 
 /* The backdrop's piece at window x,y, w x h, onto the window. */
-static void backdrop_put(LONG x, LONG y, LONG w, LONG h)
+static BOOL backdrop_put(LONG x, LONG y, LONG w, LONG h)
 {
     if (!backdrop || x < bkx || y < bky || x + w > bkx + bkw ||
         y + h > bky + bkh)
-        return;
+        return FALSE;                   /* not all on the picture */
     WritePixelArray(backdrop, x - bkx, y - bky, bkw * 4, rp, x, y, w, h,
                     RECTFMT_ARGB);
+    return TRUE;
 }
 
 void redraw_all(void)
@@ -1890,9 +1895,7 @@ void redraw_all(void)
     forget_shown();
     rp_forget();
     planes_full();
-    if (backdrop)
-        backdrop_put(bkx, bky, bkw, bkh);
-    else {
+    if (!backdrop_put(bkx, bky, bkw, bkh)) {
         apen(defbg);
         RectFill(rp, win->BorderLeft, win->BorderTop,
                  win->Width - win->BorderRight - 1,
