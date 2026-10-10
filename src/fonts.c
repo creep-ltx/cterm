@@ -199,7 +199,11 @@ void tt_size(int d)
     ttsize += d;
     if (!load_tt()) {
         ttsize -= d;
-        load_tt();
+        /* not even the old size: the Amiga font, as ask_ttfont does */
+        if (!load_tt()) {
+            usett = FALSE;
+            load_font();
+        }
     }
     font_changed();
     save_prefs();
