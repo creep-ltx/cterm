@@ -34,6 +34,7 @@ static void bench_primitives(void)
     struct timeval a;
     int i, x1 = ox + cols * cw - 1, y1 = oy + rows * ch - 1;
     static UBYTE row[256];
+    int n = cols < (int)sizeof row ? cols : (int)sizeof row; /* the samples' */
     ULONG *argb = NULL;
     LONG w = cols * cw, h = ch;
     for (i = 0; i < (int)sizeof row; i++)
@@ -71,7 +72,7 @@ static void bench_primitives(void)
     term_now(&a);
     for (i = 0; i < 200; i++) {
         Move(rp, ox, oy + font->tf_Baseline);
-        Text(rp, (STRPTR)row, cols);
+        Text(rp, (STRPTR)row, n);
     }
     bench_line("Text, a row (Amiga font)", us_since(&a), 200);
 
@@ -83,7 +84,7 @@ static void bench_primitives(void)
         term_now(&a);
         for (i = 0; i < 200; i++) {
             Move(rp, ox, oy + cbase);
-            TT_Text(rp, (APTR)u, cols);
+            TT_Text(rp, (APTR)u, n);
         }
         bench_line("TT_Text, a row (TrueType)", us_since(&a), 200);
         SetDrMd(rp, JAM2);
