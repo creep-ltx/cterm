@@ -6,6 +6,13 @@ drops calls from the LAN, so the PC calls the Amiga). When CTerm answers,
 runs COMMAND in a pty and passes bytes both ways as telnet: CTerm tells
 the window size with NAWS, and the pty follows it.
 
+The relay gives a shell to whoever answers on that port, so it is careful
+about who that is: without --host it asks wasabi again where the Amiga is
+when no CTerm has answered for a minute (an address can pass to another
+machine), and it starts COMMAND only once the other end has spoken as
+CTerm does (IAC WILL NAWS). CTerm on its side lets in
+only this PC's address (ENVARC:CTerm/relay_from, asked the first time).
+
     cterm-relay.py [--host AMIGA] [--port 7478] [--once] [-- COMMAND ...]
 
 COMMAND defaults to the user's login shell. Standard library only.
@@ -53,6 +60,7 @@ class Telnet:
         self.opt_cmd = 0
         self.sb = bytearray()
         self.size = None                # (cols, rows) when CTerm says
+        self.cterm = False              # it offered NAWS, as CTerm does
 
     def start(self):
         # we will echo and suppress go-ahead (a "character mode" server),
@@ -85,6 +93,8 @@ class Telnet:
                 else:
                     self.state = 0
             elif self.state == 2:               # the option
+                if self.opt_cmd == WILL and b == NAWS:
+                    self.cterm = True           # we asked DO NAWS already
                 self.state = 0                  # nothing more to say
             elif self.state == 3:               # subnegotiation
                 if b == IAC:
@@ -108,16 +118,32 @@ def set_size(fd, cols, rows):
 
 
 def session(sock, command):
+    """Run COMMAND for CTerm on sock. False: it was not CTerm, or CTerm
+    did not let us in."""
     tn = Telnet(sock)
     tn.start()
-    # wait a moment for the size, so the program starts at the right one
-    sock.settimeout(1.5)
+    # CTerm first: it offers NAWS at once, or after its user has said yes
+    # to this PC (the first time); anything else gets no shell
+    sock.settimeout(60)
     first = b""
+    try:
+        while not tn.cterm:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return False            # refused, or not CTerm
+            first += tn.feed(chunk)
+    except socket.timeout:
+        log("no CTerm answered there")
+        return False
+    except OSError:
+        return False                    # refused, or not CTerm
+    # then wait a moment for the size, so the program starts at it
+    sock.settimeout(1.5)
     try:
         while tn.size is None:
             chunk = sock.recv(4096)
             if not chunk:
-                return
+                return False
             first += tn.feed(chunk)
     except socket.timeout:
         pass
@@ -172,6 +198,7 @@ def session(sock, command):
             pass
         os.close(fd)
         log("session ended")
+    return True
 
 
 def main():
@@ -189,6 +216,7 @@ def main():
     with open(pidfile, "w") as fh:
         fh.write(str(os.getpid()))
     host = a.host
+    misses = 0                          # knocks in a row with no CTerm
     log("cterm-relay, knocking on port %d" % a.port)
     while True:
         if not host:
@@ -197,20 +225,31 @@ def main():
                 time.sleep(30)
                 continue
             log("the Amiga is at", host)
+        ran = False
         try:
             sock = socket.create_connection((host, a.port), timeout=2)
         except OSError:
-            time.sleep(2)
-            continue
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        try:
-            session(sock, command)
-        except OSError as exc:
-            log("connection lost:", exc)
-        finally:
-            sock.close()
-        if a.once:
+            sock = None
+        if sock:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            try:
+                ran = session(sock, command)
+            except OSError as exc:
+                log("connection lost:", exc)
+                ran = True
+            finally:
+                sock.close()
+        if a.once and ran:
             return
+        misses = 0 if ran else misses + 1
+        # a minute of knocks with no CTerm: where is the Amiga now? (never
+        # with --host; if wasabi cannot say, the old address is kept)
+        if not a.host and misses >= 30:
+            misses = 0
+            now = find_amiga()
+            if now and now != host:
+                log("the Amiga is now at", now)
+                host = now
         time.sleep(2)
 
 
