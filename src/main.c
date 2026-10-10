@@ -5001,8 +5001,13 @@ static Object *page_keys(void)
     r_add(g, r_chooser(S_ALT, altlabels, !altmeta), "Alt key");
     r_put(p, g);
     g = r_group("Right Amiga + a letter: the phone book's login");
-    r_add(g, r_string(S_KUSER, userkey, 1, FALSE), "Send user name");
-    r_add(g, r_string(S_KPASS, passkey, 1, FALSE), "Send password");
+    /* MaxChars counts the closing zero: 2 for one letter */
+    if (g && r_string(S_KUSER, userkey, 2, FALSE))
+        SetAttrs(g, LAYOUT_AddChild, (ULONG)sg[S_KUSER], CHILD_MaxWidth, 40,
+                 CHILD_Label, (ULONG)r_label("Send user name"), TAG_END);
+    if (g && r_string(S_KPASS, passkey, 2, FALSE))
+        SetAttrs(g, LAYOUT_AddChild, (ULONG)sg[S_KPASS], CHILD_MaxWidth, 40,
+                 CHILD_Label, (ULONG)r_label("Send password"), TAG_END);
     r_put(p, g);
     return r_wrap(p);
 }
@@ -5184,8 +5189,10 @@ static void finish_settings_(int how)
         colours_changed();
         return;
     }
-    saved_utf8 = utf8;
-    saved_pc = pcmode;
+    if (!T->t_bookname[0]) {            /* a phone book tab's are its own */
+        saved_utf8 = utf8;
+        saved_pc = pcmode;
+    }
     if (pend_mode != scrmode || pend_full != fullscreen ||
         pend_bar != scrollbar ||
         (pend_mode == SCR_OWN && (pend_id != ownmode ||

@@ -158,8 +158,15 @@ void book_tidy(BookEntry *e)
     } else if (!strnicmp(h, "ssh://", 6)) {
         e->ssh = 1;
         memmove(h, h + 6, strlen(h + 6) + 1);
-    } else
+    } else {
+        /* host:port typed plainly (one colon: not an IPv6 address) */
+        if ((p = strchr(h, ':')) && !strchr(p + 1, ':') && p[1] >= '0' &&
+            p[1] <= '9') {
+            e->port = atoi(p + 1);
+            *p = 0;
+        }
         return;
+    }
     if ((p = strchr(h, '/')))           /* a path: nothing to call */
         *p = 0;
     if ((p = strchr(h, '@'))) {         /* user@ */
