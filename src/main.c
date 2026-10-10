@@ -54,6 +54,9 @@
 #include <gadgets/getfile.h>
 #include <gadgets/getfont.h>
 #include <gadgets/getscreenmode.h>
+#include <gadgets/listbrowser.h>
+#include <gadgets/string.h>
+#include <gadgets/integer.h>
 #include <images/label.h>
 #include <images/bevel.h>
 #include <reaction/reaction_macros.h>
@@ -67,6 +70,9 @@
 #include <proto/getfile.h>
 #include <proto/getfont.h>
 #include <proto/getscreenmode.h>
+#include <proto/listbrowser.h>
+#include <proto/string.h>
+#include <proto/integer.h>
 #include <proto/label.h>
 
 /* The ReAction macros (LayoutObject ... End) spread one NewObject call
@@ -97,11 +103,13 @@ __attribute__((noinline)) __stdargs ULONG RSetAttrs(APTR o, ULONG tag1, ...)
 
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 
 #include "vt.h"
 #include "boxtable.h"
 #include "console.h"
 #include "ssh.h"
+#include "book.h"
 #include "dbg.h"
 
 static const char version[] = "$VER: CTerm 0.3b1 (10.10.2026)";
@@ -143,6 +151,11 @@ struct Tab {
     int t_sa_r, t_sa_c, t_sb_r, t_sb_c;
     BOOL ended;                         /* its Shell or connection is over */
     void *ssh;                          /* its ssh connection */
+    char t_user[64], t_pass[64];        /* its phone book login */
+    char t_bookname[48];                /* its phone book name: the label */
+    BOOL t_passed;                      /* the password given to ssh once */
+    int t_letters;                      /* its letters: BL_* */
+    char t_down[160], t_up[160];        /* its drawers for files */
     BPTR t_log;                         /* Start log: everything that came */
 };
 
@@ -313,8 +326,11 @@ static char ttfile[160] = "SYS:Fonts/TrueType/DejaVuSansMono.ttf";
  * one true size and not smoothed. */
 static BOOL pcfont = TRUE;              /* the setting */
 static BOOL altmeta = TRUE;             /* Alt is Meta in a host's tab */
+static char userkey[2] = "U";           /* Right Amiga + it: send the name */
+static char passkey[2] = "P";           /* ... the password */
+static char dldir[160], uldir[160];     /* where files come, go from */
 static char pcttfile[160] = "PROGDIR:Fonts/PxPlus_IBM_VGA_8x16.ttf";
-static BOOL pcfont_on;                  /* it is the font now */
+static int fontover;                    /* worn for the tab: BL_* (0: none) */
 static BOOL ttaa = TRUE;                /* smoothing; off for pixel fonts */
 static struct { BOOL usett; char ttfile[160]; int ttsize; } keepfont;
 static int ttsize = 14;
@@ -1761,6 +1777,8 @@ static void tab_label(struct Tab *t, char *out)
 {
     if (t->t_local)
         strcpy(out, "Shell");
+    else if (t->t_bookname[0])
+        strcpy(out, t->t_bookname);
     else if (t->t_dialhost[0]) {
         strcpy(out, t->t_sshmode ? "ssh " : "");
         strncat(out, t->t_dialhost, 40);
@@ -2372,6 +2390,16 @@ static BOOL dial(void)
 static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
 {
     int n = 0;
+    if (!echo && T->t_pass[0] && !T->t_passed) {
+        /* the phone book's password, once: asked again, the person types */
+        T->t_passed = TRUE;
+        strncpy(buf, T->t_pass, max - 1);
+        buf[max - 1] = 0;
+        say(prompt);
+        say("(from the phone book)\r\n");
+        refresh();
+        return TRUE;
+    }
     say(prompt);
     refresh();
     for (;;) {
@@ -2662,7 +2690,7 @@ static void key(struct IntuiMessage *m)
 enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
        M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
-       M_LOG, M_LOGSTOP };
+       M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS };
 
 static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
@@ -2671,6 +2699,10 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Close tab", (STRPTR)"W", 0, 0, (APTR)M_CLOSETAB },
     {  NM_ITEM, (STRPTR)"Start log...", (STRPTR)"L", 0, 0, (APTR)M_LOG },
     {  NM_ITEM, (STRPTR)"Stop log", 0, 0, 0, (APTR)M_LOGSTOP },
+    {  NM_ITEM, (STRPTR)"Send user name", (STRPTR)"U", 0, 0,
+       (APTR)M_SENDUSER },
+    {  NM_ITEM, (STRPTR)"Send password", (STRPTR)"P", 0, 0,
+       (APTR)M_SENDPASS },
     {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
     {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
     {  NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
@@ -2704,6 +2736,8 @@ static struct NewMenu newmenu[] = {
 };
 
 static void call_dialog(void);
+static void send_login(BOOL pass);
+static void call_book(int i, BOOL newtab);
 static void open_settings(void);
 static void close_settings(void);
 static void settings_events(void);
@@ -2715,6 +2749,25 @@ static void log_start(void);
 static void log_stop(void);
 static void paste(void);
 static void clip_close(void);
+
+static void make_menus(void);
+
+/* The menus again: their keys changed. */
+static void remake_menus(void)
+{
+    if (!win)
+        return;
+    if (menu) {
+        ClearMenuStrip(win);
+        FreeMenus(menu);
+        menu = NULL;
+    }
+    if (visual) {
+        FreeVisualInfo(visual);
+        visual = NULL;
+    }
+    make_menus();
+}
 
 static void make_menus(void)
 {
@@ -2735,6 +2788,14 @@ static void make_menus(void)
         case M_BAR: on = scrollbar; break;
         case M_UTF8: on = utf8 && !pcmode; break;
         case M_PC: on = pcmode; break;
+        case M_SENDUSER:                /* their keys are the person's */
+            n->nm_CommKey = (STRPTR)(userkey[0] && userkey[0] != '-'
+                                     ? userkey : NULL);
+            continue;
+        case M_SENDPASS:
+            n->nm_CommKey = (STRPTR)(passkey[0] && passkey[0] != '-'
+                                     ? passkey : NULL);
+            continue;
         default: continue;
         }
         if (on) n->nm_Flags |= CHECKED;
@@ -2874,7 +2935,7 @@ static BOOL saved_pc;                   /* the setting; pcmode may be PC's */
 
 static void load_prefs(void)
 {
-    static char buf[1200];
+    static char buf[2400];
     char *p = buf;
     /* the whole file: without GVF_BINARY_VAR, GetVar stops at the first
      * line break (every setting after "truetype" was lost) */
@@ -2929,6 +2990,15 @@ static void load_prefs(void)
             else if (!stricmp(p, "pc")) pcmode = saved_pc = val[0] == '1';
             else if (!stricmp(p, "pcfont")) pcfont = val[0] != '0';
             else if (!stricmp(p, "altmeta")) altmeta = val[0] != '0';
+            else if (!stricmp(p, "keyuser")) userkey[0] = val[0];
+            else if (!stricmp(p, "keypass")) passkey[0] = val[0];
+            else if (!stricmp(p, "dldir")) {
+                strncpy(dldir, val, sizeof dldir - 1);
+                dldir[sizeof dldir - 1] = 0;
+            } else if (!stricmp(p, "uldir")) {
+                strncpy(uldir, val, sizeof uldir - 1);
+                uldir[sizeof uldir - 1] = 0;
+            }
             else if (!stricmp(p, "bgpic")) {
                 strncpy(bgfile, val, sizeof bgfile - 1);
                 bgfile[sizeof bgfile - 1] = 0;
@@ -2978,16 +3048,26 @@ static void save_prefs(void)
 {
     if (setwin)
         return;                         /* the settings window decides */
-    static char buf[1200];
+    static char buf[2400];
     buf[0] = 0;
     strcat(buf, "truetype=");
-    strcat(buf, (pcfont_on ? keepfont.usett : usett) ? "1" : "0");
+    strcat(buf, (fontover ? keepfont.usett : usett) ? "1" : "0");
     strcat(buf, "\nttfile=");
-    strcat(buf, pcfont_on ? keepfont.ttfile : ttfile);
+    strcat(buf, fontover ? keepfont.ttfile : ttfile);
     strcat(buf, "\nttsize=");
-    numstr_cat(buf, pcfont_on ? keepfont.ttsize : ttsize);
+    numstr_cat(buf, fontover ? keepfont.ttsize : ttsize);
     if (!pcfont) strcat(buf, "\npcfont=0");
     if (!altmeta) strcat(buf, "\naltmeta=0");
+    if (userkey[0] != 'U') {
+        strcat(buf, "\nkeyuser=");
+        strcat(buf, userkey[0] ? userkey : "-");
+    }
+    if (passkey[0] != 'P') {
+        strcat(buf, "\nkeypass=");
+        strcat(buf, passkey[0] ? passkey : "-");
+    }
+    if (dldir[0]) { strcat(buf, "\ndldir="); strcat(buf, dldir); }
+    if (uldir[0]) { strcat(buf, "\nuldir="); strcat(buf, uldir); }
     if (bgfile[0]) {
         strcat(buf, "\nbgpic="); strcat(buf, bgfile);
         strcat(buf, "\nbgsee="); numstr_cat(buf, bgsee);
@@ -3315,40 +3395,50 @@ static void tt_size(int d)
     save_prefs();
 }
 
-/* PC BBS mode wears the PC's font (when it is there and wanted), and
- * leaving it brings the person's own back. */
-static void pc_font(BOOL on)
+/* The letters a tab asks for: its phone book entry's, or the PC's font
+ * in PC BBS mode (when it is there and wanted), or CTerm's own. */
+static int tab_wish(void)
 {
-    if (on == pcfont_on)
+    int l = T->t_letters;
+    if (l == BL_PC || (l == BL_CTERM && pcmode && pcfont))
+        return BL_PC;
+    return l == BL_AMIGA || l == BL_TT ? l : BL_CTERM;
+}
+
+/* The tab's letters on (TRUE), or the person's own (FALSE: the settings
+ * window shows those); the person's are kept aside meanwhile. */
+static void tab_letters(BOOL tab)
+{
+    int want = tab ? tab_wish() : BL_CTERM;
+    if (want == fontover)
         return;
-    if (on) {
-        if (!pcfont || !TTEngineBase || !file_exists(pcttfile))
-            return;
-        keepfont.usett = usett;
-        strcpy(keepfont.ttfile, ttfile);
-        keepfont.ttsize = ttsize;
-        usett = TRUE;
-        strcpy(ttfile, pcttfile);
-        ttsize = 16;
-        ttaa = FALSE;
-        pcfont_on = TRUE;
-        if (!load_tt()) {
-            pcfont_on = FALSE;
-            on = FALSE;                 /* fall through: put it back */
-        }
-    }
-    if (!on) {
+    if (fontover) {                     /* the person's back first */
         usett = keepfont.usett;
         strcpy(ttfile, keepfont.ttfile);
         ttsize = keepfont.ttsize;
         ttaa = TRUE;
-        pcfont_on = FALSE;
-        if (usett && !load_tt())
-            usett = FALSE;
-        if (!usett) {
-            close_tt();
-            load_font();
+        fontover = BL_CTERM;
+    }
+    if ((want == BL_PC && (!TTEngineBase || !file_exists(pcttfile))) ||
+        (want == BL_TT && !TTEngineBase))
+        want = BL_CTERM;
+    if (want != BL_CTERM) {
+        keepfont.usett = usett;
+        strcpy(keepfont.ttfile, ttfile);
+        keepfont.ttsize = ttsize;
+        usett = want != BL_AMIGA;
+        if (want == BL_PC) {
+            strcpy(ttfile, pcttfile);
+            ttsize = 16;
+            ttaa = FALSE;               /* a pixel font, at its one size */
         }
+    }
+    fontover = want;
+    if (usett && !load_tt())
+        usett = FALSE;
+    if (!usett) {
+        close_tt();
+        load_font();
     }
     if (win)
         font_changed();
@@ -3556,6 +3646,8 @@ static BOOL menu_pick(ULONG id)
     case M_COPY: sel_copy(); break;
     case M_PASTE: paste(); break;
     case M_LOG: log_start(); break;
+    case M_SENDUSER: send_login(FALSE); break;
+    case M_SENDPASS: send_login(TRUE); break;
     case M_LOGSTOP: log_stop(); break;
     case M_ABOUT:
         say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
@@ -3589,7 +3681,7 @@ static BOOL menu_pick(ULONG id)
     case M_UTF8:
         utf8 = saved_utf8 = !utf8;
         pcmode = FALSE;
-        pc_font(FALSE);
+        tab_letters(TRUE);
         vt_set_utf8(vt, utf8);
         painter_forget();
         redraw_all();
@@ -3600,7 +3692,7 @@ static BOOL menu_pick(ULONG id)
             vt_set_cp437(vt, 1);
         else
             vt_set_utf8(vt, utf8);
-        pc_font(pcmode);
+        tab_letters(TRUE);
         painter_forget();
         redraw_all();
         break;
@@ -4042,6 +4134,92 @@ static void call_tab(const char *host, BOOL pc, BOOL ssh)
     refresh();
 }
 
+/* A tab as a phone book entry says: where, how, who, which letters. The
+ * emulator may not be there yet (CTerm's start): then only the flags. */
+static void tab_from_book(const BookEntry *e)
+{
+    local = FALSE;
+    book_target(e, dialhost, sizeof dialhost);
+    strcpy(dialtitle, "CTerm: ");
+    strncat(dialtitle, e->name[0] ? e->name : dialhost,
+            sizeof dialtitle - 10);
+    sshmode = e->ssh;
+    pcmode = e->chars == BC_PC;
+    utf8 = e->chars == BC_UTF8;
+    if (vt) {
+        if (pcmode)
+            vt_set_cp437(vt, 1);
+        else
+            vt_set_utf8(vt, utf8);
+    }
+    strcpy(T->t_user, e->user);
+    strcpy(T->t_pass, e->pass);
+    strcpy(T->t_bookname, e->name);
+    T->t_passed = FALSE;
+    T->t_letters = e->letters;
+    strcpy(T->t_down, e->down);
+    strcpy(T->t_up, e->up);
+}
+
+/* Another CTerm (or CTermSSH) for a phone book entry: BOOK "name". */
+static void call_start_book(const BookEntry *e)
+{
+    char cmd[400], path[256];
+    BPTR nil;
+#ifdef NO_SSH
+    own_path(path, sizeof path, e->ssh ? "CTermSSH" : NULL);
+#else
+    own_path(path, sizeof path, NULL);
+#endif
+    strcpy(cmd, "Run >NIL: \"");
+    strcat(cmd, path);
+    strcat(cmd, "\" BOOK \"");
+    strcat(cmd, e->name);
+    strcat(cmd, "\"");
+    nil = Open((STRPTR)"NIL:", MODE_NEWFILE);
+    if (SystemTags((STRPTR)cmd, SYS_Input, nil, SYS_Output, NULL,
+                   TAG_END) != 0 && nil)
+        Close(nil);
+}
+
+/* Call phone book entry i: in a new tab of this window when it can be. */
+static void call_book(int i, BOOL newtab)
+{
+    const BookEntry *e = &book[i];
+    struct Tab *t;
+#ifdef NO_SSH
+    if (e->ssh)
+        newtab = FALSE;                 /* ssh is CTermSSH's: a window */
+#endif
+    if (!newtab || !(t = tab_new())) {
+        call_start_book(e);
+        return;
+    }
+    T = t;
+    tab_from_book(e);
+    tab_show(ntabs - 1);
+    say("\x1b[2m[calling ");
+    say(e->name);
+    say("...]\x1b[0m\r\n");
+    refresh();
+    if (!connect_out())
+        say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+    refresh();
+}
+
+/* The phone book's login, typed to the host: the name or the password,
+ * and Return. */
+static void send_login(BOOL pass)
+{
+    const char *s = pass ? T->t_pass : T->t_user;
+    if (local || sock < 0 || !s[0]) {
+        DisplayBeep(scr);
+        return;
+    }
+    send_data((UBYTE *)s, strlen(s));
+    send_data((UBYTE *)"\r", 1);
+}
+
 static void call_dialog(void)
 {
     enum { G_HOST, G_PC, G_SSH, G_NEWTAB, G_LIST, G_CALL, G_CANCEL };
@@ -4052,13 +4230,21 @@ static void call_dialog(void)
     int th = ta->ta_YSize, n, W, H, x0, y, bw;
     BOOL pc = pcmode, ssh = FALSE, done = FALSE, go = FALSE;
     static BOOL newtab = TRUE;
-    char host[128];
+    char host[128], booked[136];
     ULONG dsig;
+    static struct Node booknode[BOOK_MAX];
+    int nb, pick = -1, i;
 
     n = calls_split();
     host[0] = 0;
     if (n)                              /* the last place, ready to call */
         call_parse(callname[0], host, &pc, &ssh);
+    /* the phone book first, then the recent calls */
+    nb = nbook;
+    for (i = nb - 1; i >= 0; i--) {
+        booknode[i].ln_Name = book[i].name;
+        AddHead(&calllist, &booknode[i]);
+    }
     x0 = scr->WBorLeft + 8 + TextLength(&scr->RastPort, (STRPTR)"Recent", 6) + 8;
     W = x0 + 300 + scr->WBorRight + 8;
     bw = 90;
@@ -4093,7 +4279,8 @@ static void call_dialog(void)
                                      TAG_END);
     y += th + 10;
     ng.ng_TopEdge = y; ng.ng_Width = 260; ng.ng_Height = (th + 2) * 5 + 4;
-    ng.ng_GadgetText = (STRPTR)"Recent"; ng.ng_Flags = PLACETEXT_LEFT;
+    ng.ng_GadgetText = (STRPTR)(nb ? "Book" : "Recent");
+    ng.ng_Flags = PLACETEXT_LEFT;
     ng.ng_GadgetID = G_LIST;
     g = gad[G_LIST] = CreateGadget(LISTVIEW_KIND, g, &ng, GTLV_Labels,
                                    (ULONG)&calllist, TAG_END);
@@ -4160,7 +4347,21 @@ static void call_dialog(void)
                     newtab = (src->Flags & GFLG_SELECTED) != 0;
                     break;
                 case G_LIST:
-                    if (code < n) {
+                    pick = -1;
+                    if (code < nb) {        /* a phone book entry */
+                        const BookEntry *e = &book[code];
+                        pick = code;
+                        book_target(e, host, sizeof host);
+                        strcpy(booked, host);
+                        pc = e->chars == BC_PC;
+                        ssh = e->ssh;
+                        GT_SetGadgetAttrs(gad[G_HOST], dw, NULL,
+                                          GTST_String, (ULONG)host, TAG_END);
+                        GT_SetGadgetAttrs(gad[G_PC], dw, NULL,
+                                          GTCB_Checked, pc, TAG_END);
+                        GT_SetGadgetAttrs(gad[G_SSH], dw, NULL,
+                                          GTCB_Checked, ssh, TAG_END);
+                    } else if ((code -= nb) < n) {
                         call_parse(callname[code], host, &pc, &ssh);
                         GT_SetGadgetAttrs(gad[G_HOST], dw, NULL,
                                           GTST_String, (ULONG)host, TAG_END);
@@ -4184,6 +4385,10 @@ static void call_dialog(void)
     }
     CloseWindow(dw);
     FreeGadgets(glist);
+    if (go && pick >= 0 && !strcmp(host, booked)) {
+        call_book(pick, newtab);        /* as the entry says, all of it */
+        return;
+    }
     if (go && host[0]) {
         char entry[136];
         strcpy(entry, ssh ? "ssh:" : "");
@@ -4214,21 +4419,29 @@ static void call_dialog(void)
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT, S_ALT, S_THEME, S_PART,
-       S_R, S_G, S_B, S_RESET, S_PIC, S_NOPIC, S_SEE, S_SAVE, S_USE,
-       S_CANCEL, S_N };
+       S_R, S_G, S_B, S_RESET, S_PIC, S_NOPIC, S_SEE, S_KUSER, S_KPASS,
+       S_BLIST, S_BNEW, S_BDEL, S_BNAME, S_BHOST, S_BPORT, S_BKIND, S_BUSER,
+       S_BPASS, S_BLET, S_BCHR, S_BDOWN, S_BUP, S_DLDIR, S_ULDIR,
+       S_SAVE, S_USE, S_CANCEL, S_N };
 
 /* OS 3.2's window classes: opened the first time the window opens. Given
  * a value, so libnix does not try to open them itself (by wrong names). */
 struct Library *WindowBase = NULL, *LayoutBase = NULL, *ClickTabBase = NULL,
     *ChooserBase = NULL, *CheckBoxBase = NULL, *SliderBase = NULL,
     *ButtonBase = NULL, *GetFileBase = NULL, *GetFontBase = NULL,
-    *GetScreenModeBase = NULL, *LabelBase = NULL;
+    *GetScreenModeBase = NULL, *LabelBase = NULL, *ListBrowserBase = NULL,
+    *StringBase = NULL, *IntegerBase = NULL;
 
 static Object *setobj, *sg[S_N];        /* the window object, its gadgets */
+static Object *setlayout;               /* its top layout */
 static struct List settabs;             /* the tabs' names */
 static struct TextAttr setfont;         /* what the font button shows */
 static int setpart;                     /* 0 the text, 1 the background */
 static int setpage;                     /* the tab last shown */
+static struct List booklist;            /* the phone book's names */
+static int bcur = -1;                   /* the entry shown: -1 none */
+static BookEntry *booksnap;             /* the book as it was: Cancel */
+static int nbooksnap;
 static int pend_mode, pend_depth;
 static ULONG pend_id;
 static LONG pend_w, pend_h;
@@ -4243,6 +4456,7 @@ static struct {                         /* what Cancel goes back to */
     BOOL ownfg, ownbg, usett, s_utf8, pc, pcfont, altmeta;
     ULONG myfg, mybg;
     char ttfile[160], fontname[48];
+    char userkey[2], passkey[2], dldir[160], uldir[160];
 } snap;
 
 static STRPTR wherelabels[] = { (STRPTR)"Workbench window",
@@ -4255,7 +4469,12 @@ static STRPTR partlabels[] = { (STRPTR)"Text", (STRPTR)"Background", NULL };
 static STRPTR altlabels[] = { (STRPTR)"Meta for hosts (bash, emacs)",
                               (STRPTR)"Amiga characters everywhere", NULL };
 static STRPTR tablabels[] = { (STRPTR)"Screen", (STRPTR)"Text",
-                              (STRPTR)"Colours", (STRPTR)"Keys", NULL };
+                              (STRPTR)"Colours", (STRPTR)"Keys",
+                              (STRPTR)"Phone book", (STRPTR)"Files", NULL };
+static STRPTR kindlabels[] = { (STRPTR)"telnet", (STRPTR)"ssh", NULL };
+static STRPTR booklettlabels[] = { (STRPTR)"CTerm's setting",
+                                   (STRPTR)"Amiga font", (STRPTR)"TrueType",
+                                   (STRPTR)"PC font (IBM VGA)", NULL };
 static STRPTR themelabels[NTHEMES + 1];
 
 static BOOL reaction_open(void)
@@ -4265,12 +4484,15 @@ static BOOL reaction_open(void)
         "gadgets/chooser.gadget", "gadgets/checkbox.gadget",
         "gadgets/slider.gadget", "gadgets/button.gadget",
         "gadgets/getfile.gadget", "gadgets/getfont.gadget",
-        "gadgets/getscreenmode.gadget", "images/label.image" };
+        "gadgets/getscreenmode.gadget", "images/label.image",
+        "gadgets/listbrowser.gadget", "gadgets/string.gadget",
+        "gadgets/integer.gadget" };
     struct Library **base[] = { &WindowBase, &LayoutBase, &ClickTabBase,
         &ChooserBase, &CheckBoxBase, &SliderBase, &ButtonBase, &GetFileBase,
-        &GetFontBase, &GetScreenModeBase, &LabelBase };
+        &GetFontBase, &GetScreenModeBase, &LabelBase, &ListBrowserBase,
+        &StringBase, &IntegerBase };
     int i;
-    for (i = 0; i < 11; i++)
+    for (i = 0; i < 14; i++)
         if (!*base[i] && !(*base[i] = OpenLibrary((STRPTR)name[i], 45)))
             return FALSE;
     return TRUE;
@@ -4280,9 +4502,10 @@ static void reaction_close(void)
 {
     struct Library **base[] = { &WindowBase, &LayoutBase, &ClickTabBase,
         &ChooserBase, &CheckBoxBase, &SliderBase, &ButtonBase, &GetFileBase,
-        &GetFontBase, &GetScreenModeBase, &LabelBase };
+        &GetFontBase, &GetScreenModeBase, &LabelBase, &ListBrowserBase,
+        &StringBase, &IntegerBase };
     int i;
-    for (i = 0; i < 11; i++)
+    for (i = 0; i < 14; i++)
         if (*base[i]) {
             CloseLibrary(*base[i]);
             *base[i] = NULL;
@@ -4341,6 +4564,20 @@ static Object *r_button(int id, const char *t)
         GA_Text, (ULONG)t, End;
 }
 
+static Object *r_string(int id, const char *t, int max, BOOL secret)
+{
+    return sg[id] = StringObject, GA_ID, id, GA_RelVerify, TRUE,
+        GA_TabCycle, TRUE, STRINGA_TextVal, (ULONG)t, STRINGA_MaxChars, max,
+        secret ? STRINGA_HookType : TAG_IGNORE, SHK_PASSWORD, End;
+}
+
+static Object *r_drawer(int id, const char *path, const char *title)
+{
+    return sg[id] = GetFileObject, GA_ID, id, GA_RelVerify, TRUE,
+        GETFILE_Drawer, (ULONG)path, GETFILE_DrawersOnly, TRUE,
+        GETFILE_ReadOnly, TRUE, GETFILE_TitleText, (ULONG)title, End;
+}
+
 static Object *r_group(const char *title)
 {
     return VLayoutObject, LAYOUT_BevelStyle, BVS_GROUP,
@@ -4349,7 +4586,8 @@ static Object *r_group(const char *title)
 
 static Object *r_page(void)
 {
-    return VLayoutObject, LAYOUT_SpaceOuter, TRUE, End;
+    return VLayoutObject, LAYOUT_SpaceOuter, TRUE,
+        LAYOUT_VertAlignment, LALIGN_TOP, End;
 }
 
 /* A child into a layout, with its label on the left (or none). */
@@ -4359,6 +4597,25 @@ static void r_add(Object *g, Object *child, const char *lab)
         SetAttrs(g, LAYOUT_AddChild, (ULONG)child,
                  lab ? CHILD_Label : TAG_IGNORE, lab ? (ULONG)r_label(lab) : 0,
                  TAG_END);
+}
+
+/* A group onto a page: as tall as it needs, the rest stays empty below. */
+static void r_put(Object *page, Object *g)
+{
+    if (page && g)
+        SetAttrs(page, LAYOUT_AddChild, (ULONG)g, CHILD_WeightedHeight, 0,
+                 TAG_END);
+}
+
+/* A page whole: its groups kept together at the top, not spread out
+ * over the height the tallest page gives every page. */
+static Object *r_wrap(Object *p)
+{
+    Object *o = VLayoutObject, LAYOUT_VertAlignment, LALIGN_TOP, End;
+    if (o && p)
+        SetAttrs(o, LAYOUT_AddChild, (ULONG)p, CHILD_WeightedHeight, 0,
+                 TAG_END);
+    return o;
 }
 
 static void r_disable(int id, BOOL off)
@@ -4393,7 +4650,7 @@ static void set_chars(int k)
 {
     pcmode = k == 2;
     utf8 = k == 0;
-    pc_font(pcmode);
+    tab_letters(TRUE);
     if (pcmode)
         vt_set_cp437(vt, 1);
     else
@@ -4451,6 +4708,169 @@ static void picture_changed(void)
     set_attr(S_PIC, GETFILE_FullFile, (ULONG)bgfile);
 }
 
+/* ---- the phone book page ---- */
+
+static void booklist_free(void)
+{
+    struct Node *n;
+    if (booklist.lh_Head)
+        while ((n = RemHead(&booklist)))
+            FreeListBrowserNode(n);
+}
+
+static void booklist_make(void)
+{
+    int i;
+    NewList(&booklist);
+    for (i = 0; i < nbook; i++) {
+        struct Node *n = AllocListBrowserNode(1, LBNCA_CopyText, TRUE,
+            LBNCA_Text, (ULONG)(book[i].name[0] ? book[i].name : "?"),
+            TAG_END);
+        if (n)
+            AddTail(&booklist, n);
+    }
+}
+
+/* The list again (a name changed, an entry came or went). */
+static void booklist_again(void)
+{
+    set_attr(S_BLIST, LISTBROWSER_Labels, ~0UL);   /* let go of it */
+    booklist_free();
+    booklist_make();
+    set_attr(S_BLIST, LISTBROWSER_Labels, (ULONG)&booklist);
+    set_attr(S_BLIST, LISTBROWSER_Selected, (ULONG)bcur);
+}
+
+/* What is typed in the fields, into the entry shown. */
+static void book_read(void)
+{
+    BookEntry *e;
+    const char *t;
+    if (bcur < 0 || bcur >= nbook || !setobj)
+        return;
+    e = &book[bcur];
+#define TXT(id, f) if ((t = (const char *)get_attr(id, STRINGA_TextVal))) { \
+        strncpy(f, t, sizeof f - 1); f[sizeof f - 1] = 0; }
+    TXT(S_BNAME, e->name);
+    TXT(S_BHOST, e->host);
+    TXT(S_BUSER, e->user);
+    TXT(S_BPASS, e->pass);
+#undef TXT
+    if ((t = (const char *)get_attr(S_BDOWN, GETFILE_Drawer))) {
+        strncpy(e->down, t, sizeof e->down - 1);
+        e->down[sizeof e->down - 1] = 0;
+    }
+    if ((t = (const char *)get_attr(S_BUP, GETFILE_Drawer))) {
+        strncpy(e->up, t, sizeof e->up - 1);
+        e->up[sizeof e->up - 1] = 0;
+    }
+    e->port = get_attr(S_BPORT, INTEGER_Number);
+    e->ssh = get_attr(S_BKIND, CHOOSER_Selected);
+    e->letters = get_attr(S_BLET, CHOOSER_Selected);
+    e->chars = get_attr(S_BCHR, CHOOSER_Selected);
+    book_tidy(e);
+}
+
+/* The entry shown, into the fields (none: empty and asleep). */
+static void book_show(void)
+{
+    static BookEntry none;
+    const BookEntry *e = bcur >= 0 && bcur < nbook ? &book[bcur] : &none;
+    static const int ids[] = { S_BNAME, S_BHOST, S_BPORT, S_BKIND, S_BUSER,
+        S_BPASS, S_BLET, S_BCHR, S_BDOWN, S_BUP, S_BDEL };
+    int i;
+    set_attr(S_BNAME, STRINGA_TextVal, (ULONG)e->name);
+    set_attr(S_BHOST, STRINGA_TextVal, (ULONG)e->host);
+    set_attr(S_BPORT, INTEGER_Number, e->port);
+    set_attr(S_BKIND, CHOOSER_Selected, e->ssh);
+    set_attr(S_BUSER, STRINGA_TextVal, (ULONG)e->user);
+    set_attr(S_BPASS, STRINGA_TextVal, (ULONG)e->pass);
+    set_attr(S_BLET, CHOOSER_Selected, e->letters);
+    set_attr(S_BCHR, CHOOSER_Selected, e->chars);
+    set_attr(S_BDOWN, GETFILE_Drawer, (ULONG)e->down);
+    set_attr(S_BUP, GETFILE_Drawer, (ULONG)e->up);
+    for (i = 0; i < (int)(sizeof ids / sizeof ids[0]); i++)
+        set_attr(ids[i], GA_Disabled, e == &none);
+}
+
+static Object *page_book(void)
+{
+    Object *h, *o, *top, *c1, *c2, *p = r_page(), *g;
+    const BookEntry *e = bcur >= 0 && bcur < nbook ? &book[bcur] : NULL;
+    static BookEntry none;
+    if (!e)
+        e = &none;
+    /* the list on the left, the entry on the right: short enough for a
+     * 256-line screen */
+    top = HLayoutObject, End;
+    g = r_group("Places");
+    booklist_make();
+    o = sg[S_BLIST] = ListBrowserObject, GA_ID, S_BLIST, GA_RelVerify, TRUE,
+        LISTBROWSER_Labels, (ULONG)&booklist, LISTBROWSER_ShowSelected, TRUE,
+        LISTBROWSER_Selected, (ULONG)bcur, End;
+    if (o)
+        SetAttrs(g, LAYOUT_AddChild, (ULONG)o, CHILD_MinWidth, 110,
+                 CHILD_MinHeight, 48, TAG_END);
+    h = HLayoutObject, LAYOUT_EvenSize, TRUE, End;
+    r_add(h, r_button(S_BNEW, "New"), NULL);
+    r_add(h, r_button(S_BDEL, "Delete"), NULL);
+    if (h)
+        SetAttrs(g, LAYOUT_AddChild, (ULONG)h, CHILD_WeightedHeight, 0,
+                 TAG_END);
+    if (top && g)
+        SetAttrs(top, LAYOUT_AddChild, (ULONG)g, CHILD_WeightedWidth, 35,
+                 TAG_END);
+    g = r_group("The place");
+    c1 = VLayoutObject, End;
+    c2 = VLayoutObject, End;
+    r_add(c1, r_string(S_BNAME, e->name, sizeof e->name - 1, FALSE), "Name");
+    r_add(c1, r_string(S_BHOST, e->host, sizeof e->host - 1, FALSE),
+          "Address");
+    r_add(c1, sg[S_BPORT] = IntegerObject, GA_ID, S_BPORT, GA_RelVerify,
+          TRUE, GA_TabCycle, TRUE, INTEGER_Number, e->port, INTEGER_Minimum,
+          0, INTEGER_Maximum, 65535, INTEGER_Arrows, FALSE, End, "Port");
+    r_add(c1, r_chooser(S_BKIND, kindlabels, e->ssh), "Connection");
+    r_add(c2, r_string(S_BUSER, e->user, sizeof e->user - 1, FALSE),
+          "User");
+    r_add(c2, r_string(S_BPASS, e->pass, sizeof e->pass - 1, TRUE),
+          "Password");
+    r_add(c2, r_chooser(S_BLET, booklettlabels, e->letters), "Letters");
+    r_add(c2, r_chooser(S_BCHR, charlabels, e->chars), "Characters");
+    h = HLayoutObject, End;
+    r_add(h, c1, NULL);
+    r_add(h, c2, NULL);
+    r_add(g, h, NULL);
+    if (top && g)
+        SetAttrs(top, LAYOUT_AddChild, (ULONG)g, CHILD_WeightedWidth, 65,
+                 TAG_END);
+    r_put(p, top);
+    g = r_group("This place's files (empty: the Files tab's)");
+    h = HLayoutObject, End;
+    r_add(h, r_drawer(S_BDOWN, e->down, "Downloads go to"), "Downloads");
+    r_add(h, r_drawer(S_BUP, e->up, "Uploads come from"), "Uploads");
+    r_add(g, h, NULL);
+    r_put(p, g);
+    if (e == &none) {
+        static const int ids[] = { S_BNAME, S_BHOST, S_BPORT, S_BKIND,
+            S_BUSER, S_BPASS, S_BLET, S_BCHR, S_BDOWN, S_BUP, S_BDEL };
+        int i;
+        for (i = 0; i < (int)(sizeof ids / sizeof ids[0]); i++)
+            r_disable(ids[i], TRUE);
+    }
+    return r_wrap(p);
+}
+
+static Object *page_files(void)
+{
+    Object *p = r_page(), *g = r_group("Files to and from hosts");
+    r_add(g, r_drawer(S_DLDIR, dldir, "Downloads go to"), "Downloads");
+    r_add(g, r_drawer(S_ULDIR, uldir, "Uploads come from"), "Uploads");
+    r_put(p, g);
+    g = r_group("A phone book entry's own drawers come first");
+    r_put(p, g);
+    return r_wrap(p);
+}
+
 static void close_settings(void)
 {
     struct Node *n;
@@ -4465,6 +4885,7 @@ static void close_settings(void)
     if (settabs.lh_Head)
         while ((n = RemHead(&settabs)))
             FreeClickTabNode(n);
+    booklist_free();
 }
 
 static Object *page_screen(void)
@@ -4509,11 +4930,11 @@ static Object *page_screen(void)
     r_add(g, r_check(S_FULL, "Full screen", pend_full), NULL);
     r_disable(S_MODE, pend_mode == SCR_WB);
     r_disable(S_FULL, pend_mode == SCR_WB);
-    r_add(p, g, NULL);
+    r_put(p, g);
     g = r_group("The window");
     r_add(g, r_check(S_BAR, "Scroll bar", pend_bar), NULL);
-    r_add(p, g, NULL);
-    return p;
+    r_put(p, g);
+    return r_wrap(p);
 }
 
 static Object *page_text(void)
@@ -4535,13 +4956,13 @@ static Object *page_text(void)
     r_add(g, r_slider(S_TTSIZE, 6, 40, ttsize, "%ld"), "TrueType size");
     r_disable(S_TTSIZE, !usett);
     r_add(g, r_slider(S_SPACE, 0, 8, linespace, "%ld"), "Line spacing");
-    r_add(p, g, NULL);
+    r_put(p, g);
     g = r_group("Characters");
     r_add(g, r_chooser(S_CHARS, charlabels, chars_now()), "Characters");
     r_add(g, r_check(S_PCFONT, "The IBM VGA font in PC BBS mode", pcfont),
           NULL);
-    r_add(p, g, NULL);
-    return p;
+    r_put(p, g);
+    return r_wrap(p);
 }
 
 static Object *page_colours(void)
@@ -4554,7 +4975,7 @@ static Object *page_colours(void)
     r_add(g, r_slider(S_G, 0, 255, (c >> 8) & 255, "%3ld"), "Green");
     r_add(g, r_slider(S_B, 0, 255, c & 255, "%3ld"), "Blue");
     r_add(g, r_button(S_RESET, "Back to the theme's colours"), NULL);
-    r_add(p, g, NULL);
+    r_put(p, g);
     g = r_group(painter ? "A picture behind the text"
                         : "A picture (needs 16 or more bits of colour)");
     h = HLayoutObject, End;
@@ -4570,16 +4991,20 @@ static Object *page_colours(void)
     r_disable(S_PIC, !painter);
     r_disable(S_NOPIC, !painter);
     r_disable(S_SEE, !painter);
-    r_add(p, g, NULL);
-    return p;
+    r_put(p, g);
+    return r_wrap(p);
 }
 
 static Object *page_keys(void)
 {
     Object *p = r_page(), *g = r_group("Keys");
     r_add(g, r_chooser(S_ALT, altlabels, !altmeta), "Alt key");
-    r_add(p, g, NULL);
-    return p;
+    r_put(p, g);
+    g = r_group("Right Amiga + a letter: the phone book's login");
+    r_add(g, r_string(S_KUSER, userkey, 1, FALSE), "Send user name");
+    r_add(g, r_string(S_KPASS, passkey, 1, FALSE), "Send password");
+    r_put(p, g);
+    return r_wrap(p);
 }
 
 static void open_settings(void)
@@ -4599,7 +5024,7 @@ static void open_settings(void)
         themelabels[i] = (STRPTR)themes[i].name;
     themelabels[NTHEMES] = NULL;
 
-    pc_font(FALSE);                     /* the controls show the person's */
+    tab_letters(FALSE);                     /* the controls show the person's */
     snap.pcfont = pcfont;
     snap.altmeta = altmeta;
     snap.theme = theme;
@@ -4613,6 +5038,20 @@ static void open_settings(void)
     snap.s_utf8 = utf8; snap.pc = pcmode;
     snap.bgsee = bgsee;
     strcpy(snap.bgfile, bgfile);
+    strcpy(snap.userkey, userkey);
+    strcpy(snap.passkey, passkey);
+    strcpy(snap.dldir, dldir);
+    strcpy(snap.uldir, uldir);
+    if (booksnap)
+        FreeVec(booksnap);
+    booksnap = AllocVec(sizeof book, MEMF_ANY);
+    if (booksnap)
+        memcpy(booksnap, book, sizeof book);
+    nbooksnap = nbook;
+    if (bcur >= nbook)
+        bcur = nbook - 1;
+    if (bcur < 0 && nbook)
+        bcur = 0;
     pend_mode = scrmode;
     pend_depth = owndepth;
     pend_id = ownmode;
@@ -4630,17 +5069,31 @@ static void open_settings(void)
     }
     pages = PageObject, PAGE_Add, (ULONG)page_screen(),
         PAGE_Add, (ULONG)page_text(), PAGE_Add, (ULONG)page_colours(),
-        PAGE_Add, (ULONG)page_keys(), PAGE_Current, setpage, End;
+        PAGE_Add, (ULONG)page_keys(), PAGE_Add, (ULONG)page_book(),
+        PAGE_Add, (ULONG)page_files(), PAGE_Current, setpage, End;
     buttons = HLayoutObject, LAYOUT_EvenSize, TRUE, End;
     r_add(buttons, r_button(S_SAVE, "_Save"), NULL);
     r_add(buttons, r_button(S_USE, "_Use"), NULL);
     r_add(buttons, r_button(S_CANCEL, "_Cancel"), NULL);
-    root = VLayoutObject, LAYOUT_SpaceOuter, TRUE, LAYOUT_DeferLayout, TRUE,
-        End;
+    root = setlayout = VLayoutObject, LAYOUT_SpaceOuter, TRUE,
+        LAYOUT_DeferLayout, TRUE, End;
     sg[S_TABS] = ClickTabObject, GA_ID, S_TABS, CLICKTAB_Labels,
         (ULONG)&settabs, CLICKTAB_Current, setpage,
         CLICKTAB_PageGroup, (ULONG)pages, End;
-    r_add(root, sg[S_TABS], NULL);
+    if (root && sg[S_TABS]) {
+        /* wide enough for every tab's name and the phone book's two
+         * columns (the pages don't all say how wide they need) */
+        int w = 40;
+        for (i = 0; tablabels[i]; i++)
+            w += TextLength(&scr->RastPort, tablabels[i],
+                            strlen((char *)tablabels[i])) + 24;
+        if (w < 32 * scr->RastPort.TxWidth + 300)
+            w = 32 * scr->RastPort.TxWidth + 300;
+        if (w > scr->Width - 24)
+            w = scr->Width - 24;
+        SetAttrs(root, LAYOUT_AddChild, (ULONG)sg[S_TABS],
+                 CHILD_MinWidth, w, TAG_END);
+    }
     if (root && buttons)
         SetAttrs(root, LAYOUT_AddChild, (ULONG)buttons,
                  CHILD_WeightedHeight, 0, TAG_END);
@@ -4672,13 +5125,33 @@ static void finish_settings_(int how);
 static void finish_settings(int how)
 {
     finish_settings_(how);
-    pc_font(pcmode);                    /* PC BBS mode wears the PC's */
+    tab_letters(TRUE);                    /* PC BBS mode wears the PC's */
 }
 
 static void finish_settings_(int how)
 {
+    const char *t;
+    book_read();                        /* what is typed, before it goes */
+    if (how != 3) {
+        if ((t = (const char *)get_attr(S_KUSER, STRINGA_TextVal)))
+            userkey[0] = toupper((UBYTE)t[0]);
+        if ((t = (const char *)get_attr(S_KPASS, STRINGA_TextVal)))
+            passkey[0] = toupper((UBYTE)t[0]);
+        if ((t = (const char *)get_attr(S_DLDIR, GETFILE_Drawer))) {
+            strncpy(dldir, t, sizeof dldir - 1);
+            dldir[sizeof dldir - 1] = 0;
+        }
+        if ((t = (const char *)get_attr(S_ULDIR, GETFILE_Drawer))) {
+            strncpy(uldir, t, sizeof uldir - 1);
+            uldir[sizeof uldir - 1] = 0;
+        }
+    }
     close_settings();
     if (how == 3) {
+        if (booksnap) {                 /* the book as it was */
+            memcpy(book, booksnap, sizeof book);
+            nbook = nbooksnap;
+        }
         BOOL letters = snap.usett != usett || snap.ttsize != ttsize ||
                        strcmp(snap.ttfile, ttfile) ||
                        strcmp(snap.fontname, fontname) ||
@@ -4740,6 +5213,8 @@ static void finish_settings_(int how)
     envonly = used_only;
     save_prefs();
     envonly = FALSE;
+    book_save();                        /* the book is kept either way */
+    remake_menus();                     /* the login keys */
 }
 
 /* One control was used: 1 Use, 2 Save, 3 Cancel, 0 stay open. */
@@ -4826,7 +5301,7 @@ static int settings_gadget(int id)
         break;
     case S_CHARS:
         set_chars(get_attr(S_CHARS, CHOOSER_Selected));
-        pc_font(FALSE);                 /* shown on closing */
+        tab_letters(FALSE);                 /* shown on closing */
         break;
     case S_PCFONT: pcfont = get_attr(S_PCFONT, GA_Selected) != 0; break;
     case S_ALT: altmeta = get_attr(S_ALT, CHOOSER_Selected) == 0; break;
@@ -4881,6 +5356,48 @@ static int settings_gadget(int id)
             backdrop_make();
             redraw_all();
         }
+        break;
+    case S_BLIST:
+        v = get_attr(S_BLIST, LISTBROWSER_Selected);
+        if ((int)v != bcur) {
+            book_read();
+            bcur = (LONG)v < nbook ? (int)(LONG)v : -1;
+            booklist_again();
+            book_show();
+        }
+        break;
+    case S_BNEW:
+        book_read();
+        if (nbook < BOOK_MAX) {
+            book_blank(&book[nbook], "New place");
+            bcur = nbook++;
+            booklist_again();
+            book_show();
+            ActivateLayoutGadget((struct Gadget *)setlayout, setwin, NULL,
+                                 (ULONG)sg[S_BNAME]);
+        }
+        break;
+    case S_BDEL:
+        if (bcur >= 0 && bcur < nbook) {
+            memmove(&book[bcur], &book[bcur + 1],
+                    (nbook - bcur - 1) * sizeof book[0]);
+            nbook--;
+            if (bcur >= nbook)
+                bcur = nbook - 1;
+            booklist_again();
+            book_show();
+        }
+        break;
+    case S_BNAME:
+        book_read();
+        booklist_again();               /* its name in the list */
+        break;
+    case S_BHOST:
+        book_read();
+        book_show();                    /* a URL taken apart */
+        break;
+    case S_BDOWN: case S_BUP: case S_DLDIR: case S_ULDIR:
+        DoMethod(sg[id], GFILE_REQUEST, (ULONG)setwin);
         break;
     case S_SAVE: return 2;
     case S_USE: return 1;
@@ -5216,7 +5733,10 @@ static void title_update(void)
     if (!changed || !win)
         return;
     strcpy(title, "CTerm");
-    if (dialhost[0]) {
+    if (T->t_bookname[0]) {
+        strcat(title, ": ");
+        strcat(title, T->t_bookname);
+    } else if (dialhost[0]) {
         strcat(title, sshmode ? ": ssh " : ": ");
         strcat(title, dialhost);
     }
@@ -5307,7 +5827,7 @@ static void tab_show(int i)
     if (i < 0 || i >= ntabs)
         return;
     shown = T = tabs[i];
-    pc_font(pcmode);
+    tab_letters(TRUE);
     if (bar != (tabbar_h() > 0) || TRUE) {
         layout_and_resize();
         painter_forget();
@@ -5613,17 +6133,51 @@ static void run(void)
 }
 
 static BOOL arg_pc, arg_latin1;
+static int arg_book = -1;
 
+static int cterm_main(int argc, char **argv);
+static int m_argc, m_rc;
+static char **m_argv;
+
+static void __attribute__((noinline)) cterm_main_(void)
+{
+    m_rc = cterm_main(m_argc, m_argv);
+}
+
+/* OS 3.2's window classes and the rest want a deep stack, and a Shell's
+ * or an icon's may be 4 KB (it crashed the emulator, 2026-10-10): below
+ * 64 KB CTerm moves to a 128 KB one of its own. libnix's __stack does
+ * not (Knowledge/amiga/kickstart-13-porting.md). */
 int main(int argc, char **argv)
+{
+    struct Task *me = FindTask(NULL);
+    LONG have = (char *)me->tc_SPUpper - (char *)me->tc_SPLower;
+    static struct StackSwapStruct sss;
+    UBYTE *stk;
+    m_argc = argc;
+    m_argv = argv;
+    if (have >= 65536 || !(stk = AllocVec(131072, MEMF_ANY)))
+        return cterm_main(argc, argv);
+    sss.stk_Lower = stk;
+    sss.stk_Upper = (ULONG)(stk + 131072);
+    sss.stk_Pointer = (APTR)(stk + 131072);
+    StackSwap(&sss);
+    cterm_main_();
+    StackSwap(&sss);
+    FreeVec(stk);
+    return m_rc;
+}
+
+static int cterm_main(int argc, char **argv)
 {
     tab0.t_utf8 = TRUE;
     int rc = RETURN_OK;
     (void)version;
     (void)argv;
     if (argc > 0) {
-        LONG args[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        LONG args[11] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
         struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,"
-                                      "FROM/K,HOST/K,PC/S,SSH/K,KEY/K",
+                                      "FROM/K,HOST/K,PC/S,SSH/K,KEY/K,BOOK/K",
                                       args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
@@ -5659,6 +6213,19 @@ int main(int argc, char **argv)
         }
         if (args[9])
             ssh_set_key((char *)args[9]);
+        if (args[10]) {                 /* a phone book entry to call */
+            book_load();
+            arg_book = book_find((char *)args[10]);
+            if (arg_book < 0) {
+                Printf((STRPTR)"CTerm: no \"%s\" in the phone book\n",
+                       args[10]);
+                FreeArgs(rda);
+                return RETURN_FAIL;
+            }
+            tab_from_book(&book[arg_book]);
+            remember = FALSE;
+            if (!args[3]) want_cols = 80;
+        }
         FreeArgs(rda);
     }
 #ifdef NO_SSH
@@ -5703,6 +6270,10 @@ int main(int argc, char **argv)
         pcmode = TRUE;
     if (arg_latin1)
         utf8 = FALSE;
+    if (arg_book >= 0)                  /* the prefs set these: again */
+        tab_from_book(&book[arg_book]);
+    else
+        book_load();
     /* first start: TrueType if it is installed (DejaVu Sans Mono) */
     if (!hadprefs)
         usett = TTEngineBase && file_exists(ttfile);
@@ -5729,7 +6300,7 @@ int main(int argc, char **argv)
         rc = RETURN_FAIL;
     } else {
         if (pcmode)
-            pc_font(TRUE);
+            tab_letters(TRUE);
         run();
     }
     if (win) {
