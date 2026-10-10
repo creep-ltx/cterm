@@ -33,6 +33,116 @@ static void call_start_book(const BookEntry *e);
 LONG port = DEFAULT_PORT;
 BOOL saved_utf8 = TRUE;          /* the setting; utf8 may be LATIN1's */
 
+#define NB_FIONBIO 0x8004667EUL         /* _IOW('f', 126, long): not in
+                                         * this toolchain's headers */
+#define NET_SECS   30                   /* a host silent this long is gone */
+
+/* Esc or the close gadget, while a call waits: give up. Other messages
+ * are answered (a damaged window is drawn again) but not acted on. */
+static BOOL user_gives_up(void)
+{
+    struct IntuiMessage *m;
+    BOOL out = FALSE;
+    while (win && (m = (struct IntuiMessage *)GetMsg(win->UserPort))) {
+        ULONG cl = m->Class;
+        UWORD code = m->Code;
+        if (cl == IDCMP_REFRESHWINDOW) {
+            BeginRefresh(win);
+            EndRefresh(win, TRUE);
+        }
+        ReplyMsg((struct Message *)m);
+        if (cl == IDCMP_CLOSEWINDOW || (cl == IDCMP_RAWKEY && code == 0x45))
+            out = TRUE;
+        else if (cl == IDCMP_REFRESHWINDOW)
+            redraw_all();
+    }
+    return out;
+}
+
+int net_wait(LONG fd, int rd, int wr, LONG secs)
+{
+    struct timeval t0, now;
+    LONG idle = 0;
+    term_now(&t0);
+    for (;;) {
+        fd_set r, w;
+        struct timeval tv;
+        ULONG wsig = win ? 1UL << win->UserPort->mp_SigBit : 0;
+        ULONG sigs = wsig | shells_sigmask() | SIGBREAKF_CTRL_C;
+        LONG n;
+        FD_ZERO(&r);
+        FD_ZERO(&w);
+        if (rd)
+            FD_SET(fd, &r);
+        if (wr)
+            FD_SET(fd, &w);
+        tv.tv_sec = 1;                  /* look at the clock each second */
+        tv.tv_usec = 0;
+        n = WaitSelect(fd + 1, rd ? &r : NULL, wr ? &w : NULL, NULL, &tv,
+                       &sigs);
+        if (n > 0) {
+            if (sigs)                   /* not ours: back for the main loop */
+                SetSignal(sigs, sigs);
+            return 1;
+        }
+        if (n < 0 || (sigs & SIGBREAKF_CTRL_C))
+            return -1;
+        if (sigs & ~(wsig | SIGBREAKF_CTRL_C))
+            shells_handle(sigs);        /* the other tabs go on */
+        if ((sigs & wsig) && user_gives_up())
+            return -1;
+        if (n == 0 && !sigs)
+            idle++;
+        term_now(&now);
+        /* no timer (secs 0): count the quiet seconds instead */
+        if ((now.tv_secs ? (LONG)(now.tv_secs - t0.tv_secs) : idle) >= secs)
+            return 0;
+    }
+}
+
+LONG net_connect(const char *host, LONG p, ssh_say_fn sayf)
+{
+    struct hostent *he;
+    struct sockaddr_in sa;
+    LONG s, on = 1, off = 0;
+    if (p <= 0 || p > 65535) {
+        sayf("\x1b[1;31m[no such port]\x1b[0m\r\n");
+        return -1;
+    }
+    memset(&sa, 0, sizeof sa);
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(p);
+    sa.sin_addr.s_addr = inet_addr((STRPTR)host);
+    if (sa.sin_addr.s_addr == INADDR_NONE) {
+        /* the one wait left that cannot be cut short: the stack's own */
+        he = gethostbyname((STRPTR)host);
+        if (!he) {
+            sayf("\x1b[1;31m[no such host]\x1b[0m\r\n");
+            return -1;
+        }
+        memcpy(&sa.sin_addr, he->h_addr, 4);
+    }
+    s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0)
+        return -1;
+    /* connect without blocking, then wait for it with a way out (Esc) */
+    IoctlSocket(s, NB_FIONBIO, (APTR)&on);
+    if (connect(s, (struct sockaddr *)&sa, sizeof sa) < 0) {
+        struct sockaddr_in peer;
+        socklen_t len = sizeof peer;
+        int r = net_wait(s, 0, 1, NET_SECS);
+        if (r <= 0 || getpeername(s, (struct sockaddr *)&peer, &len) < 0) {
+            CloseSocket(s);
+            sayf(r < 0 ? "\x1b[1;31m[given up]\x1b[0m\r\n"
+                       : "\x1b[1;31m[the call was not answered]\x1b[0m\r\n");
+            return -1;
+        }
+    }
+    IoctlSocket(s, NB_FIONBIO, (APTR)&off);
+    setsockopt(s, IPPROTO_TCP, 1 /* TCP_NODELAY */, &on, sizeof on);
+    return s;
+}
+
 
 static void send_raw(const UBYTE *b, LONG n)
 {
@@ -40,7 +150,13 @@ static void send_raw(const UBYTE *b, LONG n)
     if (sock < 0 || sshmode)            /* telnet's own bytes only */
         return;
     while (done < n) {
-        LONG k = send(sock, (APTR)(b + done), n - done, 0);
+        /* a blocking send to a host that stopped reading would hold all
+         * of CTerm: wait for room (a way out, a time limit), then send
+         * no more than room surely is for (the low-water mark is 2 KB) */
+        LONG k = n - done < 512 ? n - done : 512;
+        if (net_wait(sock, 0, 1, NET_SECS) <= 0)
+            return;                     /* the rest is dropped */
+        k = send(sock, (APTR)(b + done), k, 0);
         if (k <= 0)
             return;
         done += k;
@@ -186,37 +302,17 @@ LONG listen_on(void)
 static BOOL dial(void)
 {
     char name[128], *colon;
-    struct hostent *he;
-    struct sockaddr_in sa;
-    LONG one = 1, p = 23;
-    strcpy(name, dialhost);
+    LONG p = 23;
+    strncpy(name, dialhost, sizeof name - 1);
+    name[sizeof name - 1] = 0;
     colon = strchr(name, ':');
     if (colon) {
         *colon = 0;
         p = atol(colon + 1);
     }
-    memset(&sa, 0, sizeof sa);
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(p);
-    sa.sin_addr.s_addr = inet_addr(name);
-    if (sa.sin_addr.s_addr == INADDR_NONE) {
-        he = gethostbyname((STRPTR)name);
-        if (!he) {
-            say("\x1b[1;31m[no such host]\x1b[0m\r\n");
-            return FALSE;
-        }
-        memcpy(&sa.sin_addr, he->h_addr, 4);
-    }
-    sock = socket(AF_INET, SOCK_STREAM, 0);
+    sock = net_connect(name, p, say);
     if (sock < 0)
         return FALSE;
-    if (connect(sock, (struct sockaddr *)&sa, sizeof sa) < 0) {
-        CloseSocket(sock);
-        sock = -1;
-        say("\x1b[1;31m[the call was not answered]\x1b[0m\r\n");
-        return FALSE;
-    }
-    setsockopt(sock, IPPROTO_TCP, 1 /* TCP_NODELAY */, &one, sizeof one);
     tstate = 0;
     return TRUE;
 }
@@ -300,6 +396,8 @@ BOOL connect_out(void)
             "\x1b[0m\r\n");
         return FALSE;
     }
+    say("\x1b[2m[calling - Esc gives up]\x1b[0m\r\n");
+    refresh();
     if (!sshmode)
         return dial();
     T->ssh = ssh_open(dialhost, cols, rows, term_ask, say);

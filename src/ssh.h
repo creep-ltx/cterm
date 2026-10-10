@@ -13,6 +13,13 @@
 typedef BOOL (*ssh_ask_fn)(const char *prompt, char *buf, int max, BOOL echo);
 typedef void (*ssh_say_fn)(const char *text);
 
+/* From net.c, for both telnet and ssh: wait until fd can be read (rd)
+ * or written (wr), at most secs, the Shells and the window served; Esc
+ * or the close gadget gives up. 1: ready, 0: time up, -1: given up. */
+int net_wait(LONG fd, int rd, int wr, LONG secs);
+/* A socket connected to host:port, -1 if not (and why, said). */
+LONG net_connect(const char *host, LONG port, ssh_say_fn say);
+
 /* user@host[:port]: connect, check the host key against ENVARC:CTerm/known_hosts
  * (asking about a new or changed one), log in (key file, then password /
  * keyboard-interactive), open a shell on an xterm-256color pty. */

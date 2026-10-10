@@ -88,19 +88,27 @@ static BOOL ssl_open(void)
     return TRUE;
 }
 
-/* Wait until the socket can go the way libssh2 wants (non-blocking). */
-static void wait_sock(void)
+/* Wait until the socket can go the way libssh2 wants (non-blocking), at
+ * most secs. FALSE: the host stopped answering or the person gave up
+ * (Esc, the close gadget) - gave_up stays set and every loop ends. */
+static BOOL gave_up, setting_up;
+
+static BOOL wait_sock_for(LONG secs)
 {
-    fd_set r, w;
-    int dir = libssh2_session_block_directions(sess);
-    FD_ZERO(&r);
-    FD_ZERO(&w);
-    if (dir & LIBSSH2_SESSION_BLOCK_INBOUND)
-        FD_SET(fd, &r);
-    if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND)
-        FD_SET(fd, &w);
-    WaitSelect(fd + 1, &r, &w, NULL, NULL, NULL);
+    int dir = libssh2_session_block_directions(sess), r;
+    if (gave_up)
+        return FALSE;
+    r = net_wait(fd, (dir & LIBSSH2_SESSION_BLOCK_INBOUND) || !dir,
+                 (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) != 0, secs);
+    if (r > 0)
+        return TRUE;
+    gave_up = TRUE;
+    if (setting_up)
+        say(r < 0 ? "\x1b[1;31m[given up]\x1b[0m\r\n"
+                  : "\x1b[1;31m[the host stopped answering]\x1b[0m\r\n");
+    return FALSE;
 }
+#define wait_sock() wait_sock_for(30)
 
 static void b64(const UBYTE *in, int n, char *out)
 {
@@ -263,8 +271,9 @@ static BOOL key_login(const char *user)
         key[n] = 0;
         while ((rc = libssh2_userauth_publickey_frommemory(
                     sess, user, strlen(user), NULL, 0, key, n, NULL)) ==
-               LIBSSH2_ERROR_EAGAIN)
-            wait_sock();
+               LIBSSH2_ERROR_EAGAIN &&
+               wait_sock())
+            ;
         memset(key, 0, sizeof key);
         if (!rc) {
             say("\x1b[2m[logged in with ");
@@ -298,7 +307,8 @@ static void kbd_cb(const char *name, int name_len, const char *instr,
         memcpy(p, prompts[i].text, n);
         p[n] = 0;
         a[0] = 0;
-        ask_cb(p, a, sizeof a, prompts[i].echo != 0);
+        if (!gave_up && !ask_cb(p, a, sizeof a, prompts[i].echo != 0))
+            gave_up = TRUE;             /* the window was closed */
         responses[i].text = (char *)malloc(strlen(a) + 1);
         if (responses[i].text) {
             strcpy(responses[i].text, a);
@@ -311,12 +321,13 @@ static void kbd_cb(const char *name, int name_len, const char *instr,
 static BOOL password_login(const char *user, const char *methods)
 {
     int tries;
-    for (tries = 0; tries < 3; tries++) {
+    for (tries = 0; tries < 3 && !gave_up; tries++) {
         int rc;
         if (methods && strstr(methods, "keyboard-interactive")) {
             while ((rc = libssh2_userauth_keyboard_interactive(sess, user,
-                        kbd_cb)) == LIBSSH2_ERROR_EAGAIN)
-                wait_sock();
+                        kbd_cb)) == LIBSSH2_ERROR_EAGAIN &&
+                   wait_sock())
+                ;
         } else if (methods && strstr(methods, "password")) {
             char pw[200], pr[160];
             strcpy(pr, user);
@@ -324,8 +335,9 @@ static BOOL password_login(const char *user, const char *methods)
             if (!ask_cb(pr, pw, sizeof pw, FALSE))
                 return FALSE;
             while ((rc = libssh2_userauth_password(sess, user, pw)) ==
-                   LIBSSH2_ERROR_EAGAIN)
-                wait_sock();
+                   LIBSSH2_ERROR_EAGAIN &&
+                   wait_sock())
+                ;
             memset(pw, 0, sizeof pw);
         } else
             return FALSE;
@@ -348,10 +360,14 @@ void *ssh_open(const char *target, int cols, int rows,
     h->s_fd = -1;
     cur = h;
     users++;
+    gave_up = FALSE;
+    setting_up = TRUE;
     if (!ssh_open_(target, cols, rows, ask, sayf)) {
+        setting_up = FALSE;
         ssh_close(h);
         return NULL;
     }
+    setting_up = FALSE;
     return h;
 }
 
@@ -359,8 +375,6 @@ static BOOL ssh_open_(const char *target, int cols, int rows,
                       ssh_ask_fn ask, ssh_say_fn sayf)
 {
     char user[64], host[128], hostport[160], *at, *colon, *methods;
-    struct sockaddr_in sa;
-    struct hostent *he;
     LONG port = 22;
     int rc;
     ask_cb = ask;
@@ -402,22 +416,9 @@ static BOOL ssh_open_(const char *target, int cols, int rows,
         lib_up = TRUE;
     }
 
-    memset(&sa, 0, sizeof sa);
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(port);
-    sa.sin_addr.s_addr = inet_addr((STRPTR)host);
-    if (sa.sin_addr.s_addr == INADDR_NONE) {
-        if (!(he = gethostbyname((STRPTR)host))) {
-            say("\x1b[1;31m[no such host]\x1b[0m\r\n");
-            return FALSE;
-        }
-        memcpy(&sa.sin_addr, he->h_addr, 4);
-    }
-    fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0 || connect(fd, (struct sockaddr *)&sa, sizeof sa) < 0) {
-        say("\x1b[1;31m[the call was not answered]\x1b[0m\r\n");
+    fd = net_connect(host, port, say);
+    if (fd < 0)
         return FALSE;
-    }
     {
         LONG one = 1;
         setsockopt(fd, IPPROTO_TCP, 1 /* TCP_NODELAY */, &one, sizeof one);
@@ -426,8 +427,9 @@ static BOOL ssh_open_(const char *target, int cols, int rows,
     if (!sess)
         return FALSE;
     libssh2_session_set_blocking(sess, 0);
-    while ((rc = libssh2_session_handshake(sess, fd)) == LIBSSH2_ERROR_EAGAIN)
-        wait_sock();
+    while ((rc = libssh2_session_handshake(sess, fd)) == LIBSSH2_ERROR_EAGAIN &&
+           wait_sock())
+        ;
     if (rc) {
         say_err("the ssh handshake failed");
         return FALSE;
@@ -437,8 +439,11 @@ static BOOL ssh_open_(const char *target, int cols, int rows,
         return FALSE;
     }
     while (!(methods = libssh2_userauth_list(sess, user, strlen(user))) &&
-           libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN)
-        wait_sock();
+           libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN &&
+           wait_sock())
+        ;
+    if (gave_up)
+        return FALSE;
     if (!libssh2_userauth_authenticated(sess) &&
         !key_login(user) && !password_login(user, methods)) {
         say("\x1b[1;31m[not logged in");
@@ -455,21 +460,24 @@ static BOOL ssh_open_(const char *target, int cols, int rows,
         return FALSE;
     }
     while (!(chan = libssh2_channel_open_session(sess)) &&
-           libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN)
-        wait_sock();
+           libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN &&
+           wait_sock())
+        ;
     if (!chan) {
         say_err("no session channel");
         return FALSE;
     }
     while ((rc = libssh2_channel_request_pty_ex(chan, "xterm-256color", 14,
-                NULL, 0, cols, rows, 0, 0)) == LIBSSH2_ERROR_EAGAIN)
-        wait_sock();
+                NULL, 0, cols, rows, 0, 0)) == LIBSSH2_ERROR_EAGAIN &&
+           wait_sock())
+        ;
     if (rc) {
         say_err("no terminal on the host");
         return FALSE;
     }
-    while ((rc = libssh2_channel_shell(chan)) == LIBSSH2_ERROR_EAGAIN)
-        wait_sock();
+    while ((rc = libssh2_channel_shell(chan)) == LIBSSH2_ERROR_EAGAIN &&
+           wait_sock())
+        ;
     if (rc) {
         say_err("no shell on the host");
         return FALSE;
@@ -504,10 +512,12 @@ void ssh_write(void *h, const UBYTE *b, LONG n)
     cur = h;
     if (!cur)
         return;
+    gave_up = FALSE;
     while (chan && n > 0) {
         ssize_t k = libssh2_channel_write(chan, (const char *)b, n);
         if (k == LIBSSH2_ERROR_EAGAIN) {
-            wait_sock();
+            if (!wait_sock())           /* not read for 30 s, or Esc */
+                return;
             continue;
         }
         if (k < 0)
@@ -520,10 +530,12 @@ void ssh_write(void *h, const UBYTE *b, LONG n)
 void ssh_resize(void *h, int cols, int rows)
 {
     cur = h;
+    gave_up = FALSE;
     if (cur && chan)
         while (libssh2_channel_request_pty_size(chan, cols, rows) ==
-               LIBSSH2_ERROR_EAGAIN)
-            wait_sock();
+               LIBSSH2_ERROR_EAGAIN &&
+               wait_sock())
+            ;
 }
 
 void ssh_close(void *h)
@@ -531,17 +543,18 @@ void ssh_close(void *h)
     cur = h;
     if (!cur)
         return;
+    /* a goodbye, but a dead host gets 3 s, not for ever */
+    gave_up = FALSE;
     if (chan) {
-        int n = 0;
-        while (libssh2_channel_free(chan) == LIBSSH2_ERROR_EAGAIN && n++ < 50)
-            wait_sock();
+        while (libssh2_channel_free(chan) == LIBSSH2_ERROR_EAGAIN &&
+               wait_sock_for(3))
+            ;
         chan = NULL;
     }
     if (sess) {
-        int n = 0;
         while (libssh2_session_disconnect(sess, "bye") ==
-               LIBSSH2_ERROR_EAGAIN && n++ < 50)
-            wait_sock();
+               LIBSSH2_ERROR_EAGAIN && wait_sock_for(3))
+            ;
         libssh2_session_free(sess);
         sess = NULL;
     }
