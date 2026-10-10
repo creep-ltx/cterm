@@ -84,6 +84,7 @@ static struct List booklist;            /* the phone book's names */
 static int bcur = -1;                   /* the entry shown: -1 none */
 static BookEntry *booksnap;             /* the book as it was: Cancel */
 static int nbooksnap;
+static BOOL booksnapped;                /* booksnap/nbooksnap are taken */
 static int pend_mode, pend_depth;
 static ULONG pend_id;
 static LONG pend_w, pend_h;
@@ -528,6 +529,10 @@ static void close_settings_(void)
         while ((n = RemHead(&settabs)))
             FreeClickTabNode(n);
     booklist_free();
+    if (booksnap)                       /* closed without Cancel: not needed */
+        FreeVec(booksnap);
+    booksnap = NULL;
+    booksnapped = FALSE;
 }
 
 static Object *page_screen(void)
@@ -691,11 +696,12 @@ static void open_settings_(void)
     strcpy(snap.uldir, uldir);
     if (booksnap)
         FreeVec(booksnap);
-    booksnap = book ? AllocVec(book_room() * sizeof *book, MEMF_ANY) : NULL;
-    nbooksnap = 0;
+    /* no book yet is a book of none: Cancel takes back what New added */
+    booksnap = nbook ? AllocVec(nbook * sizeof *book, MEMF_ANY) : NULL;
+    nbooksnap = booksnap ? nbook : 0;
+    booksnapped = booksnap || !nbook;
     if (booksnap)
         memcpy(booksnap, book, nbook * sizeof *book);
-    nbooksnap = nbook;
     if (bcur >= nbook)
         bcur = nbook - 1;
     if (bcur < 0 && nbook)
@@ -746,7 +752,15 @@ static void open_settings_(void)
         SetAttrs(root, LAYOUT_AddChild, (ULONG)buttons,
                  CHILD_WeightedHeight, 0, TAG_END);
     if (!root || !sg[S_TABS] || !buttons) {
-        DisposeObject(root);
+        /* what was not given to root goes by hand (the tabs own pages) */
+        if (!sg[S_TABS] && pages)
+            DisposeObject(pages);
+        if (!root && sg[S_TABS])
+            DisposeObject(sg[S_TABS]);
+        if (!root && buttons)
+            DisposeObject(buttons);
+        if (root)
+            DisposeObject(root);
         memset(sg, 0, sizeof sg);
         close_settings();
         return;
@@ -777,6 +791,10 @@ static void finish_settings(int how)
 static void finish_settings_(int how)
 {
     const char *t;
+    BookEntry *bs = booksnap;           /* taken before close frees it */
+    int nbs = nbooksnap;
+    BOOL bsok = booksnapped;
+    booksnap = NULL;
     book_read();                        /* what is typed, before it goes */
     if (how != 3) {
         if ((t = (const char *)get_attr(S_KUSER, STRINGA_TextVal)))
@@ -793,11 +811,14 @@ static void finish_settings_(int how)
         }
     }
     close_settings();
+    if (how == 3 && bsok && nbs <= book_room()) {   /* the book as it was */
+        if (nbs)
+            memcpy(book, bs, nbs * sizeof *book);
+        nbook = nbs;
+    }
+    if (bs)
+        FreeVec(bs);
     if (how == 3) {
-        if (booksnap) {                 /* the book as it was */
-            memcpy(book, booksnap, nbooksnap * sizeof *book);
-            nbook = nbooksnap;
-        }
         BOOL letters = snap.usett != usett || snap.ttsize != ttsize ||
                        strcmp(snap.ttfile, ttfile) ||
                        strcmp(snap.fontname, fontname) ||
@@ -863,6 +884,55 @@ static void finish_settings_(int how)
     envonly = FALSE;
     book_save();                        /* the book is kept either way */
     remake_menus();                     /* the login keys */
+}
+
+/* The login key typed in gadget id, as it would be kept (0: none). */
+static char key_typed(int id)
+{
+    const char *t = (const char *)get_attr(id, STRINGA_TextVal);
+    return t ? toupper((UBYTE)t[0]) : 0;
+}
+
+/* Does key k (Right Amiga + it) do something else already: a menu's,
+ * a tab's number, the other login key? The menus are walked as they are,
+ * so a new shortcut there is seen too. */
+static BOOL key_taken(char k, char other)
+{
+    struct Menu *m;
+    struct MenuItem *it, *sub;
+    if (!k || k == '-')
+        return FALSE;
+    if ((k >= '0' && k <= '9') || k == other)
+        return TRUE;
+    for (m = menu; m; m = m->NextMenu)
+        for (it = m->FirstItem; it; it = it->NextItem) {
+            ULONG id = (ULONG)GTMENUITEM_USERDATA(it);
+            if (id != M_SENDUSER && id != M_SENDPASS &&
+                (it->Flags & COMMSEQ) && toupper((UBYTE)it->Command) == k)
+                return TRUE;
+            for (sub = it->SubItem; sub; sub = sub->NextItem)
+                if ((sub->Flags & COMMSEQ) &&
+                    toupper((UBYTE)sub->Command) == k)
+                    return TRUE;
+        }
+    return FALSE;
+}
+
+/* Use or Save with a login key another shortcut has: refused, the window
+ * says why and stays (else that key would steal, say, Quit). */
+static BOOL keys_clash(void)
+{
+    char u = key_typed(S_KUSER), p = key_typed(S_KPASS);
+    int bad = key_taken(u, p) ? S_KUSER : key_taken(p, u) ? S_KPASS : 0;
+    if (!bad)
+        return FALSE;
+    DisplayBeep(scr);
+    SetWindowTitles(setwin, (UBYTE *)"CTerm Settings: that key is taken "
+                    "(Keys tab)", (UBYTE *)~0);
+    set_attr(S_TABS, CLICKTAB_Current, 3);
+    ActivateLayoutGadget((struct Gadget *)setlayout, setwin, NULL,
+                         (ULONG)sg[bad]);
+    return TRUE;
 }
 
 /* One control was used: 1 Use, 2 Save, 3 Cancel, 0 stay open. */
@@ -1047,8 +1117,8 @@ static int settings_gadget(int id)
     case S_BDOWN: case S_BUP: case S_DLDIR: case S_ULDIR:
         DoMethod(sg[id], GFILE_REQUEST, (ULONG)setwin);
         break;
-    case S_SAVE: return 2;
-    case S_USE: return 1;
+    case S_SAVE: return keys_clash() ? 0 : 2;
+    case S_USE: return keys_clash() ? 0 : 1;
     case S_CANCEL: return 3;
     }
     return 0;
@@ -1080,3 +1150,12 @@ static void settings_events_(void)
 void open_settings(void) { deep_call(open_settings_); }
 void close_settings(void) { deep_call(close_settings_); }
 void settings_events(void) { deep_call(settings_events_); }
+
+/* CTerm ends with the window open: as its close gadget, Cancel - so the
+ * prefs are saved (save_prefs waits while it is open) as they were. */
+static void settings_cancel_(void)
+{
+    if (setobj)
+        finish_settings(3);
+}
+void settings_cancel(void) { deep_call(settings_cancel_); }

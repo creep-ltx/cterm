@@ -402,6 +402,7 @@ void send_login(BOOL pass);
 void call_dialog(void);
 void reaction_close(void);
 void close_settings(void);
+void settings_cancel(void);             /* at the end: as Cancel */
 void open_settings(void);
 void settings_events(void);
 BOOL mouse_to_host(UWORD q);

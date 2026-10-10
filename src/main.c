@@ -1100,6 +1100,7 @@ static int cterm_main(int argc, char **argv)
             tab_letters(TRUE);
         run();
     }
+    settings_cancel();                  /* else save_prefs would not save */
     if (win) {
         if (remember && !fullscreen && scr != ownscr) {
             wl = win->LeftEdge; wt = win->TopEdge;
