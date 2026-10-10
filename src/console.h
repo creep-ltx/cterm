@@ -22,6 +22,9 @@ void con_keys(struct Con *c, const UBYTE *b, LONG n);  /* typed bytes */
 void con_reply(struct Con *c, const UBYTE *b, LONG n); /* DSR replies... */
 void con_close_gadget(struct Con *c);   /* the window's close gadget */
 void con_free(struct Con *c);           /* after con_alive() is FALSE */
+void con_retire(struct Con *c);         /* its tab closes: all but the port */
+void con_spent_poll(void);              /* closed tabs' ports: refuse */
+void con_spent_free(void);              /* at the end */
 
 /* The timer, shared: the frame (draw what is owed) and each console's
  * WaitForChar timeout signal its port. */

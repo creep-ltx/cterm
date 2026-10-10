@@ -72,9 +72,6 @@ void __chkabort(void) {}
  * stand for the current tab's (T); only the shown tab is drawn.
  * ==================================================================== */
 
-#define MAXSPENT 64
-static struct Con *spent[MAXSPENT];     /* consoles of closed tabs */
-static int nspent;
 static struct Tab tab0 = { NULL, NULL, TRUE, -1, -1 };
 struct Tab *tabs[MAXTABS] = { &tab0 };
 int ntabs = 1;
@@ -480,6 +477,7 @@ void shells_handle(ULONG sigs)
             con_handle(T->con, sigs);
         }
     T = keep;
+    con_spent_poll();
 }
 
 /* A tab of its own: an emulator the window's size, no Shell or host yet. */
@@ -515,6 +513,8 @@ void tab_show(int i)
     if (i < 0 || i >= ntabs)
         return;
     shown = T = tabs[i];
+    if (!win)                           /* ending, the window gone */
+        return;
     tab_letters(TRUE);
     if (bar != (tabbar_h() > 0) || TRUE) {
         layout_and_resize();
@@ -560,11 +560,9 @@ static void tab_drop(struct Tab *t)
         lfd = -1;
     }
     if (T->con) {
-        /* kept until CTerm ends: nothing about a Shell's console (its
-         * port, its signal, its timer) is torn down while processes may
-         * still be finishing - freed all at once at the end */
-        if (nspent < MAXSPENT)
-            spent[nspent++] = T->con;
+        /* its signals and memory go back now; only the port is kept
+         * (signal-less, polled) while processes may still open "*" */
+        con_retire(T->con);
         T->con = NULL;
     }
     vt_free(T->t_vt);
@@ -577,7 +575,7 @@ static void tab_drop(struct Tab *t)
         shown = NULL;
         if (ntabs > 0)
             tab_show(i < ntabs ? i : ntabs - 1);
-    } else if (ntabs > 0) {
+    } else if (ntabs > 0 && win) {
         T = shown;
         layout_and_resize();            /* the tab bar may have gone */
         redraw_all();
@@ -1124,13 +1122,11 @@ static int cterm_main(int argc, char **argv)
                     any = TRUE;
             if (!any)
                 break;
-            Wait(sg);
-            shells_handle(sg);
+            shells_handle(Wait(sg));
         }
         while (ntabs > 0)
             tab_drop(tabs[0]);
-        while (nspent > 0)
-            con_free(spent[--nspent]);
+        con_spent_free();
     }
     close_settings();
     xwin_shut();                        /* before its classes and screen go */
@@ -1151,7 +1147,6 @@ static int cterm_main(int argc, char **argv)
     if (TTEngineBase) CloseLibrary(TTEngineBase);
     if (CyberGfxBase) CloseLibrary(CyberGfxBase);
     con_timer_free();
-    vt_free(vt);
     if (DiskfontBase) CloseLibrary(DiskfontBase);
     if (AslBase) CloseLibrary(AslBase);
     if (GadToolsBase) CloseLibrary(GadToolsBase);

@@ -298,7 +298,9 @@ BOOL window_events(void)
         ReplyMsg((struct Message *)m);
         switch (copy.Class) {
         case IDCMP_CLOSEWINDOW:
-            if (local) {
+            if (local && !T->con)
+                T->ended = TRUE;        /* no Shell ever started here */
+            else if (local) {
                 if (vt_raw_events(vt) & (1UL << 11))
                     raw_report(11, 0, 0);
                 else

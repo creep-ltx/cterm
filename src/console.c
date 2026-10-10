@@ -409,6 +409,8 @@ static void edit_key(struct Con *c, const UBYTE *b, LONG n)
 void con_keys(struct Con *c, const UBYTE *b, LONG n)
 {
     LONG i;
+    if (!c)                             /* a tab whose Shell never started */
+        return;
     /* Ctrl-C..F: break signals, never input */
     for (i = 0; i < n; i++)
         if (b[i] >= 3 && b[i] <= 6) {
@@ -425,12 +427,16 @@ void con_keys(struct Con *c, const UBYTE *b, LONG n)
 
 void con_reply(struct Con *c, const UBYTE *b, LONG n)
 {
+    if (!c)                             /* a tab whose Shell never started */
+        return;
     push_input(c, b, n);
     serve(c);
 }
 
 void con_close_gadget(struct Con *c)
 {
+    if (!c)                             /* a tab whose Shell never started */
+        return;
     /* a cooked reader (the Shell) is told the input ended; a raw one
      * gets nothing unless it asked for close reports (class 11) */
     if (!c->rawmode) {
@@ -587,6 +593,88 @@ void con_handle(struct Con *c, ULONG sigs)
     }
 }
 
+/* A port made by hand, not CreateMsgPort: when its tab closes the port
+ * stays (a process left behind may still open "*" on it) but its signal
+ * goes back, and only a port of our own can be freed without one. */
+static struct MsgPort *port_new(void)
+{
+    struct MsgPort *p;
+    BYTE sb = AllocSignal(-1);
+    if (sb < 0)
+        return NULL;
+    if (!(p = AllocVec(sizeof *p, MEMF_PUBLIC | MEMF_CLEAR))) {
+        FreeSignal(sb);
+        return NULL;
+    }
+    p->mp_Node.ln_Type = NT_MSGPORT;
+    p->mp_Flags = PA_SIGNAL;
+    p->mp_SigBit = sb;
+    p->mp_SigTask = FindTask(NULL);
+    p->mp_MsgList.lh_Head = (struct Node *)&p->mp_MsgList.lh_Tail;
+    p->mp_MsgList.lh_TailPred = (struct Node *)&p->mp_MsgList.lh_Head;
+    return p;
+}
+
+/* Ports of closed tabs, linked through their nodes (never on a list of
+ * the system's): no signal, polled, every packet refused */
+static struct MsgPort *spent;
+
+static void refuse(struct MsgPort *port)
+{
+    struct Message *m;
+    while ((m = GetMsg(port))) {
+        struct DosPacket *p = (struct DosPacket *)m->mn_Node.ln_Name;
+        ReplyPkt(p, DOSFALSE, ERROR_OBJECT_NOT_FOUND);
+    }
+}
+
+void con_spent_poll(void)
+{
+    struct MsgPort *p;
+    for (p = spent; p; p = (struct MsgPort *)p->mp_Node.ln_Succ)
+        refuse(p);
+}
+
+void con_spent_free(void)
+{
+    while (spent) {
+        struct MsgPort *p = spent;
+        spent = (struct MsgPort *)p->mp_Node.ln_Succ;
+        refuse(p);
+        FreeVec(p);
+    }
+}
+
+/* The tab closes (con_alive() is FALSE): everything goes back but the
+ * port, which is kept without its signal until CTerm ends. A packet
+ * still waiting is answered as the end of the input. */
+void con_retire(struct Con *c)
+{
+    struct MsgPort *port;
+    int i;
+    if (!c)
+        return;
+    for (i = 0; i < c->nreads; i++)
+        ReplyPkt(c->reads[i], 0, 0);
+    c->nreads = 0;
+    if (c->waitpkt) {
+        ReplyPkt(c->waitpkt, DOSFALSE, 0);
+        c->waitpkt = NULL;
+    }
+    port = c->conport;
+    c->conport = NULL;
+    if (port) {
+        Disable();                      /* no PutMsg between the two */
+        port->mp_Flags = PA_IGNORE;
+        Enable();
+        FreeSignal(port->mp_SigBit);
+        refuse(port);
+        port->mp_Node.ln_Succ = (struct Node *)spent;
+        spent = port;
+    }
+    con_free(c);
+}
+
 struct Con *con_start(const char *startup, void *user)
 {
     struct Process *pr;
@@ -597,7 +685,7 @@ struct Con *con_start(const char *startup, void *user)
     c->endbit = -1;
     c->hpos = -1;
     c->maintask = FindTask(NULL);
-    c->conport = CreateMsgPort();
+    c->conport = port_new();
     c->endbit = AllocSignal(-1);
     c->infh = AllocDosObject(DOS_FILEHANDLE, NULL);
     if (!c->conport || c->endbit < 0 || !c->infh) {
@@ -660,8 +748,10 @@ void con_free(struct Con *c)
     }
     if (c->infh && !c->started)
         FreeDosObject(DOS_FILEHANDLE, c->infh);
-    if (c->conport)
-        DeleteMsgPort(c->conport);
+    if (c->conport) {
+        FreeSignal(c->conport->mp_SigBit);
+        FreeVec(c->conport);
+    }
     if (c->endbit >= 0)
         FreeSignal(c->endbit);
     for (i = 0; i < c->nhist; i++)
