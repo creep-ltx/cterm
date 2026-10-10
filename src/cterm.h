@@ -350,6 +350,7 @@ BOOL load_picture(const char *path);
 void backdrop_free(void);
 void backdrop_make(void);
 void redraw_all(void);
+void repair_damage(void);             /* REFRESHWINDOW: the damage only */
 void refresh(void);
 void log_bytes(const UBYTE *b, LONG n);
 void draw_now(void);

@@ -336,9 +336,7 @@ BOOL window_events(void)
             }
             break;
         case IDCMP_REFRESHWINDOW:
-            BeginRefresh(win);
-            EndRefresh(win, TRUE);
-            redraw_all();
+            repair_damage();            /* only the rows a window uncovered */
             break;
         case IDCMP_MENUPICK: {
             UWORD code = copy.Code;

@@ -530,17 +530,16 @@ struct Tab *tab_new(void)
  * its title. */
 void tab_show(int i)
 {
-    BOOL bar = tabbar_h() > 0;
     if (i < 0 || i >= ntabs)
         return;
     shown = T = tabs[i];
     if (!win)                           /* ending, the window gone */
         return;
     tab_letters(TRUE);
-    if (bar != (tabbar_h() > 0) || TRUE) {
-        layout_and_resize();
-        painter_forget();
-    }
+    /* always: the tab bar may just have come or gone (ntabs has changed
+     * already), and both are cheap when nothing did */
+    layout_and_resize();
+    painter_forget();
     redraw_all();
     title_update_now();
 }
