@@ -101,8 +101,19 @@ void book_load(void)
 
     while (FGets(f, (STRPTR)line, sizeof line)) {
         char *v, *nl = strchr(line, '\n');
+        int n;
         if (nl)
             *nl = 0;
+        else {
+            /* longer than any field: its start is kept (put cuts it
+             * anyway), the rest of the line is not read as a new one */
+            LONG ch;
+            while ((ch = FGetC(f)) >= 0 && ch != '\n')
+                ;
+        }
+        n = strlen(line);
+        if (n > 0 && line[n - 1] == '\r')
+            line[--n] = 0;              /* written on a PC: CRLF */
         if (!line[0]) {
             e = NULL;                   /* the next entry */
             continue;
