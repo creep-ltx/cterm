@@ -146,6 +146,9 @@ void term_sync_all(void)
 void term_take(void *t, const UBYTE *b, LONG n)
 {
     struct Tab *tb = t;
+#ifdef NOPARSE
+    return;                             /* to measure: the packets alone */
+#endif
     if (!tb->t_pend)
         tb->t_pend = AllocVec(PENDMAX, MEMF_ANY);
     if (tb->t_pend && n <= PENDMAX - tb->t_plen) {
@@ -190,6 +193,17 @@ int term_cursor_y(void *t)
     return y;
 }
 
+#ifndef PACE
+#define PACE 3                          /* a flood: the next draw after this
+                                           many times the last one's cost -
+                                           3 (was 1.5): a stock A1200 spent
+                                           40% of a flood drawing; now 25%
+                                           (conbench 32.9 -> 30.7 s; CCON's
+                                           PACE=FAST is the same bargain) */
+#endif
+#ifndef PACEMAX
+#define PACEMAX 320000                  /* never fewer than 3 draws a second */
+#endif
 static LONG lastcost;                   /* us: the last draw, planar only */
 
 void draw_now(void)
@@ -238,9 +252,9 @@ static void draw_soon(void)
         /* paced: where a draw costs more than the frame (a 14 MHz Amiga
          * redrawing a flooded screen), wait half as long again as it
          * took, so the text keeps coming in between (CCON's pacing) */
-        LONG us = flood ? 60000 : 20000, p = lastcost + lastcost / 2;
+        LONG us = flood ? 60000 : 20000, p = lastcost * PACE;
         if (flood && p > us)
-            us = p > 160000 ? 160000 : p;
+            us = p > PACEMAX ? PACEMAX : p;
         con_arm_render(us);
     }
 }
