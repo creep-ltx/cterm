@@ -721,7 +721,8 @@ void own_path(char *buf, int max, const char *sibling)
 
 static void call_start(const char *host, BOOL pc, BOOL ssh)
 {
-    char cmd[400], path[256];
+    /* Run >NIL: "path" SSH "host" PC: 11 + 255 + 7 + 127 + 4, and 0 */
+    char cmd[408], path[256];
     BPTR nil;
 #ifdef NO_SSH
     own_path(path, sizeof path, ssh ? "CTermSSH" : NULL);
