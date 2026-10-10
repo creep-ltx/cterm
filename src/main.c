@@ -754,6 +754,8 @@ static void run(void)
     }
 }
 
+static UBYTE *hostbuf;                  /* a host's bytes: made at the first */
+
 /* One round of CTerm's life: wait for anything - the window, the Shells,
  * the hosts, at most ms (-1: as long as it takes) - and handle it. A
  * transfer waits in here (xfd: its socket, which it reads itself), so the
@@ -762,7 +764,6 @@ static void run(void)
  * xfd has data. */
 BOOL loop_round(LONG xfd, LONG ms)
 {
-    static UBYTE buf[16384];
     struct Tab *me = T;
     fd_set rd;
     LONG maxfd = -1, n = 0;
@@ -833,8 +834,9 @@ BOOL loop_round(LONG xfd, LONG ms)
         }
         if (n > 0 && !T->t_xfer) {
             LONG fd = sock >= 0 ? sock : lfd;
-            if (fd >= 0 && FD_ISSET(fd, &rd)) {
-                host_input(buf, sizeof buf);
+            if (fd >= 0 && FD_ISSET(fd, &rd) &&
+                (hostbuf || (hostbuf = AllocVec(16384, MEMF_ANY)))) {
+                host_input(hostbuf, 16384);
                 if (T == shown)
                     hostdata = TRUE;
             }
@@ -1123,6 +1125,8 @@ static int cterm_main(int argc, char **argv)
     if (DataTypesBase) CloseLibrary(DataTypesBase);
     book_free();
     transfer_free();
+    if (hostbuf)
+        FreeVec(hostbuf);
     close_tt();
     if (TTEngineBase) CloseLibrary(TTEngineBase);
     if (CyberGfxBase) CloseLibrary(CyberGfxBase);

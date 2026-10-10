@@ -233,15 +233,15 @@ void log_start(void)
 
 /* The clipboard's text, typed in: to the Shell's line, or to the host
  * (bracketed when the program asked); a new line is a Return. */
-void paste(void)
+static void paste_(UBYTE *buf, ULONG bufsize)
 {
-    static UBYTE buf[16384], scratch[256];
+    static UBYTE scratch[256];
     ULONG got, o;
     if (!clip_open())
         return;
     clipreq->io_Command = CMD_READ;
     clipreq->io_Data = (STRPTR)buf;
-    clipreq->io_Length = sizeof buf;
+    clipreq->io_Length = bufsize;
     clipreq->io_Offset = 0;
     clipreq->io_ClipID = 0;
     DoIO((struct IORequest *)clipreq);
@@ -278,6 +278,17 @@ void paste(void)
         }
         o += 8 + sz + (sz & 1);
     }
+}
+
+/* 16 KB for the clipboard's text only while pasting: a stock A1200
+ * keeps it otherwise. */
+void paste(void)
+{
+    UBYTE *buf = AllocVec(16384, MEMF_ANY);
+    if (!buf)
+        return;
+    paste_(buf, 16384);
+    FreeVec(buf);
 }
 
 /* Mouse position to a cell, held inside the grid. */

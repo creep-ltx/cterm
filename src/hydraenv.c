@@ -26,9 +26,11 @@ boolean hy_nomem;
 static XferIO *hio;
 static const unsigned char *pre;        /* what came before the session */
 static long pren, prep;
-static unsigned char ib[2048];
+static unsigned char *ib;               /* 2 KB in, 4 KB out: made for a */
 static long ibn, ibp;
-static unsigned char ob[4096];
+static unsigned char *ob;               /* session only */
+#define IBSIZE 2048
+#define OBSIZE 4096
 static long obn;
 static int gone;
 
@@ -109,7 +111,7 @@ void com_flush(void)
 
 void com_putbyte(byte c)
 {
-    if (obn >= (long)sizeof ob)
+    if (obn >= OBSIZE)
         com_flush();
     ob[obn++] = c;
 }
@@ -136,7 +138,7 @@ int com_getbyte(void)
         com_flush();
         if (gone)
             return -1;
-        k = hio->get(hio->u, ib, sizeof ib, 20);
+        k = hio->get(hio->u, ib, IBSIZE, 20);
         if (k < 0) {
             gone = 1;                   /* carrier() tells hydra() */
             return -1;
@@ -338,10 +340,22 @@ int hy_session(XferIO *io, const char *const *paths, int npaths,
     fh[0] = fh[1] = NULL;
     nrecv = nsent = 0;
     nooriginator = !originator;
+    ib = malloc(IBSIZE);
+    ob = malloc(OBSIZE);
+    if (!ib || !ob) {
+        free(ib);
+        free(ob);
+        ib = ob = NULL;
+        return -1;
+    }
     hy_nomem = false;
     hydra_init(hydra_options);
-    if (hy_nomem)
+    if (hy_nomem) {
+        free(ib);
+        free(ob);
+        ib = ob = NULL;
         return -1;
+    }
     for (i = 0; i < npaths; i++) {
         int r = hydra((char *)paths[i], NULL);
         if (r == XFER_ABORT) {
@@ -361,5 +375,8 @@ int hy_session(XferIO *io, const char *const *paths, int npaths,
         hio->rclose(hio->u, fh[1]);
         fh[1] = NULL;
     }
+    free(ib);
+    free(ob);
+    ib = ob = NULL;
     return rc < 0 ? -1 : nrecv + nsent;
 }
