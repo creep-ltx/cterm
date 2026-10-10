@@ -235,6 +235,22 @@ In the order the user and I agreed (2026-10-10):
   (68000 / 68020+) as a file chosen at start - the plugin pattern
   (Knowledge/amiga/load-on-demand-and-plugins.md).
 
+  **Audit of the speed work (2026-10-10 night, 0.3b4):** the short loop
+  ate the frame timer (its bit is in the Shells' mask): drawing waited
+  for an IntuiTick, and an inactive window drew nothing until the next
+  READ - fixed, and every draw is now paced by its cost (not only in a
+  flood), which kept stock conbench at 30.4 s (30.5 before). Also fixed:
+  a stale pen number in the fast lane after a pen clean-up, Å/Ä/Ö + 9B
+  CSI in a UTF-8 Shell, the deep painter's row buffer after a 256-colour
+  screen, flood pacing kept from an AGA screen, the full-screen window
+  never repaired (grey after a window closed), ESC % @ forcing Latin-1.
+  Left open: the painter's edge longs touch up to 31 px outside the span
+  (another window's, unlocked) and with BytesPerRow = 2 mod 4 two bytes
+  past the row; the pen table never shrinks (~450 KB per tab at the cap)
+  and walks all history per new look when full; wide letters are drawn
+  half by the planar painter; a 2-byte UTF-8 letter ending in 9B (Û, ś,
+  ě) cannot come from an Amiga program in a UTF-8 Shell.
+
 Speed on a stock A1200 (FS-UAE, conbench): 99 s at first, 39.6 s on
 2026-10-10, CCON 26.0 s; on the PiStorm A1200 4.45 s against CCON's 4.26.
 Notes and what is left: Knowledge/amiga/graphics-and-performance.md.

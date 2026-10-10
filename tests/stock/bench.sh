@@ -3,7 +3,7 @@
 # run conbench REPS 3 SCALE 1 SYNC in a 77x30 window (the CCON race setup):
 # in CTerm (tests this tree's CTerm) or in a CCON: window (the control).
 H="$HOME/FS-UAE/Hard Drives/AmigaOS3.2"; export WASABI_HOST=127.0.0.1
-kind=$1; name=${2:-$1}; shift 2 2>/dev/null; extra="$*"   # e.g. TEXTDRAW
+kind=$1; name=${2:-$1}; shift $(( $# < 2 ? $# : 2 )); extra="$*"   # e.g. TEXTDRAW
 # another session's emulator holds wasabi's port (127.0.0.1:1234): wait,
 # never stop it
 if pgrep -x fs-uae >/dev/null; then

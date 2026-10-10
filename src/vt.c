@@ -59,6 +59,7 @@ struct Vt {
                                            2 bar; blinking */
     int amigamode;                  /* the Amiga console's ways (local) */
     int cp437;                      /* bytes 0x80-0xFF are the PC's */
+    int utf8_set, cp437_set;        /* as the menu set them: ESC % @ */
     unsigned long rawev;            /* raw event classes asked for: CSI n{ */
     int winbg;                      /* CSI >n m: the window's own colour */
     char g[2];                      /* G0, G1: 'B' ASCII, '0' DEC lines */
@@ -1126,12 +1127,13 @@ static void esc(Vt *v, int c)
     }
     if (v->inter == '%') {
         /* DOCS (ISO 2022, as xterm): ESC % G UTF-8, ESC % @ back to the
-         * 8-bit set - Latin-1, and in the Amiga Shell 0x9B is CSI again.
-         * A program (CTermTour) can show UTF-8 in the Amiga's Shell. */
+         * default - here the tab's own setting (the menu's), so a program
+         * (CTermTour) that showed UTF-8 leaves a UTF-8 tab as it was and
+         * a Latin-1 one Latin-1 (in the Amiga Shell 0x9B is CSI again) */
         if (c == 'G' || c == '@') {
-            v->utf8 = c == 'G';
+            v->utf8 = c == 'G' ? 1 : v->utf8_set;
+            v->cp437 = c == 'G' ? 0 : v->cp437_set;
             v->uneed = 0;
-            v->cp437 = 0;
         }
         return;
     }
@@ -1344,7 +1346,11 @@ static void byte(Vt *v, int c)
     case S_GROUND:
         if (v->utf8 && c >= 0x80) {
             if (v->uneed) {
-                if ((c & 0xC0) == 0x80) {
+                /* in the Amiga Shell a Latin-1 letter C2-DF (Ä, Å, Ö)
+                 * then the console's 9B CSI is not a 2-byte character
+                 * (C5 9B K: Å, erase to the end - not "śK") */
+                if ((c & 0xC0) == 0x80 &&
+                    !(c == 0x9B && v->amigamode && v->umin == 0x80)) {
                     v->uacc = (v->uacc << 6) | (c & 0x3F);
                     v->ubuf[v->ulen++] = (uint8_t)c;
                     if (--v->uneed == 0) {
@@ -1499,10 +1505,10 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
             v->g[v->gl] != '0' && !v->insert) {
             /* whole runs at a time: on a 14 MHz Amiga every instruction
              * per letter shows */
-            const uint16_t pn = cur_pen(v);
             const int cols = v->cols;
             for (;;) {
                 VtCell *r, *d;
+                uint16_t pn;
                 const uint8_t *p = buf + i, *e = buf + len;
                 int lim, x, l;
                 if (v->pending && v->autowrap) {
@@ -1518,6 +1524,9 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
                     grow(r, x);         /* a gap before the run: blanks */
                 else if (x > 0 && x < l && r[x].cp == VT_WIDE_TAIL)
                     r[x - 1] = blank_of(v);
+                /* taken after the wrap and the blanks: either may intern
+                 * a look, and a full table is renumbered (pen_gc) */
+                pn = cur_pen(v);
                 d = r + x;
                 lim = cols - x;
                 /* one pass: check a byte, store its cell */
@@ -1777,7 +1786,7 @@ Vt *vt_new(int cols, int rows, int scrollback)
         return NULL;
     }
     v->cur = v->lines[0];
-    v->utf8 = 1;
+    v->utf8 = v->utf8_set = 1;
     full_reset(v);
     return v;
 }
@@ -2071,14 +2080,19 @@ void vt_resize(Vt *v, int cols, int rows)
 
 /* ---- for the display ------------------------------------------------- */
 
-void vt_set_utf8(Vt *v, int on) { v->utf8 = on; v->uneed = 0; v->cp437 = 0; }
+void vt_set_utf8(Vt *v, int on)
+{
+    v->utf8 = v->utf8_set = on;
+    v->uneed = 0;
+    v->cp437 = v->cp437_set = 0;
+}
 
 /* A PC BBS's bytes: code page 437 (box lines, blocks, accents). */
 void vt_set_cp437(Vt *v, int on)
 {
-    v->cp437 = on;
+    v->cp437 = v->cp437_set = on;
     if (on) {
-        v->utf8 = 0;
+        v->utf8 = v->utf8_set = 0;
         v->uneed = 0;
     }
 }
@@ -2090,7 +2104,7 @@ void vt_set_amiga(Vt *v, int on)
 {
     v->amigamode = on;
     if (on) {
-        v->utf8 = 0;
+        v->utf8 = v->utf8_set = 0;
         v->uneed = 0;
         v->lnm = 1;
     } else

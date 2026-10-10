@@ -39,6 +39,7 @@ ULONG con_timer_sig(void);
 void term_now(struct timeval *tv);
 void con_arm_render(LONG us);           /* that long from now: signal */
 BOOL con_render_due(void);              /* the frame is up */
+BOOL con_render_ready(void);            /* the same, not taken */
 
 /* What console.c needs from the rest of CTerm (main.c), for a tab. */
 extern struct Window *win;

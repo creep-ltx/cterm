@@ -76,7 +76,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-static const char version[] = "$VER: CTerm 0.3b3 (10.10.2026)";
+static const char version[] = "$VER: CTerm 0.3b4 (10.10.2026)";
 
 struct Library *SocketBase;
 struct Library *KeymapBase;
@@ -227,8 +227,12 @@ void draw_now(void)
             term_now(&b);
             lastcost = (b.tv_secs - a.tv_secs) * 1000000 +
                        (LONG)b.tv_micro - (LONG)a.tv_micro;
-        } else
+        } else {
             refresh();
+            lastcost = 0;               /* not measured here: an AGA
+                                         * screen's cost no longer paces
+                                         * a card's floods */
+        }
     }
     PF_ADD(pf_draw, t0);
 #ifdef PROFILE
@@ -253,7 +257,10 @@ static void draw_soon(void)
          * redrawing a flooded screen), wait half as long again as it
          * took, so the text keeps coming in between (CCON's pacing) */
         LONG us = flood ? 60000 : 20000, p = lastcost * PACE;
-        if (flood && p > us)
+        /* not only in a flood: a busy screen redrawn in place (a
+         * full-screen program) paces the same - the frame timer was, by
+         * mistake, an IntuiTick (100 ms) until the short loop heeded it */
+        if (p > us)
             us = p > PACEMAX ? PACEMAX : p;
         con_arm_render(us);
     }
@@ -667,6 +674,7 @@ static void tab_drop(struct Tab *t)
     if (i < 0)
         return;
     T = t;
+    term_sync(t);                       /* its last writes, into the log */
     log_stop();
     if (sock >= 0) {
         if (sshmode) {
@@ -956,8 +964,12 @@ BOOL loop_round(LONG xfd, LONG ms)
             /* only the Shells' packets: answer them and wait again. The
              * window, the title, the menus wait for a real event or the
              * frame timer - on a stock A1200 the round's other checks were
-             * a good part of each write (CCON: a lean loop per write) */
-            if ((sigs & ~consigs) || !shells_only(sigs))
+             * a good part of each write (CCON: a lean loop per write).
+             * The timer's bit is the Shells' too (WAIT_CHAR): a frame
+             * that is up ends the loop, or an inactive window (no ticks)
+             * was never drawn. */
+            if ((sigs & ~consigs) || !shells_only(sigs) ||
+                con_render_ready())
                 break;
         }
     } else {

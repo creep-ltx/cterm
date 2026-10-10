@@ -264,7 +264,10 @@ BOOL open_display(void)
             WA_Height, scr->Height, WA_CustomScreen, (ULONG)scr,
             WA_Backdrop, TRUE, WA_Borderless, TRUE,
             WA_SimpleRefresh, TRUE, WA_Activate, TRUE,
-            WA_NewLookMenus, TRUE, WA_IDCMP, idcmp, TAG_END);
+            WA_NewLookMenus, TRUE, WA_IDCMP,
+            idcmp | IDCMP_REFRESHWINDOW, TAG_END);  /* simple refresh:
+                                         * a closed window's place is ours
+                                         * to draw again, or stays grey */
     } else {
         int top0 = scr->BarHeight + 1;
         /* the window for want_cols x want_rows cells, frame included */

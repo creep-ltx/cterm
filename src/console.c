@@ -168,6 +168,12 @@ BOOL con_render_due(void)
     return FALSE;
 }
 
+/* The frame is up, but not taken (con_render_due takes it). */
+BOOL con_render_ready(void)
+{
+    return rarmed && CheckIO((struct IORequest *)rtio);
+}
+
 ULONG con_timer_sig(void)
 {
     return timerport ? 1UL << timerport->mp_SigBit : 0;

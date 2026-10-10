@@ -66,12 +66,13 @@ static void fg24(int r, int g, int b) { putf("\x1b[38;2;%d;%d;%dm", r, g, b); }
 static void bg24(int r, int g, int b) { putf("\x1b[48;2;%d;%d;%dm", r, g, b); }
 static void reset(void) { put("\x1b[0m"); }
 
-/* a time in 50ths of a second */
+/* a time in 50ths of a second - the day counts too, or a page or a race
+ * across midnight went backwards (400 days fit in a LONG) */
 static LONG ticks(void)
 {
     struct DateStamp d;
     DateStamp(&d);
-    return (d.ds_Minute * 60 * 50) + d.ds_Tick;
+    return ((d.ds_Days % 400) * 1440 + d.ds_Minute) * 60 * 50 + d.ds_Tick;
 }
 
 /* ---- keys --------------------------------------------------------------- */
@@ -83,6 +84,8 @@ static int key_wait(LONG us)
 {
     UBYTE c;
     flush();
+    if (CheckSignal(SIGBREAKF_CTRL_C))
+        return K_END;                   /* Ctrl-C, or Break from outside */
     if (!WaitForChar(in, us))
         return K_NONE;
     if (Read(in, &c, 1) != 1)
@@ -575,6 +578,8 @@ static void p_boing(void)
 {
     heading("Boing!", "24-bit colour, two pixels a cell, and synchronized output (mode 2026)");
     fw = cols - 6;
+    if (fw > FMAXC)
+        fw = FMAXC;                     /* what the ball's rows can hold */
     fh = rows - 7;
     if (fh > 18)
         fh = 18;
@@ -739,7 +744,9 @@ static int p_xfer_anim(int n)
 
 static LONG flood_lines = 1500;
 static char fname[40] = "CON:";       /* FLOOD: the console's name */
-static char conwin[200] = "CON:676/18/600/560/CON: the Amiga's console/CLOSE/WAIT";
+/* no WAIT: closing a WAIT window waits for its gadget, and the race
+ * stood still at "CON: first..." - it is closed after CTerm's turn */
+static char conwin[200] = "CON:676/18/600/560/CON: the Amiga's console/CLOSE";
 
 /* text like a build's output, in the 8 colours both consoles know */
 static int flood_line(char *s, int i)
@@ -755,14 +762,23 @@ static int flood_line(char *s, int i)
     return n;
 }
 
-static LONG flood(BPTR o)
+/* settle: a console to ask for a key, so that what it took is on the
+ * screen before the clock stops (CTerm answers writes at once and draws
+ * later; a WaitForChar with a time draws all of it) */
+static LONG flood(BPTR o, BPTR settle)
 {
     char s[200];
     LONG i, t = ticks(), n;
     for (i = 1; i <= flood_lines; i++) {
+        if ((i & 63) == 0 && CheckSignal(SIGBREAKF_CTRL_C)) {
+            SetSignal(SIGBREAKF_CTRL_C, SIGBREAKF_CTRL_C);  /* for key_wait */
+            break;
+        }
         n = flood_line(s, (int)i);
         Write(o, s, n);                 /* a line a write, as programs do */
     }
+    if (settle)
+        WaitForChar(settle, 1);
     return ticks() - t;
 }
 
@@ -833,9 +849,8 @@ static int race_go(void)
     }
     DeleteFile((STRPTR)"T:CTermRace");
     SystemTags((STRPTR)cmd, SYS_Input, 0, SYS_Output, con, TAG_END);
-    /* a System() that waits leaves its handles to us: closed here, the
-     * window stays until its gadget is clicked (WAIT) - its time is in it */
-    Close(con);
+    /* a System() that waits leaves its handles to us: closed after
+     * CTerm's turn, so its time stays in sight until then */
     if ((f = Open((STRPTR)"T:CTermRace", MODE_OLDFILE))) {
         LONG n = Read(f, res, sizeof res - 1);
         res[n > 0 ? n : 0] = 0;
@@ -846,7 +861,8 @@ static int race_go(void)
     /* then CTerm, alone */
     put("\x1b[H\x1b[2J");
     flush();
-    t = flood(out);
+    t = flood(out, in);
+    Close(con);
     put("\x1b[0m\x1b[H\x1b[2J");
     {
         char sub[100];
@@ -858,7 +874,8 @@ static int race_go(void)
     race_bar(7, "CTerm", t, them > t ? them : t, cols - 22, 32);
     at(10, 3);
     if (t > 0 && them > t)
-        putf("CTerm is \x1b[1;32m%ld times\x1b[0m as fast here.", (long)(them / t));
+        putf("CTerm is \x1b[1;32m%ld.%ld times\x1b[0m as fast here.",
+             (long)(them / t), (long)(them * 10 / t % 10));
     else if (t == 0)
         put("CTerm took less than a 50th of a second.");
     at(12, 3);
@@ -932,7 +949,9 @@ static void tour(LONG first)
                 if (p->anim == p_cursor_anim)
                     put("\x1b[10;15H");
             }
-            left = until ? (until - ticks()) * 20000 : 0x7FFFFFFF;
+            left = until ? until - ticks() : 0x7FFFFFFF;
+            if (until)                  /* 50ths to us, a long SECS kept */
+                left = left > 107000 ? 0x7FFFFFFF : left * 20000;
             if (until && left <= 0) {
                 k = K_NEXT;
                 break;
@@ -989,7 +1008,7 @@ int main(void)
         char s[120];
         LONG t;
         Delay(5);                       /* the window is up */
-        t = flood(out);
+        t = flood(out, 0);
         sprintf(s, "\x1b[0m\n\x1b[1m%s  %ld lines in %ld.%02ld s  (%ld a second)\x1b[0m\n",
                 fname, (long)flood_lines, (long)(t / 50), (long)((t % 50) * 2),
                 (long)(t ? flood_lines * 50 / t : 0));

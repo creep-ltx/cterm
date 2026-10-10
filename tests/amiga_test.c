@@ -60,7 +60,25 @@ int main(void)
         l = vt_line(v, 2, 0, &w);
         CHECK(w >= 3 && l[1].cp == 0xE2 && l[2].cp == 'y',
               "UTF-8 Shell: a broken sequence: its bytes as Latin-1 (94: C1)");
+        /* a 2-byte lead (C4 C5 D6: Ä Å Ö) then 9B: the letter, then CSI */
+        feed(v, "\x0c" "ab" "\xc5" "\x9b" "K" "\xc4" "\x9b" "Dz");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 4 && l[2].cp == 0xC5 && l[3].cp == 'z',
+              "UTF-8 Shell: Å then 9B K / Ä then 9B D, not ś / ě");
+        feed(v, "\x0c" "\xe2\x80\x9b" "\xe2\x9b\x94" "z");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 3 && l[0].cp == 0x201B && l[1].cp == 0x26D4 &&
+              l[2].cp == 'z', "UTF-8 Shell: 3-byte letters with a 9B in them");
+        /* a program's ESC % G ... ESC % @ leaves the tab's own UTF-8 on */
+        feed(v, "\x0c" "\x1b%G" "\x1b%@" "\xc3\xa5" "z");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 2 && l[0].cp == 0xE5 && l[1].cp == 'z',
+              "UTF-8 Shell: ESC % @ goes back to the tab's UTF-8");
         vt_set_amiga(v, 1);             /* back to Latin-1, as the Shell starts */
+        feed(v, "\x0c" "\x1b%G" "\xc3\xa5" "\x1b%@" "\xc3\xa5");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 3 && l[0].cp == 0xE5 && l[1].cp == 0xC3 && l[2].cp == 0xA5,
+              "Latin-1 Shell: ESC % G for a while, ESC % @ back to Latin-1");
     }
     feed(v, "\x0c" "page");                      /* FF = clear page */
     CHECK(at(v, 0, 0) == 'p' && at(v, 0, 4) == ' ', "FF clears and homes");

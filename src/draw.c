@@ -1038,7 +1038,11 @@ static void pp_setup(void)
 {
     struct BitMap *bm = scr->RastPort.BitMap;
     ppon = (planar || chunky) && !usett && cw == 8 && ch <= 32 && bm &&
-           (chunky || bm->Depth <= 8) && cols < PPSLOTS - 8 && !nopp;
+           (chunky || (bm->Depth <= 8 &&
+                       /* real planes: a card's bitmap with no
+                        * cybergraphics emulation is not */
+                       (GetBitMapAttr(bm, BMA_FLAGS) & BMF_STANDARD))) &&
+           cols < PPSLOTS - 8 && !nopp;
     if (!ppon) {
         pp_free();
         pp_font = NULL;
@@ -1387,7 +1391,7 @@ void draw_cursor(BOOL on)
  * ==================================================================== */
 
 ULONG *rowbuf;                   /* one text row: cols*cw x ch */
-static LONG rowbuf_n;
+static LONG rowbuf_n;                   /* its size in bytes */
 /* The cell cache: one table of single cells and a smaller one of wide
  * ones (each picture only as big as its cell). Entries: about one per
  * two cells of the window, a power of 2 from 64 to 4096, and never more
@@ -1893,14 +1897,14 @@ void painter_setup(void)
     pp_setup();                         /* off: not planar */
     if (!cache_fits() && !cache_alloc())
         return;
-    if (need > rowbuf_n) {
+    /* sizes in bytes: a 256-colour screen's buffer (a byte a pixel) is
+     * a quarter of what this one needs at the same size */
+    if (need * 4 > rowbuf_n) {
         if (rowbuf) FreeVec(rowbuf);
         rowbuf = AllocVec(need * 4, MEMF_ANY);
-        rowbuf_n = rowbuf ? need : 0;
+        rowbuf_n = rowbuf ? need * 4 : 0;
     }
-    painter = rowbuf != NULL;
-    if (rowbuf_n < need)
-        painter = FALSE;
+    painter = rowbuf != NULL && rowbuf_n >= need * 4;
     backdrop_make();                    /* the picture for this window */
 }
 
