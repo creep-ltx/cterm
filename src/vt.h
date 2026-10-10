@@ -24,10 +24,22 @@ enum {
 /* The right half of a wide (2-cell) character holds this. */
 #define VT_WIDE_TAIL 0xFFFFFFFFu
 
+#define VT_PENS 1           /* cells carry pen numbers (vt_pens) */
+
+/* How a cell looks: its colours and style. */
 typedef struct {
-    uint32_t cp;            /* Unicode code point; 0 = empty (a space) */
     uint32_t fg, bg;
     uint16_t attr;
+} VtPen;
+
+/* A cell: its character and the number of its look in the pen table
+ * (vt_pens). One look, one number - two cells look alike exactly when
+ * their pens are equal; pen 0 is the default (no colours, no style).
+ * 6 bytes on the Amiga: a stock A1200 writes every new letter to chip
+ * memory, and a cell of 14 bytes was most of a letter's cost. */
+typedef struct {
+    uint32_t cp;            /* Unicode code point; 0 = empty (a space) */
+    uint16_t pen;
 } VtCell;
 
 typedef struct Vt Vt;
@@ -66,6 +78,9 @@ int vt_rows(const Vt *vt);
 /* Row r of the visible screen: 0..rows-1; with a scrollback offset of
  * `back` lines, rows come from the history first. */
 const VtCell *vt_line(const Vt *vt, int r, int back, int *width);
+/* The pen table: vt_pens(vt)[cell.pen] is the cell's look. It may move
+ * when bytes are written: take it again after vt_write. */
+const VtPen *vt_pens(const Vt *vt);
 int vt_history(const Vt *vt);       /* lines in the scrollback */
 
 void vt_cursor(const Vt *vt, int *x, int *y, int *visible);

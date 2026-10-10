@@ -4,6 +4,9 @@
  */
 #include "cterm.h"
 #include "ppaint.h"
+
+/* A cell's look (its colours and style), from the shown tab's table */
+#define PEN(c) (&vt_pens(vt)[(c)->pen])
 #include <graphics/regions.h>
 
 struct CEntry;
@@ -371,22 +374,25 @@ static ULONG pen_rgb(int i)
  * (forgotten with the RastPort state, at every draw). */
 static void cell_rgb(const VtCell *c, ULONG *fg, ULONG *bg)
 {
-    static ULONG kf, kb, rf, rb;
-    static UWORD ka;
-    if (rgb_memo && c->fg == kf && c->bg == kb && c->attr == ka) {
+    static ULONG rf, rb;
+    static UWORD kp;
+    static const void *kv;
+    if (rgb_memo && c->pen == kp && kv == vt) {
         *fg = rf;
         *bg = rb;
         return;
     }
     cell_rgb_(c, fg, bg);
-    kf = c->fg; kb = c->bg; ka = c->attr;
+    kp = c->pen;
+    kv = vt;
     rf = *fg; rb = *bg;
     rgb_memo = TRUE;
 }
 
 static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg)
 {
-    ULONG f, b, cf = c->fg, cb = c->bg;
+    const VtPen *pn = PEN(c);
+    ULONG f, b, cf = pn->fg, cb = pn->bg;
     if (pcmode) {
         /* a PC: bold is the bright half of the 16 colours, blink the
          * bright backgrounds; the default is grey on black */
@@ -394,9 +400,9 @@ static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg)
             cf = VT_INDEX(7);
         if (cb == VT_DEFAULT)
             cb = VT_INDEX(0);
-        if ((c->attr & VT_BOLD) && VT_IS_INDEX(cf) && (cf & 255) < 8)
+        if ((pn->attr & VT_BOLD) && VT_IS_INDEX(cf) && (cf & 255) < 8)
             cf += 8;
-        if ((c->attr & VT_BLINK) && VT_IS_INDEX(cb) && (cb & 255) < 8)
+        if ((pn->attr & VT_BLINK) && VT_IS_INDEX(cb) && (cb & 255) < 8)
             cb += 8;
         f = VT_IS_INDEX(cf) ? index_rgb(cf & 255) : cf & 0xFFFFFF;
         /* black behind text is the window's own background: on a
@@ -409,7 +415,7 @@ static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg)
         b = cb == VT_DEFAULT ? defbg : VT_IS_INDEX(cb)
           ? pen_rgb(cb & 255) : cb & 0xFFFFFF;
     }
-    BOOL inv = (c->attr & VT_INVERSE) != 0;
+    BOOL inv = (pn->attr & VT_INVERSE) != 0;
     if (vt_reverse_video(vt))
         inv = !inv;
     if (inv) {
@@ -417,9 +423,9 @@ static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg)
         f = b;
         b = t;
     }
-    if (c->attr & VT_DIM)
+    if (pn->attr & VT_DIM)
         f = mix(f, b, 40);
-    if (c->attr & VT_HIDDEN)
+    if (pn->attr & VT_HIDDEN)
         f = b;
     *fg = f;
     *bg = b;
@@ -761,7 +767,7 @@ static BOOL sel_span(int r, int *s0, int *s1)
 
 static void draw_cells(int r, int x0, int x1)
 {
-    static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
+    static const VtCell empty = { 0, 0 };
     static UBYTE text[512];
     int w, x, y = oy + r * ch;
     const VtCell *line = vt_line(vt, r, back, &w);
@@ -783,9 +789,10 @@ static void draw_cells(int r, int x0, int x1)
         insel = x >= s0 && x <= s1;
         x1 = insel ? (s1 < xend ? s1 : xend)
                    : (x < s0 && s0 - 1 < xend ? s0 - 1 : xend);
-        UWORD style = (c->attr & VT_BOLD && !pcmode ? FSF_BOLD : 0) |
-                      (c->attr & VT_ITALIC ? FSF_ITALIC : 0) |
-                      (c->attr & VT_UNDERLINE ? FSF_UNDERLINED : 0);
+        UWORD cat = PEN(c)->attr;
+        UWORD style = (cat & VT_BOLD && !pcmode ? FSF_BOLD : 0) |
+                      (cat & VT_ITALIC ? FSF_ITALIC : 0) |
+                      (cat & VT_UNDERLINE ? FSF_UNDERLINED : 0);
 
         cell_rgb(c, &fg, &bg);
         if (insel) {
@@ -830,13 +837,12 @@ static void draw_cells(int r, int x0, int x1)
         if (line) {
             const VtCell *d = &line[x];
             int lim = x1 < w - 1 ? x1 : w - 1;
-            ULONG cf = c->fg, cb = c->bg;
-            UWORD ca = c->attr;
+            UWORD cpn = c->pen;
             if (lim - x >= (int)sizeof text)
                 lim = x + (int)sizeof text - 1;
             while (x <= lim) {
                 ULONG dc = d->cp;
-                if (dc > 0xFF || d->fg != cf || d->bg != cb || d->attr != ca)
+                if (dc > 0xFF || d->pen != cpn)
                     break;
                 text[n++] = dc < 0x20 ? ' ' : (UBYTE)dc;
                 d++;
@@ -849,15 +855,13 @@ static void draw_cells(int r, int x0, int x1)
             ULONG f2, b2;
             if (is_special(d->cp))
                 break;
-            if (d != c && (d->attr != c->attr || d->fg != c->fg ||
-                           d->bg != c->bg)) {
+            if (d != c && d->pen != c->pen) {
                 cell_rgb(d, &f2, &b2);
                 /* the strike is drawn once for the run: a part of it */
                 if (f2 != fg || b2 != bg ||
-                    (d->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE |
-                                VT_STRIKE)) !=
-                    (c->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE |
-                                VT_STRIKE)))
+                    (PEN(d)->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE |
+                                     VT_STRIKE)) !=
+                    (cat & (VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE)))
                     break;
             }
             text[n++] = d->cp == VT_WIDE_TAIL ? ' ' : d->cp < 0x20 ? ' '
@@ -878,7 +882,7 @@ static void draw_cells(int r, int x0, int x1)
                 ucol[m++] = k;
             }
             if (m)
-                tt_run(u, ucol, m, y, fg, c->attr);
+                tt_run(u, ucol, m, y, fg, cat);
         } else {
             if (linespace) {            /* Text() fills the font's rows only */
                 apen(bg);
@@ -890,7 +894,7 @@ static void draw_cells(int r, int x0, int x1)
             Move(rp, ox + start * cw, y + cbase);
             Text(rp, (STRPTR)text, n);
         }
-        if (c->attr & VT_STRIKE)
+        if (cat & VT_STRIKE)
             hline(ox + start * cw, ox + x * cw - 1, y + ch / 2, 1);
     }
     softstyle(0);
@@ -1027,7 +1031,7 @@ static __attribute__((noinline)) UWORD pp_pens(const VtCell *c, BOOL insel,
     fp = pen_for(fg);
     bp = pen_for(bg);
     *used |= (UBYTE)(fp ^ pbase) | (UBYTE)(bp ^ pbase);
-    s = c->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE);
+    s = PEN(c)->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE);
     if (pcmode)
         s &= ~VT_BOLD;
     *st = s;
@@ -1040,7 +1044,7 @@ static BOOL pp_cells(int r, int a, int b)
 {
     if (chunky)
         return FALSE;
-    static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
+    static const VtCell empty = { 0, 0 };
     struct Layer *ly = rp->Layer;
     struct BitMap *bm = rp->BitMap;
     struct ClipRect *cr;
@@ -1074,8 +1078,7 @@ static BOOL pp_cells(int r, int a, int b)
             int x = a + i;
             const VtCell *c = x < w && line ? &line[x] : &empty;
             BOOL insel = x >= s0 && x <= s1;
-            if (!prev || c->fg != prev->fg || c->bg != prev->bg ||
-                c->attr != prev->attr || insel != psel) {
+            if (!prev || c->pen != prev->pen || insel != psel) {
                 pw = pp_pens(c, insel, &st, &used);
                 psel = insel;
             }
@@ -1090,15 +1093,12 @@ static BOOL pp_cells(int r, int a, int b)
         UWORD *pwp = pp_pw;
         const VtCell *c = line ? line + a : &empty;
         int k = line ? (w - 1 < b ? w - a : n) : 0;
-        ULONG cf = ~0UL, cb = ~0UL;
-        UWORD ca = 0xFFFF;
+        ULONG cpn = ~0UL;
         for (i = 0; i < k; i++, c++) {
             ULONG cp, *g;
-            if (c->fg != cf || c->bg != cb || c->attr != ca) {
+            if (c->pen != cpn) {
                 pw = pp_pens(c, FALSE, &st, &used);
-                cf = c->fg;
-                cb = c->bg;
-                ca = c->attr;
+                cpn = c->pen;
             }
             cp = c->cp;
             if (cp > 255 || st || !(g = lat[cp]))
@@ -1148,8 +1148,14 @@ static inline BOOL fresh_row(int r)
  * line - the same places, two ways (planes against pixels). */
 static inline BOOL blank_cell(const VtCell *c)
 {
-    return (!c->cp || c->cp == ' ') && c->bg == VT_DEFAULT &&
-           !(c->attr & (VT_INVERSE | VT_UNDERLINE | VT_STRIKE | VT_BLINK));
+    const VtPen *p;
+    if (c->cp && c->cp != ' ')
+        return FALSE;
+    if (!c->pen)
+        return TRUE;                    /* the default look */
+    p = PEN(c);
+    return p->bg == VT_DEFAULT &&
+           !(p->attr & (VT_INVERSE | VT_UNDERLINE | VT_STRIKE | VT_BLINK));
 }
 
 /* Columns a..b of row r, brought up to date: the text up to the last
@@ -1305,7 +1311,7 @@ void draw_cursor(BOOL on)
         if (usett && c.cp > ' ' && !is_special(c.cp)) {
             ULONG u = c.cp;
             int col = x;
-            tt_run(&u, &col, 1, oy + y * ch, bg, c.attr);
+            tt_run(&u, &col, 1, oy + y * ch, bg, PEN(&c)->attr);
         } else if (c.cp > ' ' && c.cp <= 0xFF) {
             t = (UBYTE)c.cp;
             drmd(JAM1);
@@ -1607,7 +1613,7 @@ static void forget_shown(void)
  * long) for the cell's colours, made again only when the colours change. */
 static void paint_row8(int r, int cx, int cy, int cshape, int ps0, int ps1)
 {
-    static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
+    static const VtCell empty = { 0, 0 };
     static ULONG nib[16];
     static LONG nfg = -1, nbg = -1;
     int w, x, rw = cols * 8, ml = rw / 4;
@@ -1623,8 +1629,7 @@ static void paint_row8(int r, int cx, int cy, int cshape, int ps0, int ps1)
         const UBYTE *g;
         ULONG *d;
         int y;
-        if (rev || !prev || c->fg != prev->fg || c->bg != prev->bg ||
-            c->attr != prev->attr) {
+        if (rev || !prev || c->pen != prev->pen) {
             ULONG fg, bg;
             cell_rgb(c, &fg, &bg);
             if (rev) {
@@ -1632,7 +1637,7 @@ static void paint_row8(int r, int cx, int cy, int cshape, int ps0, int ps1)
             }
             fp = pen_for(fg) & 255;
             bp = pen_for(bg) & 255;
-            st = c->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE);
+            st = PEN(c)->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE);
             if (pcmode)
                 st &= ~VT_BOLD;
             if (fp != nfg || bp != nbg) {
@@ -1663,7 +1668,7 @@ static void paint_row8(int r, int cx, int cy, int cshape, int ps0, int ps1)
 static void paint_row(int r)
 {
     int ps0 = -1, ps1 = -2, cshape, blink;
-    static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
+    static const VtCell empty = { 0, 0 };
     int w, x, cx = -1, cy = -1, vis = 0, rw = cols * cw;
     const VtCell *line = vt_line(vt, r, back, &w);
     const VtCell *prev = NULL;
@@ -1725,8 +1730,7 @@ static void paint_row(int r)
         if (x + 1 < cols && x + 1 < w && line && line[x + 1].cp == VT_WIDE_TAIL)
             wide = 1;
         /* neighbours mostly share colours: work them out once a run */
-        if (prev && c->fg == prev->fg && c->bg == prev->bg &&
-            c->attr == prev->attr) {
+        if (prev && c->pen == prev->pen) {
             fg = pfg;
             bg = pbg;
         } else {
@@ -1756,7 +1760,7 @@ static void paint_row(int r)
             const ULONG *bk = backdrop + (oy + r * ch - bky) * bkw +
                               (ox + x * cw - bkx);
             e = cell_get(cp, 0xFFFFFF, MASKKEY,
-                         pcmode ? c->attr & ~VT_BOLD : c->attr, wide);
+                         pcmode ? PEN(c)->attr & ~VT_BOLD : PEN(c)->attr, wide);
             pe = NULL;
             src = e->pix;
             for (y = 0; y < ch; y++) {
@@ -1789,7 +1793,7 @@ static void paint_row(int r)
             e = pe;                     /* the same cell again (spaces) */
         else
             e = pe = cell_get(cp, fg, bg,
-                              pcmode ? c->attr & ~VT_BOLD : c->attr, wide);
+                              pcmode ? PEN(c)->attr & ~VT_BOLD : PEN(c)->attr, wide);
         src = e->pix;
         for (y = 0; y < ch; y++) {
             ULONG *s2 = src, *d2 = dst;

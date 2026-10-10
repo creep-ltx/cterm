@@ -14,7 +14,7 @@ static VtCell sh[MAXR][MAXC];
 
 static int same(const VtCell *a, const VtCell *b)
 {
-    return a->cp == b->cp && a->fg == b->fg && a->bg == b->bg && a->attr == b->attr;
+    return a->cp == b->cp && a->pen == b->pen;     /* one look, one pen */
 }
 
 static void cell_at(Vt *v, int y, int x, VtCell *out)

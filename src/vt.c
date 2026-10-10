@@ -17,7 +17,7 @@ enum { S_GROUND, S_ESC, S_ESC_INT, S_CSI, S_OSC, S_OSC_ESC, S_STR,
 
 typedef struct {
     int x, y, pending;
-    VtCell pen;
+    VtPen look;
     int origin, autowrap;
     char g[2];
     int gl;
@@ -40,7 +40,16 @@ struct Vt {
 
     int x, y, pending;              /* pending: at the last column, the
                                        next character wraps first */
-    VtCell pen;                     /* what new characters look like */
+    VtPen look;                     /* what new characters look like */
+    uint16_t pen;                   /* its number, when !pen_stale */
+    int pen_stale;
+    uint16_t bpen;                  /* a blank's pen (the look's bg) */
+    uint32_t bpen_bg;
+    /* the pen table: every look in use, once; phash: its index + 1 by
+     * hash (0: free), open addressing */
+    VtPen *pens;
+    int npens, pcap;
+    uint16_t *phash;
     int top, bot;                   /* the scroll region, inclusive */
     int autowrap, origin, insert, lnm, cursor_on, app_cursor, app_keypad;
     int bracketed, reverse, utf8;
@@ -82,13 +91,66 @@ struct Vt {
 
 /* ---- small things ---------------------------------------------------- */
 
-static VtCell blank_of(const Vt *v)
+static int pen_gc(Vt *v);
+
+static unsigned pen_hash(const VtPen *p)
+{
+    uint32_t h = p->fg * 2654435761u ^ p->bg * 0x9E3779B1u ^ p->attr;
+    return (h ^ (h >> 15)) * 0x85EBCA6Bu >> 8;
+}
+
+/* A look's number: found, or added (the table grows; when it is full, the
+ * looks no cell uses any more are dropped first). 0: no memory - the
+ * default look, so text still shows. */
+static uint16_t intern(Vt *v, const VtPen *p)
+{
+    unsigned m, h;
+    if (!p->fg && !p->bg && !p->attr)
+        return 0;
+    for (;;) {
+        m = 2 * v->pcap - 1;
+        for (h = pen_hash(p) & m; v->phash[h]; h = (h + 1) & m) {
+            const VtPen *q = &v->pens[v->phash[h] - 1];
+            if (q->fg == p->fg && q->bg == p->bg && q->attr == p->attr)
+                return (uint16_t)(v->phash[h] - 1);
+        }
+        if (v->npens < v->pcap) {
+            v->pens[v->npens] = *p;
+            v->phash[h] = (uint16_t)(v->npens + 1);
+            return (uint16_t)v->npens++;
+        }
+        if (!pen_gc(v))
+            return 0;
+    }
+}
+
+static uint16_t cur_pen(Vt *v)
+{
+    if (v->pen_stale) {
+        v->pen = intern(v, &v->look);
+        v->pen_stale = 0;
+    }
+    return v->pen;
+}
+
+static VtCell blank_of(Vt *v)
 {
     VtCell c;
     c.cp = 0;
-    c.fg = VT_DEFAULT;         /* a blank shows no letter: only its */
-    c.bg = v->pen.bg;          /* background counts (BCE) */
-    c.attr = 0;
+    /* a blank shows no letter: only its background counts (BCE) */
+    if (!v->look.bg)
+        c.pen = 0;
+    else {
+        if (v->bpen_bg != v->look.bg) {
+            VtPen b;
+            b.fg = VT_DEFAULT;
+            b.bg = v->look.bg;
+            b.attr = 0;
+            v->bpen = intern(v, &b);
+            v->bpen_bg = v->look.bg;
+        }
+        c.pen = v->bpen;
+    }
     return c;
 }
 
@@ -104,24 +166,24 @@ static void fill(VtCell *p, int n, VtCell c)
  * of cells written - on a 14 MHz Amiga that is most of a new line's cost.
  * The count and the row's capacity live in a cell just before it. */
 #define RLEN(r) ((r)[-1].cp)
-#define RCAP(r) ((r)[-1].fg)
+#define RCAP(r) ((r)[-2].cp)
 /* RWRAP: the row ran on into the next (the text wrapped there, it did
  * not end): what lets a resize join and wrap the lines again */
-#define RWRAP(r) ((r)[-1].attr)
+#define RWRAP(r) ((r)[-1].pen)
 
 static VtCell *row_new(int cols)
 {
-    VtCell *b = calloc(cols + 1, sizeof(VtCell));
+    VtCell *b = calloc(cols + 2, sizeof(VtCell));
     if (!b)
         return NULL;
-    b[0].fg = cols;
-    return b + 1;
+    b[0].cp = cols;
+    return b + 2;
 }
 
 static void row_free(VtCell *r)
 {
     if (r)
-        free(r - 1);
+        free(r - 2);
 }
 
 /* Cells up to x1 (exclusive) about to be read or written: make them real. */
@@ -139,7 +201,7 @@ static void grow(VtCell *r, int x1)
 static void blank_range(VtCell *r, int x0, int x1, VtCell b)
 {
     int l = (int)RLEN(r);
-    if (!b.fg && !b.bg) {
+    if (!b.pen) {
         if (x1 >= l) {
             if (x0 < l)
                 RLEN(r) = x0;
@@ -484,7 +546,7 @@ static void save_cursor(Vt *v)
     s->x = v->x;
     s->y = v->y;
     s->pending = v->pending;
-    s->pen = v->pen;
+    s->look = v->look;
     s->origin = v->origin;
     s->autowrap = v->autowrap;
     s->g[0] = v->g[0];
@@ -498,7 +560,8 @@ static void restore_cursor(Vt *v)
     v->x = s->x < v->cols ? s->x : v->cols - 1;
     v->y = s->y < v->rows ? s->y : v->rows - 1;
     v->pending = s->pending;
-    v->pen = s->pen;
+    v->look = s->look;
+    v->pen_stale = 1;
     v->origin = s->origin;
     v->autowrap = s->autowrap;
     v->g[0] = s->g[0];
@@ -559,11 +622,11 @@ static void put(Vt *v, uint32_t cp)
         r[v->x - 1] = blank_of(v);
     if (v->x + w < v->cols && r[v->x + w].cp == VT_WIDE_TAIL)
         r[v->x + w] = blank_of(v);
-    r[v->x] = v->pen;
     r[v->x].cp = cp;
+    r[v->x].pen = cur_pen(v);
     if (w == 2) {
-        r[v->x + 1] = v->pen;
         r[v->x + 1].cp = VT_WIDE_TAIL;
+        r[v->x + 1].pen = r[v->x].pen;
     }
     if (v->insert)
         dirty_row(v, v->y);
@@ -688,10 +751,11 @@ static void use_alt(Vt *v, int on, int clear)
 
 static void reset_pen(Vt *v)
 {
-    v->pen.cp = 0;
-    v->pen.fg = VT_DEFAULT;
-    v->pen.bg = VT_DEFAULT;
-    v->pen.attr = 0;
+    v->look.fg = VT_DEFAULT;
+    v->look.bg = VT_DEFAULT;
+    v->look.attr = 0;
+    v->pen = 0;
+    v->pen_stale = 0;
 }
 
 static void reset_tabs(Vt *v)
@@ -754,37 +818,38 @@ static void sgr(Vt *v)
         reset_pen(v);
         return;
     }
+    v->pen_stale = 1;                   /* the look changes: a number later */
     for (i = 0; i < v->nparam; i++) {
         int p = v->param[i];
         if (p < 0)
             p = 0;
         switch (p) {
-        case 0: reset_pen(v); break;
-        case 1: v->pen.attr |= VT_BOLD; break;
-        case 2: v->pen.attr |= VT_DIM; break;
-        case 3: v->pen.attr |= VT_ITALIC; break;
-        case 4: v->pen.attr |= VT_UNDERLINE; break;
-        case 5: case 6: v->pen.attr |= VT_BLINK; break;
-        case 7: v->pen.attr |= VT_INVERSE; break;
-        case 8: v->pen.attr |= VT_HIDDEN; break;
-        case 9: v->pen.attr |= VT_STRIKE; break;
-        case 21: v->pen.attr |= VT_UNDERLINE; break;
-        case 22: v->pen.attr &= ~(VT_BOLD | VT_DIM); break;
-        case 23: v->pen.attr &= ~VT_ITALIC; break;
-        case 24: v->pen.attr &= ~VT_UNDERLINE; break;
-        case 25: v->pen.attr &= ~VT_BLINK; break;
-        case 27: v->pen.attr &= ~VT_INVERSE; break;
-        case 28: v->pen.attr &= ~VT_HIDDEN; break;
-        case 29: v->pen.attr &= ~VT_STRIKE; break;
-        case 38: i += ext_colour(v, i, &v->pen.fg); break;
-        case 39: v->pen.fg = VT_DEFAULT; break;
-        case 48: i += ext_colour(v, i, &v->pen.bg); break;
-        case 49: v->pen.bg = VT_DEFAULT; break;
+        case 0: reset_pen(v); v->pen_stale = 1; break;
+        case 1: v->look.attr |= VT_BOLD; break;
+        case 2: v->look.attr |= VT_DIM; break;
+        case 3: v->look.attr |= VT_ITALIC; break;
+        case 4: v->look.attr |= VT_UNDERLINE; break;
+        case 5: case 6: v->look.attr |= VT_BLINK; break;
+        case 7: v->look.attr |= VT_INVERSE; break;
+        case 8: v->look.attr |= VT_HIDDEN; break;
+        case 9: v->look.attr |= VT_STRIKE; break;
+        case 21: v->look.attr |= VT_UNDERLINE; break;
+        case 22: v->look.attr &= ~(VT_BOLD | VT_DIM); break;
+        case 23: v->look.attr &= ~VT_ITALIC; break;
+        case 24: v->look.attr &= ~VT_UNDERLINE; break;
+        case 25: v->look.attr &= ~VT_BLINK; break;
+        case 27: v->look.attr &= ~VT_INVERSE; break;
+        case 28: v->look.attr &= ~VT_HIDDEN; break;
+        case 29: v->look.attr &= ~VT_STRIKE; break;
+        case 38: i += ext_colour(v, i, &v->look.fg); break;
+        case 39: v->look.fg = VT_DEFAULT; break;
+        case 48: i += ext_colour(v, i, &v->look.bg); break;
+        case 49: v->look.bg = VT_DEFAULT; break;
         default:
-            if (p >= 30 && p <= 37) v->pen.fg = VT_INDEX(p - 30);
-            else if (p >= 40 && p <= 47) v->pen.bg = VT_INDEX(p - 40);
-            else if (p >= 90 && p <= 97) v->pen.fg = VT_INDEX(p - 90 + 8);
-            else if (p >= 100 && p <= 107) v->pen.bg = VT_INDEX(p - 100 + 8);
+            if (p >= 30 && p <= 37) v->look.fg = VT_INDEX(p - 30);
+            else if (p >= 40 && p <= 47) v->look.bg = VT_INDEX(p - 40);
+            else if (p >= 90 && p <= 97) v->look.fg = VT_INDEX(p - 90 + 8);
+            else if (p >= 100 && p <= 107) v->look.bg = VT_INDEX(p - 100 + 8);
             break;
         }
     }
@@ -1377,8 +1442,7 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
             v->g[v->gl] != '0' && !v->insert) {
             /* whole runs at a time: on a 14 MHz Amiga every instruction
              * per letter shows */
-            const uint32_t fg = v->pen.fg, bg = v->pen.bg;
-            const uint16_t at = v->pen.attr;
+            const uint16_t pn = cur_pen(v);
             const int cols = v->cols;
             for (;;) {
                 VtCell *r, *d;
@@ -1410,18 +1474,14 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
                         else
                             break;
                         p++;
-                        d->fg = fg;
-                        d->bg = bg;
-                        d->attr = at;
+                        d->pen = pn;
                         d++;
                         lim--;
                     }
                 else
                     while (lim > 0 && p < e && (uint8_t)(*p - 0x20) < 0x5F) {
                         d->cp = *p++;
-                        d->fg = fg;
-                        d->bg = bg;
-                        d->attr = at;
+                        d->pen = pn;
                         d++;
                         lim--;
                     }
@@ -1544,6 +1604,87 @@ static VtCell **alloc_screen(int cols, int rows)
     return l;
 }
 
+/* The pen table's room: 64 looks at first, doubled as programs use more,
+ * up to 32768. Full there: the looks no cell uses any more are dropped
+ * and the rest numbered again (every cell rewritten) - rare: it takes a
+ * picture drawn in 24-bit colours. 0: nothing could be freed. */
+#ifndef PEN_MAX
+#define PEN_MAX 32768                   /* tests set it low to try the clean-up */
+#endif
+static int pen_room(Vt *v, int cap)
+{
+    VtPen *np = realloc(v->pens, cap * sizeof *np);
+    uint16_t *nh;
+    int i;
+    if (!np)
+        return 0;
+    v->pens = np;
+    nh = calloc(2 * cap, sizeof *nh);
+    if (!nh)
+        return 0;
+    free(v->phash);
+    v->phash = nh;
+    v->pcap = cap;
+    for (i = 1; i < v->npens; i++) {
+        unsigned m = 2 * cap - 1, h = pen_hash(&v->pens[i]) & m;
+        while (nh[h])
+            h = (h + 1) & m;
+        nh[h] = (uint16_t)(i + 1);
+    }
+    return 1;
+}
+
+static void pen_mark(uint16_t *map, VtCell *r, int remap)
+{
+    int x, n = r ? (int)RLEN(r) : 0;
+    for (x = 0; x < n; x++)
+        if (remap)
+            r[x].pen = map[r[x].pen];
+        else
+            map[r[x].pen] = 1;
+}
+
+static void pen_walk(Vt *v, uint16_t *map, int remap)
+{
+    int i, y;
+    for (i = 0; i < 2; i++)
+        for (y = 0; v->lines[i] && y < v->rows; y++)
+            pen_mark(map, v->lines[i][y], remap);
+    for (i = 0; v->hist && i < v->hist_cap; i++)
+        pen_mark(map, v->hist[i], remap);
+}
+
+static int pen_gc(Vt *v)
+{
+    uint16_t *map;
+    int i, n = 1;
+    if (v->pcap < PEN_MAX)
+        return pen_room(v, v->pcap * 2);
+    map = calloc(v->pcap, sizeof *map);
+    if (!map)
+        return 0;
+    pen_walk(v, map, 0);
+    map[0] = 0;                         /* the default stays 0 */
+    for (i = 1; i < v->npens; i++)
+        if (map[i]) {
+            v->pens[n] = v->pens[i];
+            map[i] = (uint16_t)n++;
+        }
+    pen_walk(v, map, 1);
+    free(map);
+    i = n < v->npens;
+    v->npens = n;
+    v->bpen_bg = 0xFFFFFFFFu;           /* no look has it: made again */
+    v->pen_stale = 1;
+    pen_room(v, v->pcap);               /* the hash, for the new numbers */
+    return i;
+}
+
+const VtPen *vt_pens(const Vt *v)
+{
+    return v->pens;
+}
+
 Vt *vt_new(int cols, int rows, int scrollback)
 {
     Vt *v = calloc(1, sizeof *v);
@@ -1551,6 +1692,13 @@ Vt *vt_new(int cols, int rows, int scrollback)
         return NULL;
     v->cols = cols;
     v->rows = rows;
+    v->npens = 1;                       /* pen 0: the default look */
+    if (!pen_room(v, 64)) {
+        vt_free(v);
+        return NULL;
+    }
+    memset(&v->pens[0], 0, sizeof v->pens[0]);
+    v->bpen_bg = 0xFFFFFFFFu;
     v->lines[0] = alloc_screen(cols, rows);
     v->lines[1] = NULL;                 /* made when first used */
     v->tabs = calloc(cols, 1);
@@ -1590,6 +1738,8 @@ void vt_free(Vt *v)
     free(v->dirty);
     free(v->dx0);
     free(v->dx1);
+    free(v->pens);
+    free(v->phash);
     free(v);
 }
 
