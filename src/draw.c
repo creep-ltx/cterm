@@ -844,9 +844,12 @@ static void draw_cells(int r, int x0, int x1)
             if (d != c && (d->attr != c->attr || d->fg != c->fg ||
                            d->bg != c->bg)) {
                 cell_rgb(d, &f2, &b2);
+                /* the strike is drawn once for the run: a part of it */
                 if (f2 != fg || b2 != bg ||
-                    (d->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE)) !=
-                    (c->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE)))
+                    (d->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE |
+                                VT_STRIKE)) !=
+                    (c->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE |
+                                VT_STRIKE)))
                     break;
             }
             text[n++] = d->cp == VT_WIDE_TAIL ? ' ' : d->cp < 0x20 ? ' '
@@ -896,6 +899,17 @@ static int area_right(void)
 }
 static UBYTE shown_blank[1024];
 
+/* A cell that shows only the background: both ways of drawing skip
+ * these. Blink is in: a PC's blink is a bright background. The text's
+ * colour does not show on a space. The painter draws strike and
+ * underline into its cell pictures, Text() with the font's style and a
+ * line - the same places, two ways (planes against pixels). */
+static inline BOOL blank_cell(const VtCell *c)
+{
+    return (!c->cp || c->cp == ' ') && c->bg == VT_DEFAULT &&
+           !(c->attr & (VT_INVERSE | VT_UNDERLINE | VT_STRIKE | VT_BLINK));
+}
+
 /* Columns a..b of row r, brought up to date: the text up to the last
  * cell in the span that shows anything, then one fill for the rest. A
  * blank row already shown blank (after a scroll, say) is not touched. */
@@ -914,13 +928,8 @@ static void draw_span(int r, int a, int b)
         else {
             if (last > w - 1)
                 last = w - 1;
-            while (last >= a) {
-                const VtCell *c = &line[last];
-                if ((c->cp && c->cp != ' ') || c->bg != VT_DEFAULT ||
-                    (c->attr & (VT_INVERSE | VT_UNDERLINE | VT_STRIKE)))
-                    break;
+            while (last >= a && blank_cell(&line[last]))
                 last--;
-            }
         }
     }
     {
@@ -1286,14 +1295,11 @@ static void paint_row(int r)
     /* a blank row (all default spaces, no cursor): one fill, or nothing */
     if (r != cy && !vt_reverse_video(vt) && ps1 < 0) {
         int blank = 1;
-        for (x = 0; x < w && x < cols && line; x++) {
-            const VtCell *c = &line[x];
-            if ((c->cp && c->cp != ' ') || c->fg != VT_DEFAULT ||
-                c->bg != VT_DEFAULT || c->attr) {
+        for (x = 0; x < w && x < cols && line; x++)
+            if (!blank_cell(&line[x])) {
                 blank = 0;
                 break;
             }
-        }
         if (blank) {
             if (r < (int)sizeof shown_blank && shown_blank[r])
                 return;
