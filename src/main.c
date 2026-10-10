@@ -259,6 +259,7 @@ static char ttfile[160] = "SYS:Fonts/TrueType/DejaVuSansMono.ttf";
  * (int10h.org's Ultimate Oldschool PC Font Pack, CC BY-SA 4.0), at its
  * one true size and not smoothed. */
 static BOOL pcfont = TRUE;              /* the setting */
+static BOOL altmeta = TRUE;             /* Alt is Meta in a host's tab */
 static char pcttfile[160] = "PROGDIR:Fonts/PxPlus_IBM_VGA_8x16.ttf";
 static BOOL pcfont_on;                  /* it is the font now */
 static BOOL ttaa = TRUE;                /* smoothing; off for pixel fonts */
@@ -2203,18 +2204,25 @@ static void send_str(const char *s)
 }
 
 /* Latin-1 typed on the Amiga, sent as UTF-8 when the host speaks it. */
+/* Typed bytes (Latin-1) in one write: a key's ESC and letter must not go
+ * out as two packets - programs time a lone ESC. */
 static void send_typed(const UBYTE *b, LONG n)
 {
-    LONG i;
+    UBYTE out[512];
+    LONG i, k = 0;
     for (i = 0; i < n; i++) {
+        if (k > (LONG)sizeof out - 2) {
+            send_data(out, k);
+            k = 0;
+        }
         if (utf8 && b[i] >= 0x80) {
-            UBYTE u[2];
-            u[0] = 0xC0 | (b[i] >> 6);
-            u[1] = 0x80 | (b[i] & 63);
-            send_data(u, 2);
+            out[k++] = 0xC0 | (b[i] >> 6);
+            out[k++] = 0x80 | (b[i] & 63);
         } else
-            send_data(&b[i], 1);
+            out[k++] = b[i];
     }
+    if (k)
+        send_data(out, k);
 }
 
 static void key(struct IntuiMessage *m)
@@ -2222,6 +2230,10 @@ static void key(struct IntuiMessage *m)
     UWORD code = m->Code, q = m->Qualifier;
     BOOL shift = (q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) != 0;
     BOOL ctrl = (q & IEQUALIFIER_CONTROL) != 0;
+    /* Alt is Meta in a host's tab (the setting); the local Shell keeps
+     * the Amiga's Alt characters */
+    BOOL meta = altmeta && (q & (IEQUALIFIER_LALT | IEQUALIFIER_RALT));
+    int mod = 1 + (shift ? 1 : 0) + (meta ? 2 : 0) + (ctrl ? 4 : 0);
     char buf[16];
     LONG n;
     static const char *const fkeys[10] = {
@@ -2266,25 +2278,33 @@ static void key(struct IntuiMessage *m)
     case 0x4C: case 0x4D: case 0x4E: case 0x4F: {        /* arrows */
         static const char dirs[4] = { 'A', 'B', 'C', 'D' };
         char d = dirs[code - 0x4C];
-        if (shift && (code == 0x4C || code == 0x4D)) {
+        if (mod == 2 && (code == 0x4C || code == 0x4D)) {   /* shift alone */
             scroll_view(back + (code == 0x4C ? rows - 1 : -(rows - 1)));
             return;
         }
-        if (ctrl)
+        if (mod > 1)                    /* xterm: ESC [ 1 ; mod X */
             buf[0] = 0x1b, buf[1] = '[', buf[2] = '1', buf[3] = ';',
-            buf[4] = '5', buf[5] = d, buf[6] = 0;
+            buf[4] = '0' + mod, buf[5] = d, buf[6] = 0;
         else if (vt_app_cursor(vt))
             buf[0] = 0x1b, buf[1] = 'O', buf[2] = d, buf[3] = 0;
         else
             buf[0] = 0x1b, buf[1] = '[', buf[2] = d, buf[3] = 0;
         break;
     }
-    case 0x41: buf[0] = 0x7F; buf[1] = 0; break;         /* backspace */
-    case 0x46: strcpy(buf, "\x1b[3~"); break;            /* del */
-    case 0x45: buf[0] = 0x1B; buf[1] = 0; break;         /* esc */
-    case 0x44: case 0x43: buf[0] = '\r'; buf[1] = 0; break;
+    case 0x41:                                           /* backspace */
+        strcpy(buf, meta ? "\x1b\x7f" : "\x7f");
+        break;
+    case 0x46:                                           /* del */
+        if (mod > 1)
+            strcpy(buf, "\x1b[3;"), buf[4] = '0' + mod, buf[5] = '~',
+            buf[6] = 0;
+        else
+            strcpy(buf, "\x1b[3~");
+        break;
+    case 0x45: strcpy(buf, meta ? "\x1b\x1b" : "\x1b"); break;  /* esc */
+    case 0x44: case 0x43: strcpy(buf, meta ? "\x1b\r" : "\r"); break;
     case 0x42:                                           /* tab */
-        strcpy(buf, shift ? "\x1b[Z" : "\t");
+        strcpy(buf, shift ? "\x1b[Z" : meta ? "\x1b\t" : "\t");
         break;
     case 0x5F: strcpy(buf, "\x1b[2~"); break;            /* help: insert */
     default:
@@ -2293,20 +2313,27 @@ static void key(struct IntuiMessage *m)
             break;
         }
         {
+            /* Meta: the key as without Alt, after an ESC (as xterm's
+             * metaSendsEscape) - bash's Alt+B/F, emacs, Claude Code */
             struct InputEvent ie;
             memset(&ie, 0, sizeof ie);
             ie.ie_Class = IECLASS_RAWKEY;
             ie.ie_Code = code;
-            ie.ie_Qualifier = q;
+            ie.ie_Qualifier = meta ? q & ~(IEQUALIFIER_LALT | IEQUALIFIER_RALT)
+                                   : q;
             ie.ie_EventAddress = m->IAddress ? *((APTR *)m->IAddress) : NULL;
-            n = MapRawKey(&ie, (STRPTR)buf, sizeof buf, NULL);
+            n = MapRawKey(&ie, (STRPTR)buf + 1, sizeof buf - 1, NULL);
         }
         if (n <= 0)
             return;
         if (back)
             scroll_view(0);
-        if (!redial_key(buf))
-            send_typed((UBYTE *)buf, n);
+        if (meta) {
+            buf[0] = 0x1b;
+            n++;
+        }
+        if (!redial_key(buf + 1))
+            send_typed((UBYTE *)(meta ? buf : buf + 1), n);
         return;
     }
     if (back)
@@ -2576,6 +2603,7 @@ static void load_prefs(void)
             }
             else if (!stricmp(p, "pc")) pcmode = saved_pc = val[0] == '1';
             else if (!stricmp(p, "pcfont")) pcfont = val[0] != '0';
+            else if (!stricmp(p, "altmeta")) altmeta = val[0] != '0';
             else if (!stricmp(p, "mode")) {     /* "hexid,w,h" */
                 const char *q = val;
                 ownmode = hexval(q);
@@ -2629,6 +2657,7 @@ static void save_prefs(void)
     strcat(buf, "\nttsize=");
     numstr_cat(buf, pcfont_on ? keepfont.ttsize : ttsize);
     if (!pcfont) strcat(buf, "\npcfont=0");
+    if (!altmeta) strcat(buf, "\naltmeta=0");
     if (fontname[0]) {
         strcat(buf, "\nfont=");
         strcat(buf, fontname);
@@ -3741,7 +3770,7 @@ static void call_dialog(void)
  * ==================================================================== */
 
 enum { S_WHERE = 1, S_MODE, S_MODETXT, S_FULL, S_BAR, S_LETTERS, S_FONT,
-       S_FONTTXT, S_TT, S_TTTXT, S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT,
+       S_FONTTXT, S_TT, S_TTTXT, S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT, S_ALT,
        S_THEME, S_PART,
        S_R, S_G, S_B, S_RESET, S_SAVE, S_USE, S_CANCEL, S_N };
 
@@ -3755,7 +3784,7 @@ static BOOL pend_full, pend_bar;
 
 static struct {                         /* what Cancel goes back to */
     int theme, ttsize, fontsize, linespace;
-    BOOL ownfg, ownbg, usett, s_utf8, pc, pcfont;
+    BOOL ownfg, ownbg, usett, s_utf8, pc, pcfont, altmeta;
     ULONG myfg, mybg;
     char ttfile[160], fontname[48];
 } snap;
@@ -3767,6 +3796,8 @@ static STRPTR letterlabels[] = { (STRPTR)"Amiga font", (STRPTR)"TrueType",
 static STRPTR charlabels[] = { (STRPTR)"UTF-8", (STRPTR)"Latin-1",
                                (STRPTR)"PC BBS (CP437)", NULL };
 static STRPTR partlabels[] = { (STRPTR)"Text", (STRPTR)"Background", NULL };
+static STRPTR altlabels[] = { (STRPTR)"Meta for hosts (bash, emacs)",
+                              (STRPTR)"Amiga characters everywhere", NULL };
 static STRPTR themelabels[NTHEMES + 1];
 
 static void set_text(int id, char *t)
@@ -3956,6 +3987,7 @@ static void open_settings(void)
 
     pc_font(FALSE);                     /* the controls show the person's */
     snap.pcfont = pcfont;
+    snap.altmeta = altmeta;
     snap.theme = theme;
     snap.ownfg = ownfg; snap.ownbg = ownbg;
     snap.myfg = myfg; snap.mybg = mybg;
@@ -4044,6 +4076,10 @@ static void open_settings(void)
     NG(0, gx + 34, gw - 34, NULL, 0);
     g = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
         (ULONG)"the IBM VGA font in PC BBS mode", TAG_END);
+    y += lh;
+    NG(S_ALT, gx, gw, "Alt key", PLACETEXT_LEFT);
+    g = sg[S_ALT] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
+        (ULONG)altlabels, GTCY_Active, !altmeta, TAG_END);
     y += lh + 8;
 
     NG(S_THEME, gx, gw, "Theme", PLACETEXT_LEFT);
@@ -4125,6 +4161,7 @@ static void finish_settings_(int how)
                        snap.linespace != linespace;
         theme = snap.theme;
         pcfont = snap.pcfont;
+        altmeta = snap.altmeta;
         ownfg = snap.ownfg; ownbg = snap.ownbg;
         myfg = snap.myfg; mybg = snap.mybg;
         if (snap.s_utf8 != utf8 || snap.pc != pcmode)
@@ -4232,6 +4269,7 @@ static void settings_events(void)
             pc_font(FALSE);             /* shown on closing */
             break;
         case S_PCFONT: pcfont = (g->Flags & GFLG_SELECTED) != 0; break;
+        case S_ALT: altmeta = code == 0; break;
         case S_THEME:
             theme = code;
             ownfg = ownbg = FALSE;
