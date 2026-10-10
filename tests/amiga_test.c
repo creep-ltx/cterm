@@ -279,6 +279,25 @@ int main(void)
         CHECK(at(e, 0, 2) == 'w', "APC ended by ST");
         vt_free(e);
     }
+    {   /* a resize on the alternate screen: the main screen as without */
+        Vt *a = vt_new(10, 5, 50);
+        int x, y, vis;
+        feed(a, "0123456789ABCDE\r\nxy\x1b[?1049hALT");
+        vt_resize(a, 20, 5);
+        feed(a, "\x1b[?1049l");
+        vt_cursor(a, &x, &y, &vis);
+        CHECK(at(a, 0, 14) == 'E' && at(a, 1, 1) == 'y' && y == 1 && x == 2,
+              "wider in vim: the main screen flows again");
+        vt_free(a);
+        a = vt_new(10, 5, 50);
+        feed(a, "a\r\nb\r\nc\r\nd\r\ne\x1b[?1049h");
+        vt_resize(a, 10, 3);
+        feed(a, "\x1b[?1049l");
+        vt_cursor(a, &x, &y, &vis);
+        CHECK(vt_history(a) == 2 && at(a, 0, 0) == 'c' && at(a, 2, 0) == 'e' &&
+              y == 2 && x == 1, "lower in vim: the top lines go to the history");
+        vt_free(a);
+    }
     {   /* CHT stops at the last column; a huge OSC number is no title */
         Vt *t = vt_new(20, 3, 0);
         int x, y, vis, ch;

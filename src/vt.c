@@ -1589,10 +1589,12 @@ static int wrap_line(RowList *out, const VtCell *c, int len, int ncols,
 }
 
 /* The main screen and history at ncols wide and nrows high, into ng (the
- * new screen rows); FALSE: no memory, nothing changed. */
-static int reflow(Vt *v, int ncols, int nrows, VtCell **ng)
+ * new screen rows); the main screen's cursor in *px, *py, *pp (pending)
+ * moves with its text. FALSE: no memory, nothing changed. */
+static int reflow(Vt *v, int ncols, int nrows, VtCell **ng,
+                  int *px, int *py, int *pp)
 {
-    int H = v->hist_len, S = v->rows, total = H + S, cur = H + v->y;
+    int H = v->hist_len, S = v->rows, total = H + S, cur = H + *py;
     int last = cur, i, len = 0, cap = 0, coff = -1, cr = -1, cc = 0;
     int start, nkeep, ok = 1;
     VtCell *line = NULL;
@@ -1611,8 +1613,8 @@ static int reflow(Vt *v, int ncols, int nrows, VtCell **ng)
     for (i = 0; i <= last && ok; i++) {
         const VtCell *r = src[i];
         int n = r ? (int)RLEN(r) : 0, need = len + n + 1;
-        if (i == cur && len + v->x + 2 > need)
-            need = len + v->x + 2;      /* blanks up to the cursor */
+        if (i == cur && len + *px + 2 > need)
+            need = len + *px + 2;       /* blanks up to the cursor */
         if (need > cap) {
             int nc = need * 2;
             VtCell *nl = realloc(line, nc * sizeof *nl);
@@ -1621,7 +1623,7 @@ static int reflow(Vt *v, int ncols, int nrows, VtCell **ng)
             cap = nc;
         }
         if (i == cur) {                 /* the cursor's place in the text */
-            int x = v->x + (v->pending ? 1 : 0);
+            int x = *px + (*pp ? 1 : 0);
             coff = len + x;
             if (x > n)                  /* past the row's end: blanks */
                 memset(line + len + n, 0, (x - n) * sizeof *line);
@@ -1681,12 +1683,12 @@ static int reflow(Vt *v, int ncols, int nrows, VtCell **ng)
     for (i = start + nrows; i < out.n; i++)
         row_free(out.r[i]);             /* below the screen: gone */
     free(out.r);
-    v->y = cr - start;
-    v->x = cc;
-    v->pending = 0;
-    if (v->x >= ncols) {
-        v->x = ncols - 1;
-        v->pending = 1;
+    *py = cr - start;
+    *px = cc;
+    *pp = 0;
+    if (*px >= ncols) {
+        *px = ncols - 1;
+        *pp = 1;
     }
     return 1;
 }
@@ -1696,7 +1698,13 @@ void vt_resize(Vt *v, int cols, int rows)
     VtCell **ng[2];
     uint8_t *nt, *nd;
     uint16_t *nx0, *nx1;
-    int i, y, shift = 0, w, flowed = 0;
+    int i, y, shift[2] = { 0, 0 }, w, flowed = 0;
+    /* the main screen's cursor: while the alternate screen is up, the one
+     * saved on the way in (CSI ?1049h) - the main screen is resized as it
+     * would be without the alternate screen */
+    Saved *ms = &v->saved[0];
+    int mx = v->alt ? ms->x : v->x, my = v->alt ? ms->y : v->y;
+    int mp = v->alt ? ms->pending : v->pending;
 
     if (cols == v->cols && rows == v->rows)
         return;
@@ -1715,23 +1723,24 @@ void vt_resize(Vt *v, int cols, int rows)
     }
     /* a new width on the main screen: the text flows again; the alternate
      * screen (vim, htop...) is its program's to redraw, so it is cut */
-    if (!v->alt && cols != v->cols && reflow(v, cols, rows, ng[0])) {
+    if (cols != v->cols && reflow(v, cols, rows, ng[0], &mx, &my, &mp)) {
         flowed = 1;
         free_screen(v->lines[0], v->rows);
         v->lines[0] = ng[0];
         v->base[0] = 0;
-    } else if (v->y >= rows) {
+    } else if (my >= rows) {
         /* fewer rows: lines above the cursor go to the history first, so
          * the cursor's line stays on screen (as xterm does) */
-        shift = v->y - rows + 1;
-        if (!v->alt)
-            for (i = 0; i < shift; i++)
-                push_history(v, v->lines[0][(v->base[0] + i) % v->rows]);
+        shift[0] = my - rows + 1;
+        for (i = 0; i < shift[0]; i++)
+            push_history(v, v->lines[0][(v->base[0] + i) % v->rows]);
     }
+    if (v->alt && v->y >= rows)
+        shift[1] = v->y - rows + 1;     /* the alternate screen's: dropped */
     w = cols < v->cols ? cols : v->cols;
     for (i = flowed ? 1 : 0; i < 2; i++) {
-        for (y = 0; y < rows && y + shift < v->rows; y++) {
-            int oi = v->base[i] + y + shift;
+        for (y = 0; y < rows && y + shift[i] < v->rows; y++) {
+            int oi = v->base[i] + y + shift[i];
             const VtCell *o;
             int n;
             if (oi >= v->rows)
@@ -1759,10 +1768,23 @@ void vt_resize(Vt *v, int cols, int rows)
     v->cur = v->lines[v->alt];
     reset_tabs(v);
     if (!flowed) {
-        v->y -= shift;
+        my -= shift[0];
+        if (mx >= cols) mx = cols - 1;
+        if (my >= rows) my = rows - 1;
+        mp = 0;
+    }
+    if (v->alt) {
+        ms->x = mx;
+        ms->y = my;
+        ms->pending = mp;
+        v->y -= shift[1];
         if (v->x >= cols) v->x = cols - 1;
         if (v->y >= rows) v->y = rows - 1;
         v->pending = 0;
+    } else {
+        v->x = mx;
+        v->y = my;
+        v->pending = mp;
     }
     v->top = 0;
     v->bot = rows - 1;
