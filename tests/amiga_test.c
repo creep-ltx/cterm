@@ -162,6 +162,40 @@ int main(void)
         CHECK(vt_cursor_shape(c, &blink) == 1 && blink, "3: blinking underline");
         vt_free(c);
     }
+    {   /* reflow: a wrapped line joins at a wider width, wraps again */
+        Vt *f = vt_new(10, 5, 50);
+        int w, x, y, vis;
+        const VtCell *l;
+        vt_set_amiga(f, 1);
+        feed(f, "0123456789ABCDEFGHIJKLMNO");
+        vt_resize(f, 30, 5);
+        l = vt_line(f, 0, 0, &w);
+        vt_cursor(f, &x, &y, &vis);
+        CHECK(w == 25 && l[24].cp == 'O' && l[10].cp == 'A' && y == 0 &&
+              x == 25, "wider: one row of 25, cursor after it");
+        vt_resize(f, 10, 5);
+        vt_cursor(f, &x, &y, &vis);
+        CHECK(at(f, 1, 0) == 'A' && at(f, 2, 4) == 'O' && y == 2 && x == 5,
+              "narrow again: three rows, cursor at 2,5");
+        feed(f, "\nabc\ndef");
+        vt_resize(f, 30, 5);
+        CHECK(at(f, 0, 24) == 'O' && at(f, 1, 0) == 'a' && at(f, 2, 0) == 'd',
+              "new lines are not joined");
+        vt_free(f);
+    }
+    {   /* reflow reaches the history */
+        Vt *f = vt_new(10, 3, 50);
+        int k;
+        vt_set_amiga(f, 1);
+        for (k = 0; k < 6; k++)
+            feed(f, "abcdefgh\n");
+        CHECK(vt_history(f) == 4, "four lines went into the history");
+        vt_resize(f, 4, 3);
+        CHECK(vt_history(f) == 10, "at 4 wide every line is two rows");
+        vt_resize(f, 10, 3);
+        CHECK(vt_history(f) == 4, "and back");
+        vt_free(f);
+    }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     vt_free(v);
     return fails != 0;

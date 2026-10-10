@@ -102,6 +102,9 @@ static void fill(VtCell *p, int n, VtCell c)
  * The count and the row's capacity live in a cell just before it. */
 #define RLEN(r) ((r)[-1].cp)
 #define RCAP(r) ((r)[-1].fg)
+/* RWRAP: the row ran on into the next (the text wrapped there, it did
+ * not end): what lets a resize join and wrap the lines again */
+#define RWRAP(r) ((r)[-1].attr)
 
 static VtCell *row_new(int cols)
 {
@@ -144,6 +147,12 @@ static void blank_range(VtCell *r, int x0, int x1, VtCell b)
     }
     grow(r, x1);
     fill(r + x0, x1 - x0, b);
+}
+
+static int ri_main(const Vt *v, int y)
+{
+    int i = v->base[0] + y;
+    return i >= v->rows ? i - v->rows : i;
 }
 
 static int ri(const Vt *v, int y)
@@ -251,6 +260,7 @@ static int swap_into_history(Vt *v, VtCell **pline)
     v->hist[slot] = *pline;
     v->hist_w[slot] = RLEN(*pline);
     RLEN(fresh) = 0;                    /* the caller blanks it */
+    RWRAP(fresh) = 0;
     *pline = fresh;
     return 1;
 }
@@ -343,6 +353,7 @@ static void scroll_up(Vt *v, int top, int bot, int n)
             if (!v->alt)
                 swap_into_history(v, p);
             blank_range(*p, 0, v->cols, b);
+            RWRAP(*p) = 0;
         }
         v->base[v->alt] = ri(v, n);
     } else {
@@ -358,6 +369,7 @@ static void scroll_up(Vt *v, int top, int bot, int n)
         for (i = 0; i < k; i++) {
             v->cur[ri(v, bot - k + 1 + i)] = gone[i];
             blank_range(gone[i], 0, v->cols, b);
+            RWRAP(gone[i]) = 0;
         }
     }
     note_scroll(v, top, bot, n);
@@ -373,8 +385,10 @@ static void scroll_down(Vt *v, int top, int bot, int n)
         return;
     if (h == v->rows && n < h) {
         v->base[v->alt] = ri(v, v->rows - n);
-        for (i = 0; i < n; i++)
+        for (i = 0; i < n; i++) {
             blank_range(v->cur[ri(v, i)], 0, v->cols, b);
+            RWRAP(v->cur[ri(v, i)]) = 0;
+        }
     } else {
         VtCell *gone[1024];
         int k = n < 1024 ? n : 1024;
@@ -385,6 +399,7 @@ static void scroll_down(Vt *v, int top, int bot, int n)
         for (i = 0; i < k; i++) {
             v->cur[ri(v, top + i)] = gone[i];
             blank_range(gone[i], 0, v->cols, b);
+            RWRAP(gone[i]) = 0;
         }
     }
     note_scroll(v, top, bot, -n);
@@ -466,6 +481,7 @@ static void put(Vt *v, uint32_t cp)
     if (w == 0)
         return;                         /* combining marks: not drawn */
     if (v->pending && v->autowrap) {
+        RWRAP(row(v, v->y)) = 1;
         v->x = 0;
         linefeed(v);
     }
@@ -475,6 +491,7 @@ static void put(Vt *v, uint32_t cp)
             return;
         grow(row(v, v->y), v->cols);
         row(v, v->y)[v->x] = blank_of(v);   /* no room: wrap first */
+        RWRAP(row(v, v->y)) = 1;
         dirty_row(v, v->y);
         v->x = 0;
         linefeed(v);
@@ -517,6 +534,8 @@ static void erase(Vt *v, int y, int x0, int x1)
     if (x1 > v->cols) x1 = v->cols;
     if (x1 > x0) {
         blank_range(row(v, y), x0, x1, blank_of(v));
+        if (x1 >= v->cols)
+            RWRAP(row(v, y)) = 0;
         dirty_span(v, y, x0, x1 - 1);
     }
 }
@@ -1242,6 +1261,7 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
                 const uint8_t *p = buf + i, *e = buf + len;
                 int lim, x, l;
                 if (v->pending && v->autowrap) {
+                    RWRAP(row(v, v->y)) = 1;
                     v->x = 0;
                     linefeed(v);
                 }
@@ -1430,12 +1450,170 @@ void vt_free(Vt *v)
     free(v);
 }
 
+/* ---- reflow: the main screen and its history joined into lines again
+ * and wrapped at a new width (xterm and every modern terminal do it) - */
+
+typedef struct {                        /* rows being made */
+    VtCell **r;
+    int n, cap;
+} RowList;
+
+static int rl_add(RowList *l, VtCell *r)
+{
+    if (l->n == l->cap) {
+        int nc = l->cap ? l->cap * 2 : 64;
+        VtCell **nr = realloc(l->r, nc * sizeof *nr);
+        if (!nr)
+            return 0;
+        l->r = nr;
+        l->cap = nc;
+    }
+    l->r[l->n++] = r;
+    return 1;
+}
+
+/* One logical line (cells c[0..len)) wrapped into rows of ncols; the
+ * cursor at offset coff (-1: not in it) comes back in *cr, *cc. */
+static int wrap_line(RowList *out, const VtCell *c, int len, int ncols,
+                     int coff, int *cr, int *cc)
+{
+    VtCell *r = row_new(ncols);
+    int j, x = 0;
+    if (!r || !rl_add(out, r))
+        return 0;
+    for (j = 0; j <= len; j++) {
+        /* a wide letter does not split over two rows: on to the next */
+        int wide = j + 1 < len && c[j + 1].cp == VT_WIDE_TAIL;
+        if (j < len && (x == ncols || (wide && x == ncols - 1))) {
+            RLEN(r) = x;
+            RWRAP(r) = 1;
+            r = row_new(ncols);
+            if (!r || !rl_add(out, r))
+                return 0;
+            x = 0;
+        }
+        if (j == coff) {
+            *cr = out->n - 1;
+            *cc = x;
+        }
+        if (j == len)
+            break;
+        r[x++] = c[j];
+    }
+    RLEN(r) = x;
+    RWRAP(r) = 0;
+    return 1;
+}
+
+/* The main screen and history at ncols wide and nrows high, into ng (the
+ * new screen rows); FALSE: no memory, nothing changed. */
+static int reflow(Vt *v, int ncols, int nrows, VtCell **ng)
+{
+    int H = v->hist_len, S = v->rows, total = H + S, cur = H + v->y;
+    int last = cur, i, len = 0, cap = 0, coff = -1, cr = -1, cc = 0;
+    int start, nkeep, ok = 1;
+    VtCell *line = NULL;
+    RowList out = { NULL, 0, 0 };
+    VtCell **src = malloc(total * sizeof *src);
+    if (!src)
+        return 0;
+    for (i = 0; i < H; i++)
+        src[i] = v->hist[(v->hist_head + i) % v->hist_cap];
+    for (i = 0; i < S; i++)
+        src[H + i] = v->lines[0][ri_main(v, i)];
+    for (i = cur + 1; i < total; i++)   /* the screen's last written row */
+        if (src[i] && RLEN(src[i]) > 0)
+            last = i;
+    /* join rows into lines, wrap each again */
+    for (i = 0; i <= last && ok; i++) {
+        const VtCell *r = src[i];
+        int n = r ? (int)RLEN(r) : 0, need = len + n + 1;
+        if (i == cur && len + v->x + 2 > need)
+            need = len + v->x + 2;      /* blanks up to the cursor */
+        if (need > cap) {
+            int nc = need * 2;
+            VtCell *nl = realloc(line, nc * sizeof *nl);
+            if (!nl) { ok = 0; break; }
+            line = nl;
+            cap = nc;
+        }
+        if (i == cur) {                 /* the cursor's place in the text */
+            int x = v->x + (v->pending ? 1 : 0);
+            coff = len + x;
+            if (x > n)                  /* past the row's end: blanks */
+                memset(line + len + n, 0, (x - n) * sizeof *line);
+        }
+        if (n)
+            memcpy(line + len, r, n * sizeof *line);
+        len += n;
+        if (i == cur && coff > len)
+            len = coff;                 /* the blanks up to the cursor */
+        if (r && RWRAP(r) && i < last)
+            continue;                   /* the line goes on */
+        if (!wrap_line(&out, line, len, ncols, coff, &cr, &cc))
+            ok = 0;
+        len = 0;
+        coff = -1;
+    }
+    free(line);
+    free(src);
+    if (!ok || out.n == 0) {
+        for (i = 0; i < out.n; i++)
+            row_free(out.r[i]);
+        free(out.r);
+        return 0;
+    }
+    if (cr < 0) {
+        cr = out.n - 1;
+        cc = 0;
+    }
+    /* the screen is the last nrows rows, the cursor's always among them */
+    start = out.n > nrows ? out.n - nrows : 0;
+    if (cr < start)
+        start = cr;
+    /* the history: what is above the screen (the newest hist_cap) */
+    for (i = 0; i < v->hist_cap; i++) {
+        row_free(v->hist[i]);
+        v->hist[i] = NULL;
+        v->hist_w[i] = 0;
+    }
+    v->hist_head = 0;
+    v->hist_len = 0;
+    nkeep = start < v->hist_cap ? start : v->hist_cap;
+    for (i = 0; i < start; i++) {
+        if (i < start - nkeep) {
+            row_free(out.r[i]);
+            continue;
+        }
+        v->hist[v->hist_len] = out.r[i];
+        v->hist_w[v->hist_len] = RLEN(out.r[i]);
+        v->hist_len++;
+    }
+    for (i = 0; i < nrows; i++) {       /* the screen's rows */
+        if (start + i < out.n) {
+            row_free(ng[i]);
+            ng[i] = out.r[start + i];
+        }
+    }
+    for (i = start + nrows; i < out.n; i++)
+        row_free(out.r[i]);             /* below the screen: gone */
+    free(out.r);
+    v->y = cr - start;
+    v->x = cc;
+    v->pending = 0;
+    if (v->x >= ncols) {
+        v->x = ncols - 1;
+        v->pending = 1;
+    }
+    return 1;
+}
+
 void vt_resize(Vt *v, int cols, int rows)
 {
     VtCell **ng[2];
     uint8_t *nt, *nd;
     uint16_t *nx0, *nx1;
-    int i, y, shift = 0, w;
+    int i, y, shift = 0, w, flowed = 0;
 
     if (cols == v->cols && rows == v->rows)
         return;
@@ -1452,25 +1630,34 @@ void vt_resize(Vt *v, int cols, int rows)
         free(nt); free(nd); free(nx0); free(nx1);
         return;
     }
-    /* fewer rows: lines above the cursor go to the history first, so the
-     * cursor's line stays on screen (as xterm does) */
-    if (v->y >= rows) {
+    /* a new width on the main screen: the text flows again; the alternate
+     * screen (vim, htop...) is its program's to redraw, so it is cut */
+    if (!v->alt && cols != v->cols && reflow(v, cols, rows, ng[0])) {
+        flowed = 1;
+        free_screen(v->lines[0], v->rows);
+        v->lines[0] = ng[0];
+        v->base[0] = 0;
+    } else if (v->y >= rows) {
+        /* fewer rows: lines above the cursor go to the history first, so
+         * the cursor's line stays on screen (as xterm does) */
         shift = v->y - rows + 1;
         if (!v->alt)
             for (i = 0; i < shift; i++)
                 push_history(v, v->lines[0][(v->base[0] + i) % v->rows]);
     }
     w = cols < v->cols ? cols : v->cols;
-    for (i = 0; i < 2; i++) {
+    for (i = flowed ? 1 : 0; i < 2; i++) {
         for (y = 0; y < rows && y + shift < v->rows; y++) {
             int oi = v->base[i] + y + shift;
             const VtCell *o;
+            int n;
             if (oi >= v->rows)
                 oi -= v->rows;
             o = v->lines[i][oi];
-            int n = (int)RLEN(o) < w ? (int)RLEN(o) : w;
+            n = (int)RLEN(o) < w ? (int)RLEN(o) : w;
             memcpy(ng[i][y], o, n * sizeof(VtCell));
             RLEN(ng[i][y]) = n;
+            RWRAP(ng[i][y]) = RWRAP(o);
         }
         free_screen(v->lines[i], v->rows);
         v->lines[i] = ng[i];
@@ -1488,10 +1675,12 @@ void vt_resize(Vt *v, int cols, int rows)
     v->rows = rows;
     v->cur = v->lines[v->alt];
     reset_tabs(v);
-    v->y -= shift;
-    if (v->x >= cols) v->x = cols - 1;
-    if (v->y >= rows) v->y = rows - 1;
-    v->pending = 0;
+    if (!flowed) {
+        v->y -= shift;
+        if (v->x >= cols) v->x = cols - 1;
+        if (v->y >= rows) v->y = rows - 1;
+        v->pending = 0;
+    }
     v->top = 0;
     v->bot = rows - 1;
     for (i = 0; i < 2; i++) {
