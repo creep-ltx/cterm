@@ -136,7 +136,10 @@ In the order the user and I agreed (2026-10-10):
   Amiga / Latin-1, UTF-8). Calling an entry opens a tab dressed that way.
   The passwords are kept on the Amiga only (ENVARC:CTerm/), never shown.
 - **File transfers:** Zmodem, Ymodem, Xmodem and Hydra first (BBSes);
-  SFTP, FTP and the like later.
+  SFTP, FTP and the like later. Settings has a download drawer (where
+  received files go) and an upload drawer (where the file requester opens
+  on Upload). Each phone book entry may have its own two drawers; an
+  empty one means the global setting.
 - Also: an ssh password login tried against a real server, ARexx,
   dropping files on the window, emoji fallback, more stock-A1200 speed.
 - Keys configurable (the rule for all the user's programs).
