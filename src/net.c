@@ -7,9 +7,8 @@
 static void send_raw(const UBYTE *b, LONG n);
 static void telnet_option(int cmd, int opt);
 static BOOL dial(void);
-#ifndef NO_SSH
 static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo);
-#endif
+static void window_resized(void);
 static int calls_split(void);
 static void calls_add(const char *entry);
 static void call_start(const char *host, BOOL pc, BOOL ssh);
@@ -37,8 +36,24 @@ BOOL saved_utf8 = TRUE;          /* the setting; utf8 may be LATIN1's */
                                          * this toolchain's headers */
 #define NET_SECS   30                   /* a host silent this long is gone */
 
-/* Esc or the close gadget, while a call waits: give up. Other messages
- * are answered (a damaged window is drawn again) but not acted on. */
+/* A window message while CTerm waits (a call, a typed answer), answered
+ * here: a damaged window is drawn again, a new size laid out. Others are
+ * not acted on. m is replied to. */
+static void window_chore(struct IntuiMessage *m)
+{
+    ULONG cl = m->Class;
+    if (cl == IDCMP_REFRESHWINDOW) {
+        BeginRefresh(win);
+        EndRefresh(win, TRUE);
+    }
+    ReplyMsg((struct Message *)m);
+    if (cl == IDCMP_REFRESHWINDOW)
+        redraw_all();
+    else if (cl == IDCMP_NEWSIZE)
+        window_resized();
+}
+
+/* Esc or the close gadget, while a call waits: give up. */
 static BOOL user_gives_up(void)
 {
     struct IntuiMessage *m;
@@ -46,15 +61,11 @@ static BOOL user_gives_up(void)
     while (win && (m = (struct IntuiMessage *)GetMsg(win->UserPort))) {
         ULONG cl = m->Class;
         UWORD code = m->Code;
-        if (cl == IDCMP_REFRESHWINDOW) {
-            BeginRefresh(win);
-            EndRefresh(win, TRUE);
-        }
-        ReplyMsg((struct Message *)m);
-        if (cl == IDCMP_CLOSEWINDOW || (cl == IDCMP_RAWKEY && code == 0x45))
+        if (cl == IDCMP_CLOSEWINDOW || (cl == IDCMP_RAWKEY && code == 0x45)) {
+            ReplyMsg((struct Message *)m);
             out = TRUE;
-        else if (cl == IDCMP_REFRESHWINDOW)
-            redraw_all();
+        } else
+            window_chore(m);
     }
     return out;
 }
@@ -144,23 +155,28 @@ LONG net_connect(const char *host, LONG p, ssh_say_fn sayf)
 }
 
 
+static struct Tab *sending;              /* send_raw is on this tab's bytes */
+
 static void send_raw(const UBYTE *b, LONG n)
 {
     LONG done = 0;
+    struct Tab *keep = sending;
     if (sock < 0 || sshmode)            /* telnet's own bytes only */
         return;
+    sending = T;
     while (done < n) {
         /* a blocking send to a host that stopped reading would hold all
          * of CTerm: wait for room (a way out, a time limit), then send
          * no more than room surely is for (the low-water mark is 2 KB) */
         LONG k = n - done < 512 ? n - done : 512;
         if (net_wait(sock, 0, 1, NET_SECS) <= 0)
-            return;                     /* the rest is dropped */
+            break;                      /* the rest is dropped */
         k = send(sock, (APTR)(b + done), k, 0);
         if (k <= 0)
-            return;
+            break;
         done += k;
     }
+    sending = keep;
 }
 
 /* Data to the host: 0xFF doubled (telnet), or through ssh. */
@@ -185,32 +201,131 @@ void send_data(const UBYTE *b, LONG n)
     send_raw(buf, k);
 }
 
+/* Telnet options as RFC 1143 keeps them (its "Q method", without the
+ * queue): for each option CTerm takes part in, whether it is on at our end
+ * (us) and at the host's (him), or asked for and not yet answered. A
+ * request for what already is gets no answer, so two programs cannot
+ * bounce one back and forth for ever. Per tab, in a table of our own:
+ * set afresh when a connection begins (dial, connected). */
+enum { Q_NO, Q_YES, Q_WANTNO, Q_WANTYES };
+static const UBYTE qopt[] = { O_BINARY, O_ECHO, O_SGA, O_TTYPE, O_NAWS };
+#define NQ ((int)sizeof qopt)
+#define Q_NAWS 4                        /* O_NAWS's place in qopt */
+static struct TelOpts {
+    struct Tab *t;
+    UBYTE us[NQ], him[NQ];
+} topts[MAXTABS];
+
+/* T's options (fresh: all off, a new connection). NULL only if the table
+ * is full of live tabs, which MAXTABS rules out. */
+static struct TelOpts *tel_opts(BOOL fresh)
+{
+    struct TelOpts *o = NULL;
+    int i, j;
+    for (i = 0; i < MAXTABS && !o; i++)
+        if (topts[i].t == T)
+            o = &topts[i];
+    for (i = 0; i < MAXTABS && !o; i++) {
+        /* a place no live tab holds: never used, or its tab closed */
+        for (j = 0; j < ntabs && tabs[j] != topts[i].t; j++)
+            ;
+        if (!topts[i].t || j == ntabs) {
+            o = &topts[i];
+            fresh = TRUE;
+        }
+    }
+    if (o && fresh) {
+        memset(o, 0, sizeof *o);
+        o->t = T;
+    }
+    return o;
+}
+
+static void tel_send(int cmd, int opt)
+{
+    UBYTE r[3];
+    r[0] = IAC;
+    r[1] = cmd;
+    r[2] = opt;
+    send_raw(r, 3);
+}
+
+/* The window's size to the host, if it asked for it (DO NAWS): IAC SB
+ * NAWS width height IAC SE, each a 16-bit number, a 255 byte doubled. */
 void send_naws(void)
 {
+    UBYTE m[13], v[4];
+    struct TelOpts *o;
+    int i, k = 0;
     if (sshmode) {                      /* the pty's size, ssh's way */
         ssh_resize(T->ssh, cols, rows);
         return;
     }
-    UBYTE m[9] = { IAC, SB, O_NAWS, 0, 0, 0, 0, IAC, SE };
-    m[3] = cols >> 8; m[4] = cols & 255;
-    m[5] = rows >> 8; m[6] = rows & 255;
-    send_raw(m, 9);
+    o = tel_opts(FALSE);
+    if (!o || o->us[Q_NAWS] != Q_YES)
+        return;
+    v[0] = cols >> 8; v[1] = cols & 255;
+    v[2] = rows >> 8; v[3] = rows & 255;
+    m[k++] = IAC; m[k++] = SB; m[k++] = O_NAWS;
+    for (i = 0; i < 4; i++) {
+        m[k++] = v[i];
+        if (v[i] == IAC)
+            m[k++] = IAC;
+    }
+    m[k++] = IAC; m[k++] = SE;
+    send_raw(m, k);
+}
+
+/* We ask for an option at our end (WILL opt), unless it is on or asked. */
+static void tel_will(int opt)
+{
+    struct TelOpts *o = tel_opts(FALSE);
+    int i;
+    for (i = 0; i < NQ && qopt[i] != opt; i++)
+        ;
+    if (!o || i == NQ || o->us[i] == Q_YES || o->us[i] == Q_WANTYES)
+        return;
+    o->us[i] = Q_WANTYES;
+    tel_send(WILL, opt);
 }
 
 static void telnet_option(int cmd, int opt)
 {
-    UBYTE r[3] = { IAC, 0, 0 };
-    r[2] = opt;
-    if (cmd == DO)
-        r[1] = (opt == O_NAWS || opt == O_BINARY || opt == O_TTYPE) ? WILL
-                                                                   : WONT;
-    else if (cmd == WILL)
-        r[1] = (opt == O_ECHO || opt == O_SGA || opt == O_BINARY) ? DO : DONT;
-    else
-        return;                         /* DONT/WONT: nothing to say */
-    send_raw(r, 3);
-    if (cmd == DO && opt == O_NAWS)
-        send_naws();
+    struct TelOpts *o = tel_opts(FALSE);
+    BOOL ours = cmd == DO || cmd == DONT;       /* about our end */
+    BOOL on = cmd == DO || cmd == WILL;
+    BOOL ok;
+    UBYTE *q = NULL, was;
+    int i;
+    for (i = 0; i < NQ && qopt[i] != opt; i++)
+        ;
+    if (o && i < NQ)
+        q = ours ? &o->us[i] : &o->him[i];
+    /* what CTerm agrees to: it tells the size, binary, its terminal's
+     * name; the host may echo, drop go-ahead, send binary */
+    ok = q && (ours ? (opt == O_NAWS || opt == O_BINARY || opt == O_TTYPE)
+                    : (opt == O_ECHO || opt == O_SGA || opt == O_BINARY));
+    if (!q) {                           /* an option CTerm keeps off */
+        if (on)
+            tel_send(ours ? WONT : DONT, opt);
+        return;
+    }
+    was = *q;
+    if (on) {
+        if (was == Q_NO) {
+            *q = ok ? Q_YES : Q_NO;
+            tel_send(ours ? (ok ? WILL : WONT) : (ok ? DO : DONT), opt);
+        } else if (was == Q_WANTYES)
+            *q = Q_YES;                 /* the answer to our asking */
+        else if (was == Q_WANTNO)
+            *q = Q_NO;                  /* the peer erred: it stays off */
+    } else {
+        if (was == Q_YES)
+            tel_send(ours ? WONT : DONT, opt);
+        *q = Q_NO;
+    }
+    if (ours && i == Q_NAWS && was != Q_YES && *q == Q_YES)
+        send_naws();                    /* agreed now: the size at once */
 }
 
 /* Bytes from the host: telnet commands out, data to the emulator. */
@@ -314,11 +429,32 @@ static BOOL dial(void)
     if (sock < 0)
         return FALSE;
     tstate = 0;
+    tel_opts(TRUE);                     /* every option off, as it begins */
     return TRUE;
 }
-#ifndef NO_SSH
-/* A line typed in the window while ssh sets up (a password: echo off).
- * FALSE: the window was closed. */
+
+/* The window got a new size while CTerm waits: laid out, and the hosts
+ * told, as the main loop does. Not the tab whose bytes are being sent
+ * just now (its stream may stand between the two bytes of a doubled
+ * 255); ssh leaves alone a connection waiting for its socket. */
+static void window_resized(void)
+{
+    struct Tab *keep = T;
+    int i;
+    layout_and_resize();
+    painter_setup();
+    redraw_all();
+    RefreshWindowFrame(win);
+    for (i = 0; i < ntabs; i++) {
+        T = tabs[i];
+        if (sock >= 0 && T != sending)
+            send_naws();
+    }
+    T = keep;
+}
+
+/* A line typed in the window while ssh sets up (a password: echo off),
+ * or an answer to a question. FALSE: the window was closed. */
 static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
 {
     int n = 0;
@@ -374,15 +510,15 @@ static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
                 }
                 continue;
             }
-            ReplyMsg((struct Message *)m);
             if (cl == IDCMP_CLOSEWINDOW) {
+                ReplyMsg((struct Message *)m);
                 buf[0] = 0;
                 return FALSE;
             }
+            window_chore(m);            /* drawn again, a new size */
         }
     }
 }
-#endif
 
 /* Call the host: telnet, or ssh (which asks what it must in the window).
  * The TCP/IP stack is opened the first time a call needs it: a CTerm
@@ -399,26 +535,104 @@ BOOL connect_out(void)
     refresh();
     if (!sshmode)
         return dial();
-    T->ssh = ssh_open(dialhost, cols, rows, term_ask, say);
-    if (!T->ssh)
+    {
+        int c0 = cols, r0 = rows;
+        T->ssh = ssh_open(dialhost, cols, rows, term_ask, say);
+        if (!T->ssh)
+            return FALSE;
+        sock = ssh_socket(T->ssh);
+        if (cols != c0 || rows != r0)   /* resized while it was set up */
+            send_naws();
+    }
+    return TRUE;
+}
+
+/* Who may call a listening CTerm: the one address in RELAY_FROM, the
+ * PC's relay. With no such file the person is asked, once, and the
+ * answer kept; so no one else on the network can show things in this
+ * window or read what is typed into it. TRUE: let the call in. */
+#define RELAY_DIR  "ENVARC:CTerm"
+#define RELAY_FROM "ENVARC:CTerm/relay_from"
+
+static BOOL relay_allowed(ULONG addr)
+{
+    static ULONG told;                  /* refused, and said so: once */
+    char line[40], ip[20], a[8];
+    BPTR f = Open((STRPTR)RELAY_FROM, MODE_OLDFILE);
+    int i;
+    strncpy(ip, (char *)Inet_NtoA(addr), sizeof ip - 1);
+    ip[sizeof ip - 1] = 0;
+    if (f) {
+        LONG n = Read(f, line, sizeof line - 1);
+        Close(f);
+        line[n > 0 ? n : 0] = 0;
+        for (i = 0; line[i] && line[i] != '\n' && line[i] != '\r' &&
+                    line[i] != ' '; i++)
+            ;
+        line[i] = 0;
+        if (inet_addr((STRPTR)line) == addr)
+            return TRUE;
+        if (told != addr) {
+            told = addr;
+            say("\x1b[1;31m[a call from ");
+            say(ip);
+            say(" was refused: only ");
+            say(line);
+            say(" may call (delete " RELAY_FROM " to choose again)]"
+                "\x1b[0m\r\n");
+            refresh();
+        }
         return FALSE;
-    sock = ssh_socket(T->ssh);
+    }
+    if (shown != T)                     /* the question where it is seen */
+        for (i = 0; i < ntabs; i++)
+            if (tabs[i] == T)
+                tab_show(i);
+    say("\x1b[1m[a call from ");
+    say(ip);
+    say(" - the PC's relay?]\x1b[0m\r\n");
+    if (!term_ask("Let it in, now and from now on? (y/n) ", a, sizeof a,
+                  TRUE) || (a[0] != 'y' && a[0] != 'Y')) {
+        say("\x1b[2m[refused - waiting for the PC (cterm-relay)]"
+            "\x1b[0m\r\n");
+        refresh();
+        return FALSE;
+    }
+    {
+        BPTR d = Lock((STRPTR)RELAY_DIR, ACCESS_READ);
+        if (!d)
+            d = CreateDir((STRPTR)RELAY_DIR);
+        if (d)
+            UnLock(d);
+    }
+    if ((f = Open((STRPTR)RELAY_FROM, MODE_NEWFILE))) {
+        Write(f, ip, strlen(ip));
+        Write(f, "\n", 1);
+        Close(f);
+    }
     return TRUE;
 }
 
 void connected(void)
 {
-    LONG one = 1;
-    UBYTE hello[3] = { IAC, WILL, O_NAWS };
-    sock = accept(lfd, NULL, NULL);
-    if (sock < 0)
+    LONG one = 1, s;
+    struct sockaddr_in peer;
+    socklen_t len = sizeof peer;
+    s = accept(lfd, (struct sockaddr *)&peer, &len);
+    if (s < 0)
+        return;                         /* gone before it was taken */
+    if (peer.sin_family != AF_INET || !relay_allowed(peer.sin_addr.s_addr)) {
+        CloseSocket(s);                 /* still listening for the PC */
         return;
+    }
+    sock = s;
     CloseSocket(lfd);
     lfd = -1;
     setsockopt(sock, IPPROTO_TCP, 1 /* TCP_NODELAY */, &one, sizeof one);
     tstate = 0;
-    send_raw(hello, 3);
-    send_naws();
+    tel_opts(TRUE);
+    /* the size, once the relay says DO (it always asks for it) */
+    tel_will(O_NAWS);
 }
 
 void hung_up(void)
