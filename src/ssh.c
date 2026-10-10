@@ -18,6 +18,7 @@ struct Library *AmiSSLBase, *AmiSSLExtBase, *AmiSSLMasterBase;
 
 #define KNOWN_DIR "ENVARC:CTerm"
 #define KNOWN_FILE "ENVARC:CTerm/known_hosts"
+#define KNOWN_NEW  "ENVARC:CTerm/known_hosts.new"
 
 static char keyfile[256];               /* KEY: this one, not the search */
 
@@ -32,6 +33,7 @@ struct Ssh {
     LIBSSH2_SESSION *s_sess;
     LIBSSH2_CHANNEL *s_chan;
     LONG s_fd;
+    int s_busy;                         /* waiting for its socket */
 };
 
 static struct Ssh *cur;                 /* the one being set up */
@@ -91,15 +93,17 @@ static BOOL ssl_open(void)
 /* Wait until the socket can go the way libssh2 wants (non-blocking), at
  * most secs. FALSE: the host stopped answering or the person gave up
  * (Esc, the close gadget) - gave_up stays set and every loop ends. */
-static BOOL gave_up, setting_up;
+static BOOL gave_up, setting_up, wiping;
 
 static BOOL wait_sock_for(LONG secs)
 {
     int dir = libssh2_session_block_directions(sess), r;
     if (gave_up)
         return FALSE;
+    cur->s_busy++;                      /* a resize meanwhile: not this one */
     r = net_wait(fd, (dir & LIBSSH2_SESSION_BLOCK_INBOUND) || !dir,
                  (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) != 0, secs);
+    cur->s_busy--;
     if (r > 0)
         return TRUE;
     gave_up = TRUE;
@@ -109,6 +113,52 @@ static BOOL wait_sock_for(LONG secs)
     return FALSE;
 }
 #define wait_sock() wait_sock_for(30)
+
+/* libssh2's memory: a length before each block, so that what is freed
+ * while a connection is set up (the passwords typed, the login packets
+ * that carried them) is wiped first. Later traffic is not: wiping every
+ * packet would cost a slow Amiga time for nothing secret. */
+static void wipe(void *p, ULONG n)
+{
+    volatile UBYTE *v = p;              /* a memset the compiler keeps, */
+    while (n--)                         /* though the memory dies next */
+        *v++ = 0;
+}
+
+static LIBSSH2_ALLOC_FUNC(mem_alloc)
+{
+    ULONG *m = malloc(count + 8);
+    (void)abstract;
+    if (!m)
+        return NULL;
+    m[0] = count;
+    return m + 2;                       /* 8: as aligned as malloc's own */
+}
+
+static LIBSSH2_FREE_FUNC(mem_free)
+{
+    ULONG *m = (ULONG *)ptr - 2;
+    (void)abstract;
+    if (!ptr)
+        return;
+    if (wiping)
+        wipe(ptr, m[0]);
+    free(m);
+}
+
+static LIBSSH2_REALLOC_FUNC(mem_realloc)
+{
+    void *n;
+    if (!ptr)
+        return mem_alloc(count, abstract);
+    n = mem_alloc(count, abstract);
+    if (n) {
+        ULONG had = ((ULONG *)ptr)[-2];
+        memcpy(n, ptr, had < count ? had : count);
+        mem_free(ptr, abstract);
+    }
+    return n;
+}
 
 static void b64(const UBYTE *in, int n, char *out)
 {
@@ -128,60 +178,54 @@ static void b64(const UBYTE *in, int n, char *out)
     out[k] = 0;                         /* unpadded, as OpenSSH shows it */
 }
 
-/* The known hosts: lines "host:port SHA256:fingerprint". */
-static int known_check(const char *hostport, const char *fp)
+/* The known hosts: lines "host:port SHA256:fingerprint", a line at a time
+ * (dos.library buffers it), however long the file grows. A line longer
+ * than the buffer comes in pieces; only a piece that starts a line is a
+ * host's. */
+#define KNOWN_LINE 256
+
+static int known_line(char *line, BOOL *whole)
 {
-    static char buf[4096];
-    BPTR f = Open((STRPTR)KNOWN_FILE, MODE_OLDFILE);
-    LONG n;
-    char *p;
-    int hl = strlen(hostport);
-    if (!f)
-        return 0;                       /* 0: never seen */
-    n = Read(f, buf, sizeof buf - 1);
-    Close(f);
-    buf[n > 0 ? n : 0] = 0;
-    for (p = buf; *p; ) {
-        char *e = strchr(p, '\n');
-        if (e) *e = 0;
-        if (!strncmp(p, hostport, hl) && p[hl] == ' ')
-            return strcmp(p + hl + 1, fp) ? -1 : 1;   /* -1 changed, 1 ok */
-        if (!e) break;
-        p = e + 1;
-    }
-    return 0;
+    int n = strlen(line);
+    *whole = n && line[n - 1] == '\n';
+    while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+        line[--n] = 0;
+    return n;
 }
 
+static BOOL known_is(const char *line, const char *hostport, int hl)
+{
+    return !strncmp(line, hostport, hl) && line[hl] == ' ';
+}
+
+static int known_check(const char *hostport, const char *fp)
+{
+    char line[KNOWN_LINE];
+    BPTR f = Open((STRPTR)KNOWN_FILE, MODE_OLDFILE);
+    int hl = strlen(hostport), r = 0;   /* 0: never seen */
+    BOOL start = TRUE, whole;
+    if (!f)
+        return 0;
+    while (FGets(f, (STRPTR)line, sizeof line)) {
+        known_line(line, &whole);
+        if (start && known_is(line, hostport, hl)) {
+            r = strcmp(line + hl + 1, fp) ? -1 : 1;   /* -1 changed, 1 ok */
+            break;
+        }
+        start = whole;
+    }
+    Close(f);
+    return r;
+}
+
+/* Every other host's line copied to a new file, this host's line last;
+ * the old file is replaced only when the new one was written whole. */
 static void known_add(const char *hostport, const char *fp)
 {
-    static char buf[4096], out[4200];
-    BPTR f = Open((STRPTR)KNOWN_FILE, MODE_OLDFILE);
-    LONG n = 0;
-    char *p;
+    char line[KNOWN_LINE];
+    BPTR in, out;
     int hl = strlen(hostport);
-    if (f) {
-        n = Read(f, buf, sizeof buf - 1);
-        Close(f);
-    }
-    buf[n > 0 ? n : 0] = 0;
-    out[0] = 0;
-    for (p = buf; *p; ) {               /* every other host's line stays */
-        char *e = strchr(p, '\n');
-        if (e) *e = 0;
-        if (*p && !(!strncmp(p, hostport, hl) && p[hl] == ' ') &&
-            strlen(out) + strlen(p) + 2 < sizeof out) {
-            strcat(out, p);
-            strcat(out, "\n");
-        }
-        if (!e) break;
-        p = e + 1;
-    }
-    if (strlen(out) + strlen(hostport) + strlen(fp) + 3 < sizeof out) {
-        strcat(out, hostport);
-        strcat(out, " ");
-        strcat(out, fp);
-        strcat(out, "\n");
-    }
+    BOOL start = TRUE, skip = FALSE, whole, ok = TRUE;
     {
         BPTR d = Lock((STRPTR)KNOWN_DIR, ACCESS_READ);
         if (!d)
@@ -189,18 +233,44 @@ static void known_add(const char *hostport, const char *fp)
         if (d)
             UnLock(d);
     }
-    f = Open((STRPTR)KNOWN_FILE, MODE_NEWFILE);
-    if (f) {
-        Write(f, out, strlen(out));
-        Close(f);
+    out = Open((STRPTR)KNOWN_NEW, MODE_NEWFILE);
+    if (!out)
+        return;
+    in = Open((STRPTR)KNOWN_FILE, MODE_OLDFILE);
+    if (in) {
+        while (ok && FGets(in, (STRPTR)line, sizeof line)) {
+            int n = known_line(line, &whole);
+            if (start)
+                skip = known_is(line, hostport, hl);
+            if (!skip && (n || !start || !whole))
+                ok = FPuts(out, (STRPTR)line) == 0 &&
+                     (!whole || FPutC(out, '\n') >= 0);
+            start = whole;
+        }
+        if (!start && !skip)            /* a last line with no newline */
+            ok = ok && FPutC(out, '\n') >= 0;
+        Close(in);
     }
+    ok = ok && FPuts(out, (STRPTR)hostport) == 0 && FPutC(out, ' ') >= 0 &&
+         FPuts(out, (STRPTR)fp) == 0 && FPutC(out, '\n') >= 0;
+    if (!Close(out) || !ok) {
+        DeleteFile((STRPTR)KNOWN_NEW);  /* the old file stays as it was */
+        say("\x1b[1;31m[the key could not be remembered]\x1b[0m\r\n");
+        return;
+    }
+    DeleteFile((STRPTR)KNOWN_FILE);
+    Rename((STRPTR)KNOWN_NEW, (STRPTR)KNOWN_FILE);
 }
 
-static BOOL yes(const char *q)
+/* An answer to a question: "y" will do, or (full) only "yes" itself. */
+static BOOL yes(const char *q, BOOL full)
 {
     char a[8];
     if (!ask_cb(q, a, sizeof a, TRUE))
         return FALSE;
+    if (full)
+        return (a[0] == 'y' || a[0] == 'Y') && (a[1] == 'e' || a[1] == 'E')
+               && (a[2] == 's' || a[2] == 'S') && !a[3];
     return a[0] == 'y' || a[0] == 'Y';
 }
 
@@ -225,7 +295,7 @@ static BOOL check_host(const char *hostport)
         say("]\x1b[0m\r\n[its key: ");
         say(fp);
         say("]\r\n");
-        if (!yes("Trust it and remember it? (y/n) "))
+        if (!yes("Trust it and remember it? (y/n) ", FALSE))
             return FALSE;
     } else {
         say("\x1b[1;31m[THE HOST KEY OF ");
@@ -233,8 +303,11 @@ static BOOL check_host(const char *hostport)
         say(" HAS CHANGED - someone may be in between]\x1b[0m\r\n"
             "[its key now: ");
         say(fp);
-        say("]\r\n");
-        if (!yes("Trust the new key anyway? (y/n) "))
+        say("]\r\n[Unless you know the host was given a new key (it was "
+            "reinstalled, or its owner says so), someone may be reading "
+            "and changing all you send it, passwords too. Then answer no.]"
+            "\r\n");
+        if (!yes("Type yes in full to trust the new key: ", TRUE))
             return FALSE;
     }
     known_add(hostport, fp);
@@ -292,7 +365,7 @@ static void kbd_cb(const char *name, int name_len, const char *instr,
                    LIBSSH2_USERAUTH_KBDINT_RESPONSE *responses, void **abs)
 {
     int i;
-    (void)name; (void)name_len; (void)abs;
+    (void)name; (void)name_len;
     if (instr_len > 0) {
         char t[200];
         int n = instr_len < 199 ? instr_len : 199;
@@ -309,12 +382,13 @@ static void kbd_cb(const char *name, int name_len, const char *instr,
         a[0] = 0;
         if (!gave_up && !ask_cb(p, a, sizeof a, prompts[i].echo != 0))
             gave_up = TRUE;             /* the window was closed */
-        responses[i].text = (char *)malloc(strlen(a) + 1);
+        /* libssh2 frees it with our mem_free, which wipes it */
+        responses[i].text = (char *)mem_alloc(strlen(a) + 1, abs);
         if (responses[i].text) {
             strcpy(responses[i].text, a);
             responses[i].length = strlen(a);
         }
-        memset(a, 0, sizeof a);
+        wipe(a, sizeof a);
     }
 }
 
@@ -332,13 +406,15 @@ static BOOL password_login(const char *user, const char *methods)
             char pw[200], pr[160];
             strcpy(pr, user);
             strcat(pr, "'s password: ");
-            if (!ask_cb(pr, pw, sizeof pw, FALSE))
+            if (!ask_cb(pr, pw, sizeof pw, FALSE)) {
+                wipe(pw, sizeof pw);    /* what was typed before the close */
                 return FALSE;
+            }
             while ((rc = libssh2_userauth_password(sess, user, pw)) ==
                    LIBSSH2_ERROR_EAGAIN &&
                    wait_sock())
                 ;
-            memset(pw, 0, sizeof pw);
+            wipe(pw, sizeof pw);
         } else
             return FALSE;
         if (!rc)
@@ -361,13 +437,14 @@ void *ssh_open(const char *target, int cols, int rows,
     cur = h;
     users++;
     gave_up = FALSE;
-    setting_up = TRUE;
+    setting_up = wiping = TRUE;
     if (!ssh_open_(target, cols, rows, ask, sayf)) {
         setting_up = FALSE;
-        ssh_close(h);
+        ssh_close(h);                   /* still wiping what it frees */
+        wiping = FALSE;
         return NULL;
     }
-    setting_up = FALSE;
+    setting_up = wiping = FALSE;
     return h;
 }
 
@@ -423,7 +500,7 @@ static BOOL ssh_open_(const char *target, int cols, int rows,
         LONG one = 1;
         setsockopt(fd, IPPROTO_TCP, 1 /* TCP_NODELAY */, &one, sizeof one);
     }
-    sess = libssh2_session_init();
+    sess = libssh2_session_init_ex(mem_alloc, mem_free, mem_realloc, NULL);
     if (!sess)
         return FALSE;
     libssh2_session_set_blocking(sess, 0);
@@ -527,15 +604,23 @@ void ssh_write(void *h, const UBYTE *b, LONG n)
     }
 }
 
+/* Also called while another connection is set up or waits (the window
+ * resized meanwhile): that one's state is kept, and a connection that is
+ * itself waiting for its socket is left alone (libssh2 wants its pending
+ * call finished first). */
 void ssh_resize(void *h, int cols, int rows)
 {
+    struct Ssh *keep = cur;
+    BOOL kept = gave_up;
     cur = h;
     gave_up = FALSE;
-    if (cur && chan)
+    if (cur && chan && !cur->s_busy)
         while (libssh2_channel_request_pty_size(chan, cols, rows) ==
                LIBSSH2_ERROR_EAGAIN &&
                wait_sock())
             ;
+    cur = keep;
+    gave_up = kept;
 }
 
 void ssh_close(void *h)
