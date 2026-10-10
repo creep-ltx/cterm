@@ -26,6 +26,11 @@ static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Edit", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Copy", (STRPTR)"C", 0, 0, (APTR)M_COPY },
     {  NM_ITEM, (STRPTR)"Paste", (STRPTR)"V", 0, 0, (APTR)M_PASTE },
+    { NM_TITLE, (STRPTR)"Transfer", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Receive with Ymodem", 0, 0, 0, (APTR)M_YRECV },
+    {  NM_ITEM, (STRPTR)"Receive with Xmodem...", 0, 0, 0, (APTR)M_XRECV },
+    {  NM_ITEM, (STRPTR)"Send with Ymodem...", 0, 0, 0, (APTR)M_YSEND },
+    {  NM_ITEM, (STRPTR)"Send with Xmodem...", 0, 0, 0, (APTR)M_XSEND },
     { NM_TITLE, (STRPTR)"Settings", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Settings...", (STRPTR)"S", 0, 0, (APTR)M_SETTINGS },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
@@ -324,6 +329,9 @@ BOOL menu_pick(ULONG id)
     case M_LOG: log_start(); break;
     case M_SENDUSER: send_login(FALSE); break;
     case M_SENDPASS: send_login(TRUE); break;
+    case M_YRECV: case M_XRECV: case M_YSEND: case M_XSEND:
+        transfer_menu((int)id);
+        break;
     case M_LOGSTOP: log_stop(); break;
     case M_ABOUT:
         say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "

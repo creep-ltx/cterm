@@ -49,4 +49,11 @@ int zm_receive(XferIO *io, const unsigned char *done, long n);
 int zm_send(XferIO *io, const char *const *paths, int npaths,
             const unsigned char *done, long n);
 
+/* Xmodem (ymodem 0) and Ymodem (1), which the person starts: receive
+ * (Xmodem has no names: xname is the file's), or send (onek: Xmodem 1K).
+ * Return the files done, -1 cancelled or failed. */
+int xy_receive(XferIO *io, int ymodem, const char *xname);
+int xy_send(XferIO *io, int ymodem, int onek, const char *const *paths,
+            int npaths);
+
 #endif

@@ -279,6 +279,31 @@ static void down_dir(void)
         UnLock(l);
 }
 
+/* Xmodem brings no name: the person gives one (in the download drawer). */
+static BOOL ask_name(char *name, int max)
+{
+    struct FileRequester *req;
+    BOOL ok = FALSE;
+    if (!asl_open())
+        return FALSE;
+    req = AllocAslRequestTags(ASL_FileRequest,
+        ASLFR_Window, (ULONG)win, ASLFR_SleepWindow, TRUE,
+        ASLFR_TitleText, (ULONG)"CTerm: Xmodem - the file's name",
+        ASLFR_DoSaveMode, TRUE, ASLFR_InitialDrawer, (ULONG)xdir,
+        ASLFR_RejectIcons, TRUE, TAG_END);
+    if (!req)
+        return FALSE;
+    if (AslRequest(req, NULL) && req->fr_File[0]) {
+        strncpy(xdir, (char *)req->fr_Drawer, sizeof xdir - 1);
+        xdir[sizeof xdir - 1] = 0;
+        strncpy(name, (char *)req->fr_File, max - 1);
+        name[max - 1] = 0;
+        ok = TRUE;
+    }
+    FreeAslRequest(req);
+    return ok;
+}
+
 /* Files for an upload, chosen in a requester (several at once). */
 #define NUP 32
 static char (*store)[256];              /* the chosen paths */
@@ -326,6 +351,87 @@ static int ask_uploads(const char **paths)
     return n;
 }
 
+static void begin(XferIO *io)
+{
+    memset(io, 0, sizeof *io);
+    io->get = x_get; io->put = x_put; io->stop = x_stop; io->show = x_show;
+    io->wopen = x_wopen; io->wwrite = x_wwrite; io->wclose = x_wclose;
+    io->ropen = x_ropen; io->rread = x_rread; io->rseek = x_rseek;
+    io->rclose = x_rclose;
+    xstop = xdamaged = 0;
+    xfiles = xbytes = 0;
+    xtel = 0;
+    t0 = tlast = ticks_now();
+}
+
+/* How it ended, in the tab; the window again. */
+static void finish(int got, BOOL damaged)
+{
+    if (got < 0)
+        say(xstop ? "\x1b[1;31m[transfer stopped]\x1b[0m\r\n"
+                  : "\x1b[1;31m[transfer failed]\x1b[0m\r\n");
+    else if (got > 0) {
+        char s[80];
+        strcpy(s, "\x1b[2m[");
+        numstr_cat(s, got);
+        strcat(s, got == 1 ? " file, " : " files, ");
+        numstr_cat(s, (LONG)(xbytes / 1024));
+        strcat(s, " KB]\x1b[0m\r\n");
+        say(s);
+    }
+    /* a requester was over the window, or it was hidden: all of it again
+     * - SIMPLE_REFRESH keeps nothing */
+    if (damaged || xdamaged)
+        redraw_all();
+    title_update_now();
+    refresh();
+}
+
+/* Transfer/Receive and Send with Ymodem or Xmodem: the person starts them
+ * (after starting the other side on the host). */
+void transfer_menu(int what)
+{
+    static XferIO io;
+    const char *paths[NUP];
+    int got = -1, np;
+    BOOL ymodem = what == M_YRECV || what == M_YSEND;
+    if (local || sock < 0) {
+        say("\r\n\x1b[2m[transfers are with a host: call one first]\x1b[0m\r\n");
+        refresh();
+        return;
+    }
+    begin(&io);
+    if (what == M_YRECV || what == M_XRECV) {
+        char name[108];
+        down_dir();
+        name[0] = 0;
+        if (!ymodem && !ask_name(name, sizeof name)) {
+            refresh();
+            redraw_all();
+            return;
+        }
+        say(ymodem ? "\r\n\x1b[2m[Ymodem: receiving into "
+                   : "\r\n\x1b[2m[Xmodem: receiving into ");
+        say(xdir);
+        say(" - Esc stops]\x1b[0m\r\n");
+        refresh();
+        got = xy_receive(&io, ymodem, name);
+    } else {
+        np = ask_uploads(paths);
+        if (np == 0) {
+            redraw_all();
+            return;
+        }
+        if (!ymodem)
+            np = 1;                     /* Xmodem has no names: one file */
+        say(ymodem ? "\r\n\x1b[2m[Ymodem: sending - Esc stops]\x1b[0m\r\n"
+                   : "\r\n\x1b[2m[Xmodem: sending - Esc stops]\x1b[0m\r\n");
+        refresh();
+        got = xy_send(&io, ymodem, 1, paths, np);
+    }
+    finish(got, TRUE);
+}
+
 /* What came from the host: does a transfer begin in it? If so, what came
  * before goes to the screen as usual (raw: telnet still on it for telnet
  * tabs), the transfer runs, and TRUE says the rest was taken. */
@@ -348,17 +454,9 @@ BOOL transfer_take(UBYTE *buf, LONG n)
     /* the start header and what followed it, telnet taken off */
     pre = buf + at;                     /* decoded where it lies */
     pn = n - at;
-    xtel = 0;
     if (!sshmode)
         pn = tel_decode(pre, pn);
-    memset(&io, 0, sizeof io);
-    io.get = x_get; io.put = x_put; io.stop = x_stop; io.show = x_show;
-    io.wopen = x_wopen; io.wwrite = x_wwrite; io.wclose = x_wclose;
-    io.ropen = x_ropen; io.rread = x_rread; io.rseek = x_rseek;
-    io.rclose = x_rclose;
-    xstop = xdamaged = 0;
-    xfiles = xbytes = 0;
-    t0 = tlast = ticks_now();
+    begin(&io);
     refresh();
     if (kind == 1) {
         down_dir();
@@ -381,23 +479,6 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         } else
             got = zm_send(&io, paths, np, pre, pn);
     }
-    if (got < 0)
-        say(xstop ? "\x1b[1;31m[transfer stopped]\x1b[0m\r\n"
-                  : "\x1b[1;31m[transfer failed]\x1b[0m\r\n");
-    else if (got > 0) {
-        char s[80];
-        strcpy(s, "\x1b[2m[");
-        numstr_cat(s, got);
-        strcat(s, got == 1 ? " file, " : " files, ");
-        numstr_cat(s, (LONG)(xbytes / 1024));
-        strcat(s, " KB]\x1b[0m\r\n");
-        say(s);
-    }
-    /* a requester was over the window (an upload), or it was hidden: all
-     * of it again - SIMPLE_REFRESH keeps nothing */
-    if (kind == 2 || xdamaged)
-        redraw_all();
-    title_update_now();
-    refresh();
+    finish(got, kind == 2);
     return TRUE;
 }

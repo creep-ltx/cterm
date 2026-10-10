@@ -306,7 +306,113 @@ static void upload(const char *what, const char *flag, unsigned noise,
     CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, label);
 }
 
-int main(void)
+/* Ymodem/Xmodem: lsz --ymodem / -X -> xy_receive */
+static void xy_down(const char *what, int ymodem, const char *flag)
+{
+    struct Line l;
+    XferIO io;
+    char *argv[12];
+    int a = 0, i, st, got, n = ymodem ? 4 : 1;
+    pid_t p;
+    char label[200];
+    static char paths[4][128];
+    memset(&l, 0, sizeof l);
+    strcpy(l.down, DIR "/down");
+    system("rm -rf " DIR "/down && mkdir -p " DIR "/down");
+    argv[a++] = LRZSZ "lsz";
+    argv[a++] = "-q";
+    argv[a++] = (char *)flag;
+    if (!ymodem) argv[a++] = "-k";
+    for (i = 0; i < n; i++) {
+        snprintf(paths[i], sizeof paths[i], DIR "/src/%s",
+                 ymodem ? names[i] : "random.bin");
+        argv[a++] = paths[i];
+    }
+    argv[a] = NULL;
+    p = child(argv, NULL, &l.fd);
+    io = io_for(&l);
+    got = xy_receive(&io, ymodem, "random.bin");
+    waitpid(p, &st, 0);
+    close(l.fd);
+    snprintf(label, sizeof label, "%s: %d files received", what, n);
+    CHECK(got == n, label);
+    for (i = 0; i < n; i++) {
+        char y[256];
+        const char *nm = ymodem ? names[i] : "random.bin";
+        snprintf(y, sizeof y, DIR "/down/%s", nm);
+        snprintf(label, sizeof label, "%s: %s the same%s", what, nm,
+                 ymodem ? "" : " (Xmodem pads the end)");
+        if (ymodem)
+            CHECK(same(paths[i], y), label);
+        else {                          /* the original, then SUBs */
+            FILE *f = fopen(paths[i], "rb"), *g = fopen(y, "rb");
+            int c, d, ok = f && g;
+            while (ok && (c = fgetc(f)) != EOF)
+                ok = (d = fgetc(g)) == c;
+            while (ok && (d = fgetc(g)) != EOF)
+                ok = d == 0x1a;
+            if (f) fclose(f);
+            if (g) fclose(g);
+            CHECK(ok, label);
+        }
+    }
+    snprintf(label, sizeof label, "%s: lsz ended well", what);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, label);
+}
+
+/* xy_send -> lrz --ymodem / -X */
+static void xy_up(const char *what, int ymodem)
+{
+    struct Line l;
+    XferIO io;
+    char *argv[8];
+    const char *paths[4];
+    static char pbuf[4][128];
+    int a = 0, i, st, got, n = ymodem ? 4 : 1;
+    pid_t p;
+    char label[200];
+    memset(&l, 0, sizeof l);
+    system("rm -rf " DIR "/up && mkdir -p " DIR "/up");
+    argv[a++] = LRZSZ "lrz";
+    argv[a++] = "-q";
+    if (ymodem) argv[a++] = "--ymodem";
+    else { argv[a++] = "-X"; argv[a++] = "-c"; argv[a++] = "random.bin"; }
+    argv[a] = NULL;
+    p = child(argv, DIR "/up", &l.fd);
+    io = io_for(&l);
+    for (i = 0; i < n; i++) {
+        snprintf(pbuf[i], sizeof pbuf[i], DIR "/src/%s",
+                 ymodem ? names[i] : "random.bin");
+        paths[i] = pbuf[i];
+    }
+    got = xy_send(&io, ymodem, 1, paths, n);
+    waitpid(p, &st, 0);
+    close(l.fd);
+    snprintf(label, sizeof label, "%s: %d files sent", what, n);
+    CHECK(got == n, label);
+    for (i = 0; ymodem && i < n; i++) {
+        char y[256];
+        snprintf(y, sizeof y, DIR "/up/%s", names[i]);
+        snprintf(label, sizeof label, "%s: %s the same", what, names[i]);
+        CHECK(same(pbuf[i], y), label);
+    }
+    if (!ymodem) {
+        FILE *f = fopen(pbuf[0], "rb"), *g = fopen(DIR "/up/random.bin", "rb");
+        int c, d, ok = f && g;
+        while (ok && (c = fgetc(f)) != EOF)
+            ok = (d = fgetc(g)) == c;
+        while (ok && (d = fgetc(g)) != EOF)
+            ok = d == 0x1a;
+        if (f) fclose(f);
+        if (g) fclose(g);
+        snprintf(label, sizeof label, "%s: random.bin the same (padded)", what);
+        CHECK(ok, label);
+    }
+    snprintf(label, sizeof label, "%s: lrz ended well", what);
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, label);
+}
+
+int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN);
     if (access(LRZSZ "lsz", X_OK)) {
@@ -318,6 +424,8 @@ int main(void)
     make("text.txt", 3000, 0);
     make("bytes.bin", 256 * 4, 1);
     make("random.bin", 1000000, 2);
+    if (argc > 1 && !strcmp(argv[1], "xy"))
+        goto xy;
     download("lsz", NULL, 0, 0);
     download("lsz -8 (8 KB subpackets)", "-8", 0, 0);
     download("lsz -e (controls escaped)", "-e", 0, 0);
@@ -325,6 +433,11 @@ int main(void)
     upload("lrz", NULL, 0, 0);
     upload("lrz -e (asks for controls escaped)", "-e", 0, 0);
     upload("lrz, a bad line both ways", NULL, 500, 3000);
+xy:
+    xy_down("lsz --ymodem", 1, "--ymodem");
+    xy_down("lsz -X -k (Xmodem 1K)", 0, "-X");
+    xy_up("lrz --ymodem", 1);
+    xy_up("lrz -X -c (Xmodem CRC)", 0);
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     return fails != 0;
 }

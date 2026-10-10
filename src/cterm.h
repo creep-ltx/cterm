@@ -197,7 +197,8 @@ enum { SCR_WB, SCR_OWN };
 enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
        M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
-       M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS };
+       M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS, M_YRECV, M_XRECV, M_YSEND,
+       M_XSEND };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -289,6 +290,7 @@ BOOL asl_open(void);
 ULONG history_lines(void);
 BOOL diskfont_open(void);
 BOOL transfer_take(UBYTE *buf, LONG n);
+void transfer_menu(int what);
 void transfer_free(void);
 void deep_call(void (*fn)(void));
 __attribute__((noinline)) __stdargs APTR RNewObject(struct IClass *c, CONST_STRPTR id, ULONG tag1, ...);

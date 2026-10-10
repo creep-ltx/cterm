@@ -17,7 +17,7 @@ TP = third_party
 SSHINC = -I$(TP)/amiga -I$(TP)/AmiSSL/Developer/include -I$(TP)/libssh2-1.11.1/include
 SSHLIB = $(TP)/lib/libssh2.a -L$(TP)/AmiSSL/Developer/lib/AmigaOS3 -lamisslstubs -lm
 
-SRC = src/main.c src/draw.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/zmodem.c src/vt.c src/console.c src/book.c
+SRC = src/main.c src/draw.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/zmodem.c src/xymodem.c src/vt.c src/console.c src/book.c
 HDR = src/cterm.h src/xfer.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h
 
 # CTerm: everything but ssh (small enough for a stock A1200)
@@ -63,8 +63,8 @@ clean:
 	rm -f tests/vtdump CTerm CTermSSH src/*.o
 
 # Zmodem against lrzsz on the PC (build lrzsz first: tests/zmodem_test.c)
-tests/zmodem_test: tests/zmodem_test.c src/zmodem.c src/xfer.h
-	gcc -O2 -Wall -o $@ tests/zmodem_test.c src/zmodem.c
+tests/zmodem_test: tests/zmodem_test.c src/zmodem.c src/xymodem.c src/xfer.h
+	gcc -O2 -Wall -o $@ tests/zmodem_test.c src/zmodem.c src/xymodem.c
 
 ztest: tests/zmodem_test
 	tests/zmodem_test
