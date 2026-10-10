@@ -66,9 +66,10 @@ Protocols/Hydra: src/modstart.c src/hydraenv.c src/hydra.c src/hydra.h src/hydra
 	mkdir -p Protocols
 	$(CC) $(MODFLAGS) -w -DMOD_HYDRA src/modstart.c src/hydraenv.c src/hydra.c -o $@
 
-deploy: CTerm CTermSSH protocols
+deploy: CTerm CTermSSH CTermTour protocols
 	wasabi mkdir Work:Utils/CTerm 2>/dev/null || true
 	wasabi put CTerm Work:Utils/CTerm/CTerm
+	wasabi put CTermTour Work:Utils/CTerm/CTermTour
 	wasabi put CTermSSH Work:Utils/CTerm/CTermSSH
 	wasabi mkdir Work:Utils/CTerm/Protocols 2>/dev/null || true
 	wasabi put Protocols/Zmodem Work:Utils/CTerm/Protocols/Zmodem

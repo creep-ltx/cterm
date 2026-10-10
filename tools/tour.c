@@ -148,11 +148,11 @@ static void status(const char *title)
     at(rows, 1);
     put("\x1b[0;7m");
     put(l);
-    while (n < cols - 1 - k - 1) {
-        put(" ");
-        n++;
-    }
-    if (n + k + 1 < cols) {
+    if (n + 2 + k + 1 < cols) {         /* the keys, if there is room */
+        while (n < cols - 1 - k - 1) {
+            put(" ");
+            n++;
+        }
         put(keys);
         put(" ");
     }
