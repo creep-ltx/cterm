@@ -22,6 +22,7 @@
 
 #include <exec/types.h>
 #include <exec/memory.h>
+#include <exec/execbase.h>
 #include <dos/dos.h>
 #include <dos/dosextens.h>
 #include <dos/dostags.h>
@@ -29,6 +30,7 @@
 #include <intuition/intuition.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <proto/intuition.h>
 #include <proto/timer.h>
 
 #include <string.h>
@@ -64,6 +66,7 @@ struct Con {
     int nreads;
     struct DosPacket *waitpkt;
     struct Task *breaktask;             /* whom Ctrl-C..F go to */
+    struct Task *shelltask;             /* the first reader: the Shell */
     LONG breakarg;                      /* CHANGE_SIGNAL's last arg2 */
     struct timerequest *ctio;           /* a WaitForChar's timeout */
     BOOL carmed;
@@ -211,6 +214,37 @@ static void goto_rc(struct Con *c, int row, int col)
     numcat(s, col + 1);
     strcat(s, "H");
     wr(c, s);
+}
+
+/* Is t a task that still runs? Under Forbid(): the answer holds until
+ * Permit(). A task that has ended is on neither list. */
+static BOOL task_alive(struct Task *t)
+{
+    struct Node *n;
+    if (!t)
+        return FALSE;
+    if (t == SysBase->ThisTask)
+        return TRUE;
+    for (n = SysBase->TaskReady.lh_Head; n->ln_Succ; n = n->ln_Succ)
+        if ((struct Task *)n == t)
+            return TRUE;
+    for (n = SysBase->TaskWait.lh_Head; n->ln_Succ; n = n->ln_Succ)
+        if ((struct Task *)n == t)
+            return TRUE;
+    return FALSE;
+}
+
+/* Ctrl-C..F: to the break task as console.handler keeps it (the one
+ * CHANGE_SIGNAL named, else the last reader), never to a task that has
+ * ended - a background writer may be long gone; then to the Shell. */
+static void send_break(struct Con *c, ULONG sig)
+{
+    Forbid();
+    if (task_alive(c->breaktask))
+        Signal(c->breaktask, sig);
+    else if (task_alive(c->shelltask))
+        Signal(c->shelltask, sig);
+    Permit();
 }
 
 static void push_input(struct Con *c, const UBYTE *b, LONG n)
@@ -414,8 +448,7 @@ void con_keys(struct Con *c, const UBYTE *b, LONG n)
     /* Ctrl-C..F: break signals, never input */
     for (i = 0; i < n; i++)
         if (b[i] >= 3 && b[i] <= 6) {
-            if (c->breaktask)
-                Signal(c->breaktask, SIGBREAKF_CTRL_C << (b[i] - 3));
+            send_break(c, SIGBREAKF_CTRL_C << (b[i] - 3));
             return;
         }
     if (c->rawmode) {
@@ -489,7 +522,9 @@ void con_handle(struct Con *c, ULONG sigs)
             break;
         case ACTION_WRITE: {
             LONG n = p->dp_Arg3;
-            if (from)
+            /* a writer does not take the break keys (Run List's would,
+             * then end): only when no one has them yet */
+            if (from && !c->breaktask)
                 c->breaktask = from->mp_SigTask;
             if (n > 0)
                 term_write(c->user, (const UBYTE *)p->dp_Arg2, n);
@@ -498,8 +533,11 @@ void con_handle(struct Con *c, ULONG sigs)
             break;
         }
         case ACTION_READ:
-            if (from)
+            if (from) {
                 c->breaktask = from->mp_SigTask;
+                if (!c->shelltask)
+                    c->shelltask = from->mp_SigTask;
+            }
             if (c->nreads < READMAX) {
                 c->reads[c->nreads++] = p;
                 serve(c);
@@ -562,7 +600,8 @@ void con_handle(struct Con *c, ULONG sigs)
             struct Node *n = (struct Node *)p->dp_Arg2;
             LONG old = c->breakarg;
             if (n) {
-                if (n->ln_Type == NT_MSGPORT)
+                if (n->ln_Type == NT_MSGPORT &&
+                    (((struct MsgPort *)n)->mp_Flags & PF_ACTION) == PA_SIGNAL)
                     c->breaktask = ((struct MsgPort *)n)->mp_SigTask;
                 else if (n->ln_Type == NT_TASK || n->ln_Type == NT_PROCESS)
                     c->breaktask = (struct Task *)n;
@@ -731,8 +770,7 @@ struct Con *con_start(const char *startup, void *user)
 void con_stop(struct Con *c)
 {
     c->eof_pending = TRUE;
-    if (c->breaktask)
-        Signal(c->breaktask, SIGBREAKF_CTRL_C);
+    send_break(c, SIGBREAKF_CTRL_C);
     serve(c);
 }
 
