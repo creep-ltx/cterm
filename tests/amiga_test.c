@@ -262,6 +262,23 @@ int main(void)
         CHECK(w >= 2 && l[1].cp == 0xFFFD, "an unfinished sequence before LFs");
         vt_free(u);
     }
+    {   /* ESC ends an OSC or DCS string and starts a new sequence */
+        Vt *e = vt_new(20, 3, 0);
+        int x, y, vis, ch;
+        const char *t;
+        feed(e, "\x1b]2;one\x1b[3;5H");
+        vt_cursor(e, &x, &y, &vis);
+        t = vt_title(e, &ch);
+        CHECK(ch && !strcmp(t, "one") && y == 2 && x == 4,
+              "OSC then ESC [: the title, then CUP");
+        feed(e, "\x1bPq#0;1\x1b[1;2Hz");
+        vt_cursor(e, &x, &y, &vis);
+        CHECK(y == 0 && x == 2 && at(e, 0, 1) == 'z' && at(e, 0, 0) == ' ',
+              "DCS then ESC [: the string ends, CUP acts");
+        feed(e, "\x1b_hidden\x1b\\w");
+        CHECK(at(e, 0, 2) == 'w', "APC ended by ST");
+        vt_free(e);
+    }
     {   /* CHT stops at the last column; a huge OSC number is no title */
         Vt *t = vt_new(20, 3, 0);
         int x, y, vis, ch;

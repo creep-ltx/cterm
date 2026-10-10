@@ -1244,6 +1244,7 @@ static void byte(Vt *v, int c)
         }
         if (c == '\\')
             return;                     /* a lone ST */
+        if (c == 0x1B) { v->state = S_ESC; return; }  /* starts again */
         if (c < 0x20) { control(v, c); return; }
         esc(v, c);
         return;
@@ -1306,18 +1307,18 @@ static void byte(Vt *v, int c)
 
     case S_OSC_ESC:
         osc_done(v);
-        v->state = S_GROUND;
-        if (c != '\\')
-            byte(v, c);
+        /* fall through */
+    case S_STR_ESC:
+        /* ESC ends the string and starts a sequence: ESC \\ is ST (a lone
+         * ST in S_ESC), anything else is the sequence it begins (xterm) */
+        v->state = S_ESC;
+        v->inter = 0;
+        byte(v, c);
         return;
 
     case S_STR:
         if (c == 0x1B) v->state = S_STR_ESC;
         else if (c == 0x9C && !v->utf8) v->state = S_GROUND;
-        return;
-
-    case S_STR_ESC:
-        v->state = c == '\\' ? S_GROUND : S_STR;
         return;
     }
 }
