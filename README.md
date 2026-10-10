@@ -24,6 +24,22 @@ Project/Call... (Right Amiga+K) asks for a host and remembers the last
 eight. A call opens in a new tab (or a window of its own); when it ends,
 Return calls again.
 
+## For programs on other computers
+
+In a telnet, ssh or relay tab CTerm behaves like a modern xterm:
+
+- Alt is Meta (Alt+B, Alt+F in bash; emacs), and Shift/Alt/Ctrl with
+  the arrows and Del send xterm's codes. The local Shell keeps the
+  Amiga's Alt characters. (Settings: Alt key.)
+- Programs can use the mouse (vim, htop, mc, Claude Code): clicks, the
+  wheel and movement go to them. Shift+drag still marks text, and the
+  right button is still the menu button.
+- Flicker-free screens (programs that draw a whole frame at once),
+  focus reports, and the cursor shape a program asks for (block,
+  underline, bar).
+- When the window gets wider or narrower, the text (and the
+  scrollback) flows again to the new width.
+
 ## Tabs
 
 Several terminals in one window. Project/New Shell tab (Right Amiga+T)
