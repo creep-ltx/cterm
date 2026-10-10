@@ -22,6 +22,8 @@ struct PPRow {
     struct { UBYTE *dst; LONG pbit; ULONG a, x; } pt[9];
 };
 void pp_row(struct PPRow *f);
+void pp_row1(struct PPRow *f);          /* one plane */
+void pp_row1z(struct PPRow *f);         /* one plane, bit phase 0 */
 
 #define PP_MAXCOLS 512      /* cells one row can have */
 

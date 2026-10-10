@@ -38,6 +38,9 @@ static BOOL sel_span(int r, int *s0, int *s1);
 static void draw_cells(int r, int x0, int x1);
 static BOOL pp_cells(int r, int a, int b);
 static BOOL ppon;                       /* the planar painter in use */
+#ifndef PPRUN
+#define PPRUN 2                         /* chip only: the painter from this run on */
+#endif
 static int area_right(void);
 static void paint_row(int r);
 static BOOL backdrop_put(LONG x, LONG y, LONG w, LONG h);
@@ -780,7 +783,7 @@ static void draw_cells(int r, int x0, int x1)
     while (x <= xend) {
         /* a colourful row: the rest by the planar painter, which costs
          * the same for any number of colours (Text() is a call a run) */
-        if (++runs == 3 && ppon && pp_cells(r, x, xend))
+        if (++runs == PPRUN && ppon && pp_cells(r, x, xend))
             break;
         const VtCell *c = x < w && line ? &line[x] : &empty;
         ULONG fg, bg, cp = c->cp;
@@ -1014,6 +1017,9 @@ static void pp_setup(void)
      * the blitter behind Text() is as quick; the painter wins where the
      * colours change (measured, conbench sgr-perchar 5.4 -> 4.0 s) */
     pp_all = (TypeOfMem((APTR)pp_setup) & MEMF_FAST) != 0;
+#ifdef PPALL
+    pp_all = TRUE;                      /* to measure: the painter always */
+#endif
 }
 
 /* A run's pens as the asm wants them (fx<<8 | fb), its glyph style, and

@@ -255,3 +255,206 @@ _pp_row:
 	add.l	a5,a3
 	subq.l	#1,d5
 	rts
+
+; ---------------------------------------------------------------------
+; pp_row1 / pp_row1z - pp_row for ONE plane (PP_PT's first entry), the
+; common row: text in one colour on a 16-colour Workbench differs from
+; the background in one plane. A and X stay in d6/d7, the slab's index
+; in a6, nothing per slab is read from memory but the glyphs. pp_row1z
+; is for bit phase 0 (the window on a byte boundary): no lo parts, so
+; four glyph reads a slab instead of eight. Same struct PPRow.
+
+ROW1	macro				; \1: 1 = phase 0
+	movem.l	d2-d7/a2-a6,-(sp)
+	move.l	48(sp),a4
+	move.l	PP_GP(a4),a0
+	move.l	PP_BPR(a4),a5
+	move.l	PP_PT(a4),a2		; dst: this group, line 0
+	move.l	PP_NG(a4),PP_K(a4)
+	moveq	#-1,d0
+	move.l	d0,PP_KEY(a4)
+	move.l	PP_EF(a4),d5
+.g\@:	cmp.l	#1,PP_K(a4)
+	bne.s	.g1\@
+	and.l	PP_EL(a4),d5
+.g1\@:	move.l	d5,PP_E(a4)
+	; ---- A (d6), X (d7) when the group's pens change ----
+	move.l	PP_PW(a4),a1
+	move.l	2(a1),d0
+	move.l	6(a1),d1
+	cmp.l	d0,d1
+	bne.s	.mx\@
+	move.l	d0,d2
+	swap	d2
+	cmp.l	d0,d2
+	bne.s	.mx\@
+	ifeq	\1
+	cmp.w	(a1),d0			; c0-1 owns bits too
+	bne.s	.mx\@
+	endif
+	moveq	#0,d2
+	move.w	d0,d2
+	cmp.l	PP_KEY(a4),d2
+	beq.s	.sl0\@
+	move.l	d2,PP_KEY(a4)
+	move.l	PP_PT+4(a4),d4		; the plane's bit
+	move.w	d2,d3
+	lsr.w	#8,d3
+	btst	d4,d3
+	sne	d6
+	extb.l	d6
+	btst	d4,d2
+	sne	d7
+	extb.l	d7
+	bra.s	.sl0\@
+.mx\@:	moveq	#-1,d2
+	move.l	d2,PP_KEY(a4)
+	move.l	PP_PT+4(a4),d4
+	moveq	#0,d6
+	moveq	#0,d7
+	moveq	#0,d1
+.mo\@:	move.w	(a1)+,d2
+	btst	d4,d2
+	beq.s	.m1\@
+	or.l	PP_OWN(a4,d1.l),d7
+.m1\@:	lsr.w	#8,d2
+	btst	d4,d2
+	beq.s	.m2\@
+	or.l	PP_OWN(a4,d1.l),d6
+.m2\@:	addq.l	#4,d1
+	cmp.l	#20,d1
+	bne.s	.mo\@
+	; ---- the slabs ----
+.sl0\@:	sub.l	a6,a6			; slab offset in the blocks
+	move.l	a2,a3			; the line written next
+.sl\@:	ifne	\1
+	move.l	4(a0),a1
+	move.l	0(a1,a6.l),d0		; hi(c0): no lo parts at phase 0
+	move.l	8(a0),a1
+	move.l	0(a1,a6.l),d1
+	move.l	12(a0),a1
+	move.l	0(a1,a6.l),d2
+	move.l	16(a0),a1
+	move.l	0(a1,a6.l),d3
+	else
+	move.l	(a0),a1
+	move.l	4(a1,a6.l),d0		; lo(c0-1)
+	move.l	4(a0),a1
+	or.l	0(a1,a6.l),d0		; hi(c0)
+	move.l	4(a1,a6.l),d1
+	move.l	8(a0),a1
+	or.l	0(a1,a6.l),d1
+	move.l	4(a1,a6.l),d2
+	move.l	12(a0),a1
+	or.l	0(a1,a6.l),d2
+	move.l	4(a1,a6.l),d3
+	move.l	16(a0),a1
+	or.l	0(a1,a6.l),d3
+	endif
+	move.l	d0,d4			; transpose a,b,c,d -> lines 0..3
+	and.l	#$FF00FF00,d0
+	lsl.l	#8,d4
+	and.l	#$FF00FF00,d4
+	move.l	d1,d5
+	lsr.l	#8,d5
+	and.l	#$00FF00FF,d5
+	or.l	d5,d0
+	and.l	#$00FF00FF,d1
+	or.l	d4,d1
+	move.l	d2,d4
+	and.l	#$FF00FF00,d2
+	lsl.l	#8,d4
+	and.l	#$FF00FF00,d4
+	move.l	d3,d5
+	lsr.l	#8,d5
+	and.l	#$00FF00FF,d5
+	or.l	d5,d2
+	and.l	#$00FF00FF,d3
+	or.l	d4,d3
+	move.l	d0,d5
+	swap	d5
+	move.w	d2,d5
+	swap	d2
+	move.w	d2,d0
+	move.l	d5,d2
+	move.l	d1,d5
+	swap	d5
+	move.w	d3,d5
+	swap	d3
+	move.w	d3,d1
+	move.l	d5,d3
+	move.l	a6,d5			; lines left: ch - slab*4
+	lsr.l	#1,d5
+	neg.l	d5
+	add.l	PP_CH(a4),d5
+	cmp.l	#-1,PP_E(a4)
+	bne.s	.pe\@
+	move.l	d0,d4
+	and.l	d6,d4
+	eor.l	d7,d4
+	move.l	d4,(a3)
+	add.l	a5,a3
+	subq.l	#1,d5
+	beq.s	.nx\@
+	move.l	d1,d4
+	and.l	d6,d4
+	eor.l	d7,d4
+	move.l	d4,(a3)
+	add.l	a5,a3
+	subq.l	#1,d5
+	beq.s	.nx\@
+	move.l	d2,d4
+	and.l	d6,d4
+	eor.l	d7,d4
+	move.l	d4,(a3)
+	add.l	a5,a3
+	subq.l	#1,d5
+	beq.s	.nx\@
+	move.l	d3,d4
+	and.l	d6,d4
+	eor.l	d7,d4
+	move.l	d4,(a3)
+	add.l	a5,a3
+	subq.l	#1,d5
+	beq.s	.nx\@
+	addq.l	#8,a6
+	bra	.sl\@
+	; an edge group: the pixels outside the span are kept
+.pe\@:	movem.l	d0-d3,-(sp)
+	move.l	PP_E(a4),d0
+	moveq	#0,d3
+.pel\@:	move.l	0(sp,d3.l*4),d1
+	and.l	d6,d1
+	eor.l	d7,d1
+	move.l	(a3),d2
+	eor.l	d2,d1
+	and.l	d0,d1
+	eor.l	d2,d1
+	move.l	d1,(a3)
+	add.l	a5,a3
+	subq.l	#1,d5
+	beq.s	.ped\@
+	addq.l	#1,d3
+	cmp.l	#4,d3
+	bne.s	.pel\@
+	lea	16(sp),sp
+	addq.l	#8,a6
+	bra	.sl\@
+.ped\@:	lea	16(sp),sp
+	; ---- the next group ----
+.nx\@:	lea	16(a0),a0
+	addq.l	#8,PP_PW(a4)
+	addq.l	#4,a2
+	moveq	#-1,d5
+	subq.l	#1,PP_K(a4)
+	bne	.g\@
+	movem.l	(sp)+,d2-d7/a2-a6
+	rts
+	endm
+
+	xdef	_pp_row1
+_pp_row1:
+	ROW1	0
+	xdef	_pp_row1z
+_pp_row1z:
+	ROW1	1

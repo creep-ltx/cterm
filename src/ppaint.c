@@ -147,7 +147,9 @@ void pp_paint(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
             np++;
         }
     f.pt[np].dst = NULL;
-    if (np)
+    if (np == 1)                        /* the common row: all in registers */
+        (pp_s ? pp_row1 : pp_row1z)(&f);
+    else if (np)
         pp_row(&f);
 }
 

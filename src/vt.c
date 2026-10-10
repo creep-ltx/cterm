@@ -80,6 +80,8 @@ struct Vt {
     uint16_t *dx0, *dx1;            /* a dirty row's changed columns */
     int all_dirty, any_dirty;
     int s_top, s_bot, s_n;
+    int s_full;                     /* every row of the scroll's region is
+                                       marked whole: marks need not move */
 
     char reply[REPLYMAX];
     int rlen;
@@ -383,6 +385,11 @@ static void note_scroll(Vt *v, int top, int bot, int n)
     v->s_top = top;
     v->s_bot = bot;
     v->s_n += n;
+    /* a flood: once every row of the region is to be drawn whole, the
+     * marks are the same wherever they move (on a stock A1200 the moves
+     * were ~500 instructions a new line) */
+    if (v->s_full)
+        return;
     /* the rows' dirty marks travel with their contents */
     if (n > 0) {
         int y;
@@ -404,6 +411,13 @@ static void note_scroll(Vt *v, int top, int bot, int n)
             v->dx0[y] = 0;
             v->dx1[y] = v->cols - 1;
         }
+    }
+    {
+        int y;
+        for (y = top; y <= bot; y++)
+            if (!v->dirty[y] || v->dx0[y] || v->dx1[y] != v->cols - 1)
+                break;
+        v->s_full = y > bot;
     }
 }
 
@@ -2005,6 +2019,7 @@ void vt_resize(Vt *v, int cols, int rows)
         if (v->saved[i].y >= rows) v->saved[i].y = rows - 1;
     }
     v->s_n = 0;
+    v->s_full = 0;
     dirty_all(v);
 }
 
@@ -2107,6 +2122,7 @@ int vt_take_changes(Vt *v, VtChanges *ch)
     memset(v->dirty, 0, v->rows);
     v->all_dirty = v->any_dirty = 0;
     v->s_n = 0;
+    v->s_full = 0;
     return any;
 }
 

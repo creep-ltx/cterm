@@ -10,7 +10,7 @@ if pgrep -x fs-uae >/dev/null; then
   echo "bench.sh: an emulator is already running (another session?) - not starting" >&2
   exit 1
 fi
-cp "$(dirname "$0")/../../CTerm" "$H/T/CTerm"
+cp "${BIN:-$(dirname "$0")/../../CTerm}" "$H/T/CTerm"   # BIN=file: another build
 printf 'FailAt 30\nStack 20000\nC:conbench %s TO SYS:T/cb-%s.txt REPS 3 SCALE 1 SYNC\nEndCLI\n' \
   "$kind" "$name" > "$H/S/xcb"; rm -f "$H/T/cb-$name.txt"
 # CONF=fast: the same A1200 with 8 MB of fast RAM (an accelerated machine)

@@ -21,6 +21,7 @@ int main(int argc, char **argv)
         int n, x, y = rnd() % 4;
         UBYTE mask = (UBYTE)rnd(), *pl1[8], *pl2[8], g[32];
         if (rnd() % 4 == 0) mask = 0xFF;
+        else if (rnd() % 2) mask = 1 << (rnd() % depth);   /* one plane */
         if (!pp_init(ch, 64)) { printf("init\n"); return 20; }
         ns = 1 + rnd() % 40;
         slots[0] = 0;
@@ -30,6 +31,7 @@ int main(int argc, char **argv)
             slots[i] = pp_add(g);
         }
         x = rnd() % (bpr * 8 - 16);
+        if (rnd() % 3 == 0) x &= ~7;                /* phase 0 */
         n = 1 + rnd() % ((bpr * 8 - x) / 8);
         if (rnd() % 3 == 0) n = 1 + rnd() % 3;
         if (x + 8 * n > bpr * 8) n = (bpr * 8 - x) / 8;

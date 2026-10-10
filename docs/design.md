@@ -208,7 +208,20 @@ In the order the user and I agreed (2026-10-10):
      run in asm, write cells in one go, return at the first control.
   Each step: measure with the PROFILE_ECLOCK build first, keep the C as
   the reference and test the asm against it (tests/streams), one step
-  at a time on both A1200s. Later, if it pays, the engine per CPU
+  at a time on both A1200s.
+  **State 2026-10-10 evening:** step 1 done (src/ppaint.s: pp_row for any
+  planes, pp_row1/pp_row1z for one plane; tests/pptest under vamos, make
+  pptest). On a chip-only Amiga Text() keeps one-colour rows (its blitter
+  is as quick there) and the painter takes a row from its 2nd colour run;
+  with fast RAM it draws every row. A 256-colour card got a painter of pen
+  rows (WriteChunkyPixels) from the same glyph store. Cells are now 6
+  bytes (character + pen number, vt_pens). Stock conbench 42.5 -> 39.5 s
+  (CCON 26.3); fast-RAM A1200 24.8 -> 23.3 s; RTG A1200 unchanged at
+  ~4.4 s (per-packet cost, not drawing). Numbers and traps:
+  Knowledge/amiga/graphics-and-performance.md ("A CPU text painter").
+  Left on stock: colour rows over 4 planes (~8 ms a row), the 4-plane
+  scroll, the parser's per-line overhead; step 2 (RTG row builder in asm)
+  is not worth it while drawing is not the RTG cost. Later, if it pays, the engine per CPU
   (68000 / 68020+) as a file chosen at start - the plugin pattern
   (Knowledge/amiga/load-on-demand-and-plugins.md).
 
