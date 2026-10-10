@@ -278,6 +278,25 @@ static void session(const char *what, int nhc, int nus)
     CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, label);
 }
 
+/* a host must not choose the drawer: FINFO names lose theirs */
+static void drawers(void)
+{
+    static const char *in[][2] = {
+        { "SYS:WBStartup/Evil", "Evil" }, { "/Evil", "Evil" },
+        { "DEVS:x", "x" }, { "a\\b\\c.zip", "c.zip" },
+        { "plain.lha", "plain.lha" }, { "dir/", "" },
+    };
+    char s[200], name[64];
+    long t, sz;
+    int i;
+    for (i = 0; i < (int)(sizeof in / sizeof in[0]); i++) {
+        strcpy(s, "0000000000000400000000000000000000000000");
+        strcat(s, in[i][0]);
+        hy_finfo(s, &t, &sz, name, sizeof name);
+        CHECK(!strcmp(name, in[i][1]) && sz == 0x400, in[i][0]);
+    }
+}
+
 int main(void)
 {
     signal(SIGPIPE, SIG_IGN);
@@ -285,6 +304,7 @@ int main(void)
         printf("no " HCREF " - run tests/hydra/build.sh\n");
         return 2;
     }
+    drawers();
     system("rm -rf " DIR " && mkdir -p " DIR "/src");
     make("text.txt", 3000, 0);
     make("bytes.bin", 256 * 4, 1);

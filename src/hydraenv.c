@@ -289,6 +289,13 @@ void hy_finfo(const char *s, long *ftime, long *fsize, char *name, int max)
     *ftime = hex8(s);
     *fsize = hex8(s + 8);
     s += 40;
+    /* the name without any drawers: a host must not choose where a file
+     * goes (SYS:WBStartup/x, /x) */
+    for (i = 0; s[i] && s[i] != ' '; i++)
+        if (s[i] == '/' || s[i] == ':' || s[i] == '\\') {
+            s += i + 1;
+            i = -1;
+        }
     for (i = 0; i < max - 1 && s[i] && s[i] != ' '; i++)
         name[i] = s[i];
     name[i] = 0;

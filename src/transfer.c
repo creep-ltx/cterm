@@ -277,6 +277,14 @@ static void *x_wopen(void *u, const char *name, unsigned long size,
     int n = 0;
     BPTR f;
     (void)size;
+    /* never a drawer from the name, whoever sent it: AddPart lets a full
+     * path (SYS:x) or a leading / replace or climb out of c->dir */
+    {
+        const char *q;
+        for (q = name; *q; q++)
+            if (*q == '/' || *q == ':' || *q == '\\')
+                name = q + 1;
+    }
     strncpy(nm, name[0] ? name : "file", 100);  /* nameless: still one */
     nm[100] = 0;
     for (;;) {                          /* never over a file that is there */
