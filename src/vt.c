@@ -63,7 +63,8 @@ struct Vt {
     char priv, priv2, inter;        /* priv2: a second one, as in Ed's >? */
     char osc[OSCMAX];
     int osclen;
-    uint32_t uacc;
+    uint32_t uacc, umin;                /* umin: the least a sequence of
+                                           its length may hold */
     int uneed;
 
     uint8_t *dirty;
@@ -1195,17 +1196,30 @@ static void byte(Vt *v, int c)
             if (v->uneed) {
                 if ((c & 0xC0) == 0x80) {
                     v->uacc = (v->uacc << 6) | (c & 0x3F);
-                    if (--v->uneed == 0)
-                        put(v, v->uacc);
+                    if (--v->uneed == 0) {
+                        uint32_t u = v->uacc;
+                        /* too long a form (C0 9B is not ESC), a surrogate,
+                         * past Unicode: not a character. U+0080-009F are
+                         * C1 controls, as in xterm. */
+                        if (u < v->umin || (u >= 0xD800 && u <= 0xDFFF) ||
+                            u > 0x10FFFF)
+                            put(v, 0xFFFD);
+                        else
+                            ground_char(v, u);
+                    }
                     return;
                 }
                 v->uneed = 0;
                 put(v, 0xFFFD);         /* a broken sequence */
             }
-            if ((c & 0xE0) == 0xC0) { v->uacc = c & 0x1F; v->uneed = 1; }
-            else if ((c & 0xF0) == 0xE0) { v->uacc = c & 0x0F; v->uneed = 2; }
-            else if ((c & 0xF8) == 0xF0) { v->uacc = c & 0x07; v->uneed = 3; }
-            else put(v, 0xFFFD);
+            if ((c & 0xE0) == 0xC0) {
+                v->uacc = c & 0x1F; v->uneed = 1; v->umin = 0x80;
+            } else if ((c & 0xF0) == 0xE0) {
+                v->uacc = c & 0x0F; v->uneed = 2; v->umin = 0x800;
+            } else if ((c & 0xF8) == 0xF0) {
+                v->uacc = c & 0x07; v->uneed = 3; v->umin = 0x10000;
+            } else
+                put(v, 0xFFFD);
             return;
         }
         if (v->uneed) {
@@ -1409,7 +1423,7 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
         }
         /* a run of new lines: one scroll of them all (scroll-nl, blank
          * lines from programs) instead of a scroll per line */
-        if (c == 10 && v->state == S_GROUND && i + 1 < len &&
+        if (c == 10 && v->state == S_GROUND && !v->uneed && i + 1 < len &&
             buf[i + 1] == 10 && v->y <= v->bot) {
             int k = 1, d, s, h = v->bot - v->top + 1;
             while (i + k < len && buf[i + k] == 10)

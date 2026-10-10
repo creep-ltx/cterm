@@ -245,6 +245,23 @@ int main(void)
         CHECK(y == 2 && x == 0, "CPL below the region: stops at its top");
         vt_free(m);
     }
+    {   /* malformed UTF-8 shows U+FFFD, never the character it hides */
+        Vt *u = vt_new(20, 3, 0);
+        int w;
+        const VtCell *l;
+        feed(u, "\xc0\x9b" "a\xed\xa0\x80" "b\xf4\x90\x80\x80" "c\xe0\x80\xaf" "d");
+        l = vt_line(u, 0, 0, &w);
+        CHECK(w >= 8 && l[0].cp == 0xFFFD && l[1].cp == 'a' && l[2].cp == 0xFFFD &&
+              l[3].cp == 'b' && l[4].cp == 0xFFFD && l[5].cp == 'c' &&
+              l[6].cp == 0xFFFD && l[7].cp == 'd', "overlong, surrogate, past U+10FFFF");
+        feed(u, "\r\xc2\x85" "e");           /* U+0085 is NEL, a control */
+        l = vt_line(u, 1, 0, &w);
+        CHECK(w >= 1 && l[0].cp == 'e', "a C1 control in UTF-8 acts");
+        feed(u, "\x1b[H\x1b[2Jx\xe2\x94\n\n");   /* cut short by new lines */
+        l = vt_line(u, 0, 0, &w);
+        CHECK(w >= 2 && l[1].cp == 0xFFFD, "an unfinished sequence before LFs");
+        vt_free(u);
+    }
     {   /* CHT stops at the last column; a huge OSC number is no title */
         Vt *t = vt_new(20, 3, 0);
         int x, y, vis, ch;
