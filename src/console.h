@@ -45,6 +45,8 @@ extern struct Window *win;
 void term_flush(void *tab);             /* draw what is owed, now */
 void term_render_soon(void *tab);       /* draw within a frame */
 void term_write(void *tab, const UBYTE *b, LONG n);   /* into its emulator */
+void term_take(void *tab, const UBYTE *b, LONG n);    /* ... later, batched */
+void term_sync(void *tab);              /* ... what was taken, now */
 int term_cursor_x(void *tab);
 int term_cursor_y(void *tab);
 int term_cols(void *tab);

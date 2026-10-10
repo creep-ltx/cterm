@@ -202,6 +202,9 @@ struct Tab {
     int t_letters;                      /* its letters: BL_* */
     char t_down[160], t_up[160];        /* its drawers for files */
     BPTR t_log;                         /* Start log: everything that came */
+    UBYTE *t_pend;                      /* a Shell's writes taken, not yet
+                                           parsed (term_take, term_sync) */
+    LONG t_plen;
     struct Xfer *t_xfer;                /* a transfer in it, or NULL */
 };
 
@@ -258,6 +261,8 @@ extern int cw, ch, cbase;
 extern int linespace;
 extern BOOL usett;
 extern BOOL nopp;
+void term_sync(void *t);
+void term_sync_all(void);
 extern char ttfile[160];
 extern BOOL pcfont;
 extern BOOL altmeta;

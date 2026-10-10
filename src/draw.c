@@ -2252,6 +2252,7 @@ void redraw_all(void)
 {
     int r;
     VtChanges chg;
+    term_sync(T);
     forget_shown();
     rp_forget();
     planes_full();
@@ -2288,6 +2289,7 @@ void repair_damage(void)
     int r, r0, r1, x0, x1;
     LONG keepbase = pbase;
     UBYTE keepmask = pmask;
+    term_sync(T);
     BeginRefresh(win);
     dl = win->WLayer->DamageList;       /* in the window's coordinates */
     some = dl && dl->RegionRectangle;
@@ -2352,6 +2354,7 @@ void refresh(void)
     int r;
     BOOL xp;
     static int syncwait;
+    term_sync(T);                       /* what the Shell wrote, parsed */
     /* the program is between "begin" and "end" of a frame (2026): show
      * the finished one - but never hold the window more than ~8 frames */
     if (vt_sync(vt) && syncwait < 8) {

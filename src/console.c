@@ -759,6 +759,11 @@ void con_handle(struct Con *c, ULONG sigs)
     while ((m = GetMsg(c->conport))) {
         struct DosPacket *p = (struct DosPacket *)m->mn_Node.ln_Name;
         struct MsgPort *from = p->dp_Port;
+        /* writes are parsed in batches (term_take): anything else may
+         * look at the text, so what was taken is parsed first */
+        if (p->dp_Type != ACTION_WRITE &&
+            !(p->dp_Type == ACTION_WAIT_CHAR && p->dp_Arg1 <= 0))
+            term_sync(c->user);
         switch (p->dp_Type) {
         case ACTION_FINDINPUT:
         case ACTION_FINDOUTPUT:
@@ -782,7 +787,7 @@ void con_handle(struct Con *c, ULONG sigs)
             if (from && !c->breaktask)
                 c->breaktask = from->mp_SigTask;
             if (n > 0)
-                term_write(c->user, (const UBYTE *)p->dp_Arg2, n);
+                term_take(c->user, (const UBYTE *)p->dp_Arg2, n);
             ReplyPkt(p, n > 0 ? n : 0, 0);
             term_render_soon(c->user);
             break;

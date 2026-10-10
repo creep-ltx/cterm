@@ -25,6 +25,7 @@
 void __chkabort(void);
 static void title_update(void);
 void term_write(void *t, const UBYTE *b, LONG n);
+void term_take(void *t, const UBYTE *b, LONG n);
 int term_cols(void *t);
 int term_rows(void *t);
 int term_cursor_x(void *t);
@@ -107,9 +108,63 @@ struct Tab *shown = &tab0;       /* the one in the window */
 
 /* The console's calls, for its tab (t): the text goes into that tab's
  * emulator; only the shown tab is drawn. */
+/* Parse bytes now. */
+static void term_parse(struct Tab *tb, const UBYTE *b, LONG n)
+{
+    PF_START(t0);
+    if (tb->t_log)
+        FWrite(tb->t_log, (APTR)b, 1, n);
+    vt_write(tb->t_vt, b, n);
+    PF_ADD(pf_vt, t0);
+}
+
+/* A Shell's writes are taken in at once and parsed in batches - CCON's
+ * accept-then-render: the writer goes on at once, and a flood of small
+ * writes (a byte at a time, a colour change each) is parsed in a few
+ * calls instead of one per write (on a stock A1200 a call to the parser
+ * was ~230 us before its first byte). What reads the emulator syncs
+ * first: drawing, the console's own echo, cursor queries, a READ. */
+#define PENDMAX 4096
+void term_sync(void *t)
+{
+    struct Tab *tb = t;
+    if (tb && tb->t_plen) {
+        LONG n = tb->t_plen;
+        tb->t_plen = 0;
+        term_parse(tb, tb->t_pend, n);
+    }
+}
+
+void term_sync_all(void)
+{
+    int i;
+    for (i = 0; i < ntabs; i++)
+        term_sync(tabs[i]);
+}
+
+/* A write from the Shell's programs: kept to parse later if it fits. */
+void term_take(void *t, const UBYTE *b, LONG n)
+{
+    struct Tab *tb = t;
+    if (!tb->t_pend)
+        tb->t_pend = AllocVec(PENDMAX, MEMF_ANY);
+    if (tb->t_pend && n <= PENDMAX - tb->t_plen) {
+        CopyMem((APTR)b, tb->t_pend + tb->t_plen, n);
+        tb->t_plen += n;
+    } else {
+        term_sync(t);
+        term_parse(tb, b, n);
+    }
+#ifdef PROFILE
+    pf_writes++;
+#endif
+}
+
+/* The console's own text (an echo, a prompt): after what came before. */
 void term_write(void *t, const UBYTE *b, LONG n)
 {
     PF_START(t0);
+    term_sync(t);
     if (((struct Tab *)t)->t_log)
         FWrite(((struct Tab *)t)->t_log, (APTR)b, 1, n);
     vt_write(((struct Tab *)t)->t_vt, b, n);
@@ -123,12 +178,14 @@ int term_rows(void *t) { (void)t; return rows; }
 int term_cursor_x(void *t)
 {
     int x, y, v;
+    term_sync(t);
     vt_cursor(((struct Tab *)t)->t_vt, &x, &y, &v);
     return x;
 }
 int term_cursor_y(void *t)
 {
     int x, y, v;
+    term_sync(t);
     vt_cursor(((struct Tab *)t)->t_vt, &x, &y, &v);
     return y;
 }
@@ -139,6 +196,14 @@ void draw_now(void)
 {
     PF_START(t0);
     owed = FALSE;
+    term_sync(T);
+#ifdef NODRAW
+    {   /* to measure: everything but the drawing (the model still runs) */
+        VtChanges chg;
+        vt_take_changes(vt, &chg);
+        return;
+    }
+#endif
     if (win) {
         if (planar && !painter) {
             /* a stock Amiga: how long a draw takes paces the next one */
@@ -182,6 +247,7 @@ static void draw_soon(void)
 
 void term_flush(void *t)
 {
+    term_sync(t);
     if (t == shown) {
         struct Tab *keep = T;
         T = shown;
@@ -608,6 +674,11 @@ static void tab_drop(struct Tab *t)
     }
     transfer_tab_gone(t);
     vt_free(T->t_vt);
+    if (T->t_pend) {
+        FreeVec(T->t_pend);
+        T->t_pend = NULL;
+        T->t_plen = 0;
+    }
     memmove(tabs + i, tabs + i + 1, (ntabs - i - 1) * sizeof tabs[0]);
     ntabs--;
     if (t != &tab0)
@@ -797,6 +868,32 @@ static void run(void)
 
 static UBYTE *hostbuf;                  /* a host's bytes: made at the first */
 
+/* The Shells' packets alone (loop_round's short way): FALSE when
+ * something needs the whole round - a Shell that ended. */
+static BOOL shells_only(ULONG sigs)
+{
+    struct Tab *keep = T;
+    BOOL ok = TRUE;
+    int i;
+    for (i = 0; i < ntabs; i++) {
+        T = tabs[i];
+        if (T->con) {
+            char r[256];
+            int k;
+            PF_START(tp);
+            con_handle(T->con, sigs);
+            PF_ADD(pf_pkt, tp);
+            k = vt_take_reply(vt, r, sizeof r);
+            if (k > 0)
+                con_reply(T->con, (UBYTE *)r, k);
+            if (!con_alive(T->con))
+                ok = FALSE;
+        }
+    }
+    T = keep;
+    return ok;
+}
+
 /* One round of CTerm's life: wait for anything - the window, the Shells,
  * the hosts, at most ms (-1: as long as it takes) - and handle it. A
  * transfer waits in here (xfd: its socket, which it reads itself), so the
@@ -813,19 +910,21 @@ BOOL loop_round(LONG xfd, LONG ms)
     ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
                  xwin_sigmask();
     BOOL hostdata = FALSE, ready = FALSE;
+    ULONG consigs = 0;
     int i;
     FD_ZERO(&rd);
     for (i = 0; i < ntabs; i++) {
         struct Tab *t = tabs[i];
         LONG fd = t->t_sock >= 0 ? t->t_sock : t->t_lfd;
         if (t->con)
-            sigs |= con_sigmask(t->con);
+            consigs |= con_sigmask(t->con);
         if (fd >= 0 && !t->t_xfer) {    /* a transfer reads its own */
             FD_SET(fd, &rd);
             if (fd > maxfd)
                 maxfd = fd;
         }
     }
+    sigs |= consigs;
     if (xfd >= 0) {
         FD_SET(xfd, &rd);
         if (xfd > maxfd)
@@ -835,9 +934,18 @@ BOOL loop_round(LONG xfd, LONG ms)
         /* no network: the plain Amiga wait - the socket library's
          * WaitSelect costs far more per round, and a flood of tiny
          * writes is all rounds */
-        PF_START(tw);
-        sigs = Wait(sigs);
-        PF_ADD(pf_wait, tw);
+        ULONG all = sigs;
+        for (;;) {
+            PF_START(tw);
+            sigs = Wait(all);
+            PF_ADD(pf_wait, tw);
+            /* only the Shells' packets: answer them and wait again. The
+             * window, the title, the menus wait for a real event or the
+             * frame timer - on a stock A1200 the round's other checks were
+             * a good part of each write (CCON: a lean loop per write) */
+            if ((sigs & ~consigs) || !shells_only(sigs))
+                break;
+        }
     } else {
         struct timeval tv;
         tv.tv_sec = ms > 0 ? ms / 1000 : 0;
@@ -854,6 +962,9 @@ BOOL loop_round(LONG xfd, LONG ms)
     }
     if (xfd >= 0 && n > 0 && FD_ISSET(xfd, &rd))
         ready = TRUE;
+    /* anything but the Shells and the frame timer may look at the text */
+    if (sigs & ~(con_timer_sig() | consigs))
+        term_sync_all();
     T = shown;
     if ((sigs & SIGBREAKF_CTRL_C) && !quitting)
         quit_all();
