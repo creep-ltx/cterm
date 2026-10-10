@@ -56,4 +56,13 @@ int xy_receive(XferIO *io, int ymodem, const char *xname);
 int xy_send(XferIO *io, int ymodem, int onek, const char *const *paths,
             int npaths);
 
+/* Hydra (the HYDRA protocol by Arjen G. Lentz and Joaquim H.
+ * Homrighausen, run by HydraCom's own code): its start in what the host
+ * sent (the START packet), and a session - paths are sent while what the
+ * other side sends is received, both at once. Returns the files that went
+ * either way, -1 when it was cancelled or failed. */
+int hy_detect(const unsigned char *b, long n, long *at);
+int hy_session(XferIO *io, const char *const *paths, int npaths,
+               const unsigned char *done, long n, int originator);
+
 #endif

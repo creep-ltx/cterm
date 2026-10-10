@@ -307,6 +307,7 @@ static BOOL ask_name(char *name, int max)
 /* Files for an upload, chosen in a requester (several at once). */
 #define NUP 32
 static char (*store)[256];              /* the chosen paths */
+static int nhq;                         /* Hydra's queue: store[0..nhq-1] */
 
 void transfer_free(void)
 {
@@ -395,6 +396,17 @@ void transfer_menu(int what)
     const char *paths[NUP];
     int got = -1, np;
     BOOL ymodem = what == M_YRECV || what == M_YSEND;
+    if (what == M_HSEND) {
+        /* Hydra starts from the host; these wait for its next session */
+        nhq = 0;
+        np = ask_uploads(paths, "CTerm: files to send with Hydra");
+        nhq = np;
+        say(np ? "\r\n\x1b[2m[Hydra: the files go at the host's next Hydra start]\x1b[0m\r\n"
+               : "\r\n\x1b[2m[Hydra: nothing waits to be sent]\x1b[0m\r\n");
+        redraw_all();
+        refresh();
+        return;
+    }
     if (local || sock < 0) {
         say("\r\n\x1b[2m[transfers are with a host: call one first]\x1b[0m\r\n");
         refresh();
@@ -441,6 +453,11 @@ BOOL transfer_take(UBYTE *buf, LONG n)
     static XferIO io;
     long at;
     int kind = zm_detect(buf, n, &at), got;
+    long hat;
+    if (hy_detect(buf, n, &hat) && (!kind || hat < at)) {
+        kind = 3;                       /* Hydra: its START packet */
+        at = hat;
+    }
     UBYTE *pre;
     LONG pn;
     if (!kind || !win)
@@ -459,7 +476,21 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         pn = tel_decode(pre, pn);
     begin(&io);
     refresh();
-    if (kind == 1) {
+    if (kind == 3) {
+        const char *paths[NUP];
+        int i;
+        for (i = 0; i < nhq; i++)
+            paths[i] = store[i];
+        down_dir();
+        say("\r\n\x1b[2m[Hydra: receiving into ");
+        say(xdir);
+        if (nhq)
+            say(", sending the queued files");
+        say(" - Esc stops]\x1b[0m\r\n");
+        refresh();
+        got = hy_session(&io, paths, nhq, pre, pn, 1);
+        nhq = 0;                        /* sent, or given up */
+    } else if (kind == 1) {
         down_dir();
         say("\r\n\x1b[2m[Zmodem: receiving into ");
         say(xdir);

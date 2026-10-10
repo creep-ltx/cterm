@@ -57,7 +57,7 @@ def session(conn):
     # binary both ways, as BBSes do for transfers
     conn.sendall(bytes([IAC, 251, 0, IAC, 253, 0]))
     while True:
-        conn.sendall(b"\r\n\x1b[1;36mZBBS\x1b[0m  d/u Zmodem  y/Y Ymodem  x/X Xmodem  q) quit: ")
+        conn.sendall(b"\r\n\x1b[1;36mZBBS\x1b[0m  d/u Zmodem  y/Y Ymodem  x/X Xmodem  h Hydra  q) quit: ")
         d = conn.recv(100)
         if not d:
             return
@@ -93,6 +93,13 @@ def session(conn):
             conn.sendall(b"\r\nXmodem: start your send\r\n")
             rc = run(conn, [LRZSZ + "lrz", "-X", "-c", "xmodem.bin"], cwd="/tmp/zbbs/up")
             conn.sendall(b"\r\nlrz ended: %d\r\n" % rc)
+        elif c == b"h":
+            files = sorted(os.path.join("/tmp/zbbs/files", f)
+                           for f in os.listdir("/tmp/zbbs/files"))
+            os.makedirs("/tmp/zbbs/up", exist_ok=True)
+            conn.sendall(b"\r\nHydra: starting\r\n")
+            rc = run(conn, [os.path.join(HERE, "../hydra/hcref"), "-d", "/tmp/zbbs/up/"] + files)
+            conn.sendall(b"\r\nHydraCom ended: %d\r\n" % rc)
         elif c == b"q":
             return
 
