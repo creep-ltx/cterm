@@ -74,7 +74,8 @@ tests/amiga_test: tests/amiga_test.c src/vt.c src/vt.h
 test: tests/vtdump tests/amiga_test tests/shadow_test
 	.venv/bin/python tests/compare.py
 	tests/amiga_test
-	tests/shadow_test tests/streams/*.bin
+	.venv/bin/python tests/lines.py
+	tests/shadow_test tests/streams/*.bin tests/lines/*.bin
 
 tests/shadow_test: tests/shadow_test.c src/vt.c src/vt.h
 	gcc -O2 -Wall -o tests/shadow_test tests/shadow_test.c src/vt.c

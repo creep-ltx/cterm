@@ -339,9 +339,31 @@ static void note_scroll(Vt *v, int top, int bot, int n)
     }
 }
 
-static void scroll_up(Vt *v, int top, int bot, int n)
+/* Turn rows [a,b] end for end - three of these rotate a part of the
+ * screen in place, with no buffer on the stack */
+static void rows_reverse(Vt *v, int a, int b)
 {
-    int h = bot - top + 1, i, y;
+    for (; a < b; a++, b--) {
+        VtCell **pa = &v->cur[ri(v, a)], **pb = &v->cur[ri(v, b)], *t = *pa;
+        *pa = *pb;
+        *pb = t;
+    }
+}
+
+/* Rotate rows [top,bot] up by k (0 < k < h): row top+k becomes top */
+static void rows_rotate(Vt *v, int top, int bot, int k)
+{
+    rows_reverse(v, top, top + k - 1);
+    rows_reverse(v, top + k, bot);
+    rows_reverse(v, top, bot);
+}
+
+/* Scroll [top,bot] up by n. Rows leaving the top of the main screen go to
+ * the history unless nohist (deleting lines never feeds it). */
+static void scroll_up(Vt *v, int top, int bot, int n, int nohist)
+{
+    int h = bot - top + 1, i;
+    int hist = !v->alt && !nohist;
     VtCell b = blank_of(v);
     if (n > h)
         n = h;
@@ -352,26 +374,22 @@ static void scroll_up(Vt *v, int top, int bot, int n)
          * buffers come back blank as the bottom rows - the ring turns */
         for (i = 0; i < n; i++) {
             VtCell **p = &v->cur[ri(v, i)];
-            if (!v->alt)
+            if (hist)
                 swap_into_history(v, p);
             blank_range(*p, 0, v->cols, b);
             RWRAP(*p) = 0;
         }
         v->base[v->alt] = ri(v, n);
     } else {
-        VtCell *gone[1024];
-        int k = n < 1024 ? n : 1024;
-        for (i = 0; i < k; i++) {
-            gone[i] = v->cur[ri(v, top + i)];
-            if (!v->alt && top == 0)
-                swap_into_history(v, &gone[i]);
-        }
-        for (y = top; y <= bot - k; y++)
-            v->cur[ri(v, y)] = v->cur[ri(v, y + k)];
-        for (i = 0; i < k; i++) {
-            v->cur[ri(v, bot - k + 1 + i)] = gone[i];
-            blank_range(gone[i], 0, v->cols, b);
-            RWRAP(gone[i]) = 0;
+        if (hist && top == 0)
+            for (i = 0; i < n; i++)
+                swap_into_history(v, &v->cur[ri(v, i)]);
+        if (n < h)
+            rows_rotate(v, top, bot, n);
+        for (i = bot - n + 1; i <= bot; i++) {
+            VtCell *r = v->cur[ri(v, i)];
+            blank_range(r, 0, v->cols, b);
+            RWRAP(r) = 0;
         }
     }
     note_scroll(v, top, bot, n);
@@ -379,7 +397,7 @@ static void scroll_up(Vt *v, int top, int bot, int n)
 
 static void scroll_down(Vt *v, int top, int bot, int n)
 {
-    int h = bot - top + 1, i, y;
+    int h = bot - top + 1, i;
     VtCell b = blank_of(v);
     if (n > h)
         n = h;
@@ -392,16 +410,12 @@ static void scroll_down(Vt *v, int top, int bot, int n)
             RWRAP(v->cur[ri(v, i)]) = 0;
         }
     } else {
-        VtCell *gone[1024];
-        int k = n < 1024 ? n : 1024;
-        for (i = 0; i < k; i++)
-            gone[i] = v->cur[ri(v, bot - k + 1 + i)];
-        for (y = bot; y >= top + k; y--)
-            v->cur[ri(v, y)] = v->cur[ri(v, y - k)];
-        for (i = 0; i < k; i++) {
-            v->cur[ri(v, top + i)] = gone[i];
-            blank_range(gone[i], 0, v->cols, b);
-            RWRAP(gone[i]) = 0;
+        if (n < h)
+            rows_rotate(v, top, bot, h - n);
+        for (i = top; i < top + n; i++) {
+            VtCell *r = v->cur[ri(v, i)];
+            blank_range(r, 0, v->cols, b);
+            RWRAP(r) = 0;
         }
     }
     note_scroll(v, top, bot, -n);
@@ -411,7 +425,7 @@ static void linefeed(Vt *v)
 {
     v->pending = 0;
     if (v->y == v->bot)
-        scroll_up(v, v->top, v->bot, 1);
+        scroll_up(v, v->top, v->bot, 1, 0);
     else if (v->y < v->rows - 1)
         v->y++;
 }
@@ -905,17 +919,14 @@ static void csi(Vt *v, int final)
         if (v->y >= v->top && v->y <= v->bot) {
             /* deleting lines is a scroll of the part below - but never
              * into the history, even at the top of the screen */
-            int saved_alt = v->alt;
-            v->alt = 1;
-            scroll_up(v, v->y, v->bot, n);
-            v->alt = saved_alt;
+            scroll_up(v, v->y, v->bot, n, 1);
         }
         v->x = 0;
         v->pending = 0;
         break;
     case 'P': delete_chars(v, n); break;
     case 'X': erase(v, v->y, v->x, v->x + n); break;
-    case 'S': scroll_up(v, v->top, v->bot, n); break;
+    case 'S': scroll_up(v, v->top, v->bot, n, 0); break;
     case 'T': scroll_down(v, v->top, v->bot, n); break;
     case 'b':
         if (v->last_cp)
@@ -1392,7 +1403,7 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
                 v->y = v->bot;
                 for (s = k - d; s > 0; s -= h > 1 ? h - 1 : 1)
                     scroll_up(v, v->top, v->bot,
-                              h > 1 && s > h - 1 ? h - 1 : s);
+                              h > 1 && s > h - 1 ? h - 1 : s, 0);
             }
             if (v->lnm)
                 v->x = 0;
