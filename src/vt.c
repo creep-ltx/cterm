@@ -504,6 +504,16 @@ static void restore_cursor(Vt *v)
 
 /* ---- printing ---------------------------------------------------------- */
 
+/* An edit is about to cut row r between columns x-1 and x: a wide
+ * character there would lose a half, so both halves go blank (xterm) */
+static void unsplit(Vt *v, VtCell *r, int x)
+{
+    if (x > 0 && x < (int)RLEN(r) && r[x].cp == VT_WIDE_TAIL) {
+        r[x - 1] = blank_of(v);
+        r[x] = blank_of(v);
+    }
+}
+
 static void put(Vt *v, uint32_t cp)
 {
     int w;
@@ -535,8 +545,10 @@ static void put(Vt *v, uint32_t cp)
     grow(r, v->insert || v->x + w >= v->cols ? v->cols : v->x + w + 1);
     if (v->insert) {
         int n = v->cols - v->x - w;
-        if (n > 0)
+        if (n > 0) {
+            unsplit(v, r, v->x + n);    /* the one pushed off the edge */
             memmove(r + v->x + w, r + v->x, n * sizeof(VtCell));
+        }
     }
     /* overwriting half of a wide character clears its other half */
     if (r[v->x].cp == VT_WIDE_TAIL && v->x > 0)
@@ -568,10 +580,13 @@ static void erase(Vt *v, int y, int x0, int x1)
     if (x0 < 0) x0 = 0;
     if (x1 > v->cols) x1 = v->cols;
     if (x1 > x0) {
-        blank_range(row(v, y), x0, x1, blank_of(v));
+        VtCell *r = row(v, y);
+        unsplit(v, r, x0);
+        unsplit(v, r, x1);
+        blank_range(r, x0, x1, blank_of(v));
         if (x1 >= v->cols)
-            RWRAP(row(v, y)) = 0;
-        dirty_span(v, y, x0, x1 - 1);
+            RWRAP(r) = 0;
+        dirty_span(v, y, x0 - 1, x1);
     }
 }
 
@@ -608,10 +623,13 @@ static void insert_chars(Vt *v, int n)
     if (n <= 0)
         return;
     grow(r, v->cols);
-    if (keep > 0)
+    unsplit(v, r, v->x);
+    if (keep > 0) {
+        unsplit(v, r, v->x + keep);     /* the one pushed off the edge */
         memmove(r + v->x + n, r + v->x, keep * sizeof(VtCell));
+    }
     fill(r + v->x, n < v->cols - v->x ? n : v->cols - v->x, blank_of(v));
-    dirty_span(v, v->y, v->x, v->cols - 1);
+    dirty_span(v, v->y, v->x - 1, v->cols - 1);
 }
 
 static void delete_chars(Vt *v, int n)
@@ -621,12 +639,14 @@ static void delete_chars(Vt *v, int n)
     if (n <= 0)
         return;
     grow(r, v->cols);
-    if (keep > 0)
+    unsplit(v, r, v->x);
+    if (keep > 0) {
+        unsplit(v, r, v->x + n);        /* the end of what goes */
         memmove(r + v->x, r + v->x + n, keep * sizeof(VtCell));
-    else
+    } else
         keep = 0;
     fill(r + v->x + keep, v->cols - v->x - keep, blank_of(v));
-    dirty_span(v, v->y, v->x, v->cols - 1);
+    dirty_span(v, v->y, v->x - 1, v->cols - 1);
 }
 
 /* ---- the alternate screen --------------------------------------------- */

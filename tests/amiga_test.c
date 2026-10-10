@@ -298,6 +298,38 @@ int main(void)
               y == 2 && x == 1, "lower in vim: the top lines go to the history");
         vt_free(a);
     }
+    {   /* an edit that cuts a wide letter blanks both its halves */
+        static const char *const how[] = {
+            "\x1b[1;3H\x1b[@",             /* ICH on its right half */
+            "\x1b[1;2H\x1b[P",             /* DCH of the cell before it */
+            "\x1b[1;3H\x1b[X",             /* ECH of its right half */
+            "\x1b[1;2H\x1b[1K",            /* EL to the left, to its middle */
+            "\x1b[1;3H\x1b[0K",            /* EL from its middle */
+            "\x1b[1;3H\x1b[4hZ\x1b[4l",   /* insert mode on its right half */
+            "\x1b[1;8H\x1b[@",             /* ICH pushes half off the edge */
+            "\x1b[1;8H\x1b[4hZ\x1b[4l",   /* and so does insert mode */
+        };
+        int k;
+        for (k = 0; k < 8; k++) {
+            Vt *d = vt_new(10, 2, 0);
+            int x, w, ok = 1;
+            const VtCell *l;
+            /* a, a wide letter (cols 1-2), b; a wide one at cols 8-9 */
+            feed(d, "a\xe4\xb8\xad" "b\x1b[1;9H\xe4\xb8\xad");
+            feed(d, how[k]);
+            l = vt_line(d, 0, 0, &w);
+            for (x = 0; x < w; x++) {
+                int head = l[x].cp == 0x4E2D;
+                int tail = l[x].cp == VT_WIDE_TAIL;
+                if ((head && (x + 1 >= w || l[x + 1].cp != VT_WIDE_TAIL)) ||
+                    (tail && (x == 0 || l[x - 1].cp != 0x4E2D)))
+                    ok = 0;
+            }
+            if (!ok)
+                printf("FAIL: wide half left, case %d\n", k), fails++;
+            vt_free(d);
+        }
+    }
     {   /* CHT stops at the last column; a huge OSC number is no title */
         Vt *t = vt_new(20, 3, 0);
         int x, y, vis, ch;
