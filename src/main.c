@@ -1622,12 +1622,9 @@ static void tab_label(struct Tab *t, char *out)
 static void draw_tabbar(void)
 {
     int h = tabbar_h(), x0 = win->BorderLeft, y0 = win->BorderTop;
-    int x1 = win->Width - win->BorderRight - 1, slot, i;
+    int x1 = win->Width - win->BorderRight - 1, wd = x1 - x0 + 1, i;
     if (!h)
         return;
-    slot = (x1 - x0 + 1) / ntabs;
-    if (slot > 220)
-        slot = 220;
     planes_full();
     rp_forget();
     apen(mix(defbg, deffg, 12));
@@ -1636,7 +1633,9 @@ static void draw_tabbar(void)
     SetSoftStyle(rp, 0, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
     for (i = 0; i < ntabs; i++) {
         char label[64], t[72];
-        int sx = x0 + i * slot, n, fit;
+        /* the width shared equally: a half each, a third each... */
+        int sx = x0 + i * wd / ntabs, slot = x0 + (i + 1) * wd / ntabs - sx;
+        int n, fit;
         BOOL on = tabs[i] == shown;
         tab_label(tabs[i], label);
         t[0] = '1' + i;
@@ -4332,10 +4331,8 @@ static BOOL window_events(void)
             if (copy.Code == SELECTDOWN && tabbar_h() &&
                 copy.MouseY >= win->BorderTop &&
                 copy.MouseY < win->BorderTop + tabbar_h()) {
-                int slot = (win->Width - win->BorderLeft - win->BorderRight)
-                           / ntabs, i;
-                if (slot > 220) slot = 220;
-                i = (copy.MouseX - win->BorderLeft) / slot;
+                int wd = win->Width - win->BorderLeft - win->BorderRight, i;
+                i = (copy.MouseX - win->BorderLeft) * ntabs / wd;
                 if (i >= 0 && i < ntabs)
                     tab_show(i);
                 break;
