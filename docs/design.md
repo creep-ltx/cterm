@@ -106,15 +106,22 @@ CTerm's own console handler is new C code; it takes CCON's knowledge
      window-size reports, raw/cooked mode, raw key events);
    - line editing in the handler (history first, completion later,
      CCON's keys as a guide).
-4. **Dialling out:** telnet to any host and port, a small list of saved
-   places (BBSes, the Pi), and the PC relay kept.
-5. **ssh:** most likely libssh2 on AmiSSL 5.27's crypto (installed). To be
-   researched: an existing 68k port, or building it with Bebbo's gcc.
+4. **Done 2026-10-10. Dialling out:** `HOST name[:port]` and Project/Call...
+   (the last eight places kept); telnet answers the terminal-type question;
+   `PC` for PC BBSes (CP437, iCE colours, dotted shades). The PC relay kept.
+5. **Done 2026-10-10. ssh:** libssh2 1.11.1 on AmiSSL 5.27 (third_party/,
+   with a patch to libssh2's Amiga branch); known hosts, key and password
+   logins, a pty that follows the window. Password logins not yet tried
+   against a real server.
 6. **Comfort:**
-   - a settings window (fonts, colours, screen, line spacing);
-   - window size remembered;
-   - mouse selection and the clipboard;
-   - perhaps tabs: the Shell and a remote session side by side.
+   - done: the window's place and size remembered; mouse selection, Copy,
+     Paste (clipboard.device, FTXT);
+   - to do: a settings window (fonts, colours, screen, line spacing);
+     perhaps tabs: the Shell and a remote session side by side.
+
+Speed on a stock A1200 (FS-UAE, conbench): 99 s at first, 39.6 s on
+2026-10-10, CCON 26.0 s; on the PiStorm A1200 4.45 s against CCON's 4.26.
+Notes and what is left: Knowledge/amiga/graphics-and-performance.md.
 
 ## Reuse
 
