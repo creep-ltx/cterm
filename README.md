@@ -21,8 +21,17 @@ million colours, Latin-1, UTF-8 and the PC's character set.
 | `LISTEN` / `PORT n` | wait for the PC's relay (pc/cterm-relay.py) |
 
 Project/Call... (Right Amiga+K) asks for a host and remembers the last
-eight. A call opens in a window of its own; when it ends, Return calls
-again.
+eight. A call opens in a new tab (or a window of its own); when it ends,
+Return calls again.
+
+## Tabs
+
+Several terminals in one window. Project/New Shell tab (Right Amiga+T)
+opens another Amiga Shell; Project/Call... opens a call in a new tab (or,
+unticked, a window of its own). A row of tab names appears above the
+text: click one, or press Right Amiga+1 to 9. Project/Close tab (Right
+Amiga+W) ends the shown tab's Shell or hangs up its host. Tabs you are
+not looking at keep running.
 
 ## ssh
 

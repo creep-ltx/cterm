@@ -10,6 +10,7 @@
 #include <libraries/amisslmaster.h>
 #include <amissl/tags.h>
 #include <libssh2.h>
+#include <exec/memory.h>
 #include "ssh.h"
 
 extern struct Library *SocketBase;      /* main.c opens it */
@@ -26,9 +27,18 @@ void ssh_set_key(const char *path)
     keyfile[sizeof keyfile - 1] = 0;
 }
 
-static LIBSSH2_SESSION *sess;
-static LIBSSH2_CHANNEL *chan;
-static LONG fd = -1;
+/* One connection; AmiSSL and libssh2 are opened once for them all. */
+struct Ssh {
+    LIBSSH2_SESSION *s_sess;
+    LIBSSH2_CHANNEL *s_chan;
+    LONG s_fd;
+};
+
+static struct Ssh *cur;                 /* the one being set up */
+#define sess (cur->s_sess)
+#define chan (cur->s_chan)
+#define fd   (cur->s_fd)
+static int users;                       /* connections open */
 static BOOL ssl_up, lib_up;
 static ssh_ask_fn ask_cb;
 static ssh_say_fn say_cb;
@@ -54,6 +64,8 @@ static void say_err(const char *what)
 
 static BOOL ssl_open(void)
 {
+    if (ssl_up)
+        return TRUE;
     AmiSSLMasterBase = OpenLibrary((STRPTR)"amisslmaster.library",
                                    AMISSLMASTER_MIN_VERSION);
     if (!AmiSSLMasterBase) {
@@ -324,8 +336,27 @@ static BOOL password_login(const char *user, const char *methods)
     return FALSE;
 }
 
-BOOL ssh_open(const char *target, int cols, int rows,
-              ssh_ask_fn ask, ssh_say_fn sayf)
+static BOOL ssh_open_(const char *target, int cols, int rows,
+                      ssh_ask_fn ask, ssh_say_fn sayf);
+
+void *ssh_open(const char *target, int cols, int rows,
+               ssh_ask_fn ask, ssh_say_fn sayf)
+{
+    struct Ssh *h = AllocVec(sizeof *h, MEMF_ANY | MEMF_CLEAR);
+    if (!h)
+        return NULL;
+    h->s_fd = -1;
+    cur = h;
+    users++;
+    if (!ssh_open_(target, cols, rows, ask, sayf)) {
+        ssh_close(h);
+        return NULL;
+    }
+    return h;
+}
+
+static BOOL ssh_open_(const char *target, int cols, int rows,
+                      ssh_ask_fn ask, ssh_say_fn sayf)
 {
     char user[64], host[128], hostport[160], *at, *colon, *methods;
     struct sockaddr_in sa;
@@ -363,11 +394,13 @@ BOOL ssh_open(const char *target, int cols, int rows,
                    TAG_DONE);
     if (!ssl_open())
         return FALSE;
-    if (libssh2_init(0)) {
-        say_err("libssh2 would not start");
-        return FALSE;
+    if (!lib_up) {
+        if (libssh2_init(0)) {
+            say_err("libssh2 would not start");
+            return FALSE;
+        }
+        lib_up = TRUE;
     }
-    lib_up = TRUE;
 
     memset(&sa, 0, sizeof sa);
     sa.sin_family = AF_INET;
@@ -444,15 +477,16 @@ BOOL ssh_open(const char *target, int cols, int rows,
     return TRUE;
 }
 
-LONG ssh_socket(void)
+LONG ssh_socket(void *h)
 {
-    return fd;
+    return h ? ((struct Ssh *)h)->s_fd : -1;
 }
 
-LONG ssh_read(UBYTE *buf, LONG max)
+LONG ssh_read(void *h, UBYTE *buf, LONG max)
 {
     ssize_t n;
-    if (!chan)
+    cur = h;
+    if (!cur || !chan)
         return -1;
     n = libssh2_channel_read(chan, (char *)buf, max);
     if (n == LIBSSH2_ERROR_EAGAIN) {
@@ -465,8 +499,11 @@ LONG ssh_read(UBYTE *buf, LONG max)
     return n < 0 ? -1 : (LONG)n;
 }
 
-void ssh_write(const UBYTE *b, LONG n)
+void ssh_write(void *h, const UBYTE *b, LONG n)
 {
+    cur = h;
+    if (!cur)
+        return;
     while (chan && n > 0) {
         ssize_t k = libssh2_channel_write(chan, (const char *)b, n);
         if (k == LIBSSH2_ERROR_EAGAIN) {
@@ -480,16 +517,20 @@ void ssh_write(const UBYTE *b, LONG n)
     }
 }
 
-void ssh_resize(int cols, int rows)
+void ssh_resize(void *h, int cols, int rows)
 {
-    if (chan)
+    cur = h;
+    if (cur && chan)
         while (libssh2_channel_request_pty_size(chan, cols, rows) ==
                LIBSSH2_ERROR_EAGAIN)
             wait_sock();
 }
 
-void ssh_close(void)
+void ssh_close(void *h)
 {
+    cur = h;
+    if (!cur)
+        return;
     if (chan) {
         int n = 0;
         while (libssh2_channel_free(chan) == LIBSSH2_ERROR_EAGAIN && n++ < 50)
@@ -508,6 +549,10 @@ void ssh_close(void)
         CloseSocket(fd);
         fd = -1;
     }
+    FreeVec(cur);
+    cur = NULL;
+    if (--users > 0)
+        return;                         /* the others still need them */
     if (lib_up) {
         libssh2_exit();
         lib_up = FALSE;

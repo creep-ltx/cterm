@@ -16,25 +16,25 @@ typedef void (*ssh_say_fn)(const char *text);
 /* user@host[:port]: connect, check the host key against ENVARC:CTerm/known_hosts
  * (asking about a new or changed one), log in (key file, then password /
  * keyboard-interactive), open a shell on an xterm-256color pty. */
-BOOL ssh_open(const char *target, int cols, int rows,
-              ssh_ask_fn ask, ssh_say_fn say);
+void *ssh_open(const char *target, int cols, int rows,
+               ssh_ask_fn ask, ssh_say_fn say);   /* NULL: not connected */
 void ssh_set_key(const char *path);     /* KEY: use this private key */
-LONG ssh_socket(void);                  /* for WaitSelect */
-LONG ssh_read(UBYTE *buf, LONG max);    /* >0 data, 0 none now, <0 closed */
-void ssh_write(const UBYTE *b, LONG n);
-void ssh_resize(int cols, int rows);
-void ssh_close(void);
+LONG ssh_socket(void *h);               /* for WaitSelect */
+LONG ssh_read(void *h, UBYTE *buf, LONG max);  /* >0 data, 0 none, <0 gone */
+void ssh_write(void *h, const UBYTE *b, LONG n);
+void ssh_resize(void *h, int cols, int rows);
+void ssh_close(void *h);
 
 #ifdef NO_SSH
 /* The small CTerm: ssh lives in CTermSSH, which CTerm starts instead
  * (a stock Amiga never loads libssh2; AmiSSL wants fast memory anyway). */
-#define ssh_open(t, c, r, a, s) FALSE
+#define ssh_open(t, c, r, a, s) ((void *)0)
 #define ssh_set_key(p) ((void)0)
-#define ssh_socket() (-1L)
-#define ssh_read(b, m) (-1L)
-#define ssh_write(b, n) ((void)0)
-#define ssh_resize(c, r) ((void)0)
-#define ssh_close() ((void)0)
+#define ssh_socket(h) (-1L)
+#define ssh_read(h, b, m) (-1L)
+#define ssh_write(h, b, n) ((void)0)
+#define ssh_resize(h, c, r) ((void)0)
+#define ssh_close(h) ((void)0)
 #endif
 
 #endif

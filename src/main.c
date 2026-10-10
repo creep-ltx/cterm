@@ -93,6 +93,7 @@ struct Tab {
     BOOL t_sel_on, t_sel_drag;              /* the selection, in its cells */
     int t_sa_r, t_sa_c, t_sb_r, t_sb_c;
     BOOL ended;                         /* its Shell or connection is over */
+    void *ssh;                          /* its ssh connection */
 };
 
 #define MAXTABS 9
@@ -134,6 +135,8 @@ static void shells_handle(ULONG sigs);
 static void tab_new_shell(void);
 static void tab_close_current(void);
 static void tab_show(int i);
+static struct Tab *tab_new(void);
+static BOOL connect_out(void);
 
 /* ======================================================================
  * Colours
@@ -1892,7 +1895,7 @@ static void send_data(const UBYTE *b, LONG n)
     LONG i, k = 0;
     if (sshmode) {
         if (sock >= 0)
-            ssh_write(b, n);
+            ssh_write(T->ssh, b, n);
         return;
     }
     for (i = 0; i < n; i++) {
@@ -1910,7 +1913,7 @@ static void send_data(const UBYTE *b, LONG n)
 static void send_naws(void)
 {
     if (sshmode) {                      /* the pty's size, ssh's way */
-        ssh_resize(cols, rows);
+        ssh_resize(T->ssh, cols, rows);
         return;
     }
     UBYTE m[9] = { IAC, SB, O_NAWS, 0, 0, 0, 0, IAC, SE };
@@ -2067,7 +2070,10 @@ static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
     refresh();
     for (;;) {
         struct IntuiMessage *m;
-        WaitPort(win->UserPort);
+        ULONG wsig = 1UL << win->UserPort->mp_SigBit;
+        ULONG got = Wait(wsig | shells_sigmask());
+        if (got & ~wsig)
+            shells_handle(got);         /* the other tabs go on */
         while ((m = (struct IntuiMessage *)GetMsg(win->UserPort))) {
             ULONG cl = m->Class;
             if (cl == IDCMP_RAWKEY && !(m->Code & IECODE_UP_PREFIX)) {
@@ -2113,16 +2119,24 @@ static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
 
 #endif
 
-/* Call the host: telnet, or ssh (which asks what it must in the window). */
+/* Call the host: telnet, or ssh (which asks what it must in the window).
+ * The TCP/IP stack is opened the first time a call needs it: a CTerm
+ * started as a Shell has none open (and a call must not use a NULL base). */
 static BOOL connect_out(void)
 {
-    if (!sshmode)
-        return dial();
-    if (!ssh_open(dialhost, cols, rows, term_ask, say)) {
-        ssh_close();
+    if (!SocketBase)
+        SocketBase = OpenLibrary("bsdsocket.library", 4);
+    if (!SocketBase) {
+        say("\x1b[1;31m[a call needs a TCP/IP stack (bsdsocket.library)]"
+            "\x1b[0m\r\n");
         return FALSE;
     }
-    sock = ssh_socket();
+    if (!sshmode)
+        return dial();
+    T->ssh = ssh_open(dialhost, cols, rows, term_ask, say);
+    if (!T->ssh)
+        return FALSE;
+    sock = ssh_socket(T->ssh);
     return TRUE;
 }
 
@@ -2143,8 +2157,10 @@ static void connected(void)
 
 static void hung_up(void)
 {
-    if (sshmode)
-        ssh_close();                    /* it owns the socket */
+    if (sshmode) {
+        ssh_close(T->ssh);              /* it owns the socket */
+        T->ssh = NULL;
+    }
     else
         CloseSocket(sock);
     sock = -1;
@@ -3528,15 +3544,43 @@ static void call_parse(const char *entry, char *host, BOOL *pc, BOOL *ssh)
     }
 }
 
+/* A call in a new tab of this window. */
+static void call_tab(const char *host, BOOL pc, BOOL ssh)
+{
+    struct Tab *t = tab_new();
+    if (!t) {
+        call_start(host, pc, ssh);      /* no room: a window of its own */
+        return;
+    }
+    T = t;
+    local = FALSE;
+    strncpy(dialhost, host, sizeof dialhost - 1);
+    strcpy(dialtitle, ssh ? "CTerm: ssh " : "CTerm: ");
+    strncat(dialtitle, dialhost, sizeof dialtitle - 20);
+    sshmode = ssh;
+    pcmode = pc;
+    if (pc)
+        vt_set_cp437(vt, 1);
+    tab_show(ntabs - 1);
+    say("\x1b[2m[calling ");
+    say(dialhost);
+    say("...]\x1b[0m\r\n");
+    refresh();
+    if (!connect_out())
+        say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+    refresh();
+}
+
 static void call_dialog(void)
 {
-    enum { G_HOST, G_PC, G_SSH, G_LIST, G_CALL, G_CANCEL };
-    struct Gadget *glist = NULL, *g, *gad[6];
+    enum { G_HOST, G_PC, G_SSH, G_NEWTAB, G_LIST, G_CALL, G_CANCEL };
+    struct Gadget *glist = NULL, *g, *gad[7];
     struct NewGadget ng;
     struct Window *dw;
     struct TextAttr *ta = scr->Font;
     int th = ta->ta_YSize, n, W, H, x0, y, bw;
     BOOL pc = pcmode, ssh = FALSE, done = FALSE, go = FALSE;
+    static BOOL newtab = TRUE;
     char host[128];
     ULONG dsig;
 
@@ -3569,6 +3613,13 @@ static void call_dialog(void)
     g = gad[G_SSH] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked, ssh,
                                   GTCB_Scaled, TRUE, TAG_END);
     ng.ng_LeftEdge = x0;
+    y += th + 10;
+    ng.ng_TopEdge = y; ng.ng_Width = 26; ng.ng_Height = th + 4;
+    ng.ng_GadgetText = (STRPTR)"in a new tab of this window";
+    ng.ng_Flags = PLACETEXT_RIGHT; ng.ng_GadgetID = G_NEWTAB;
+    g = gad[G_NEWTAB] = CreateGadget(CHECKBOX_KIND, g, &ng,
+                                     GTCB_Checked, newtab, GTCB_Scaled, TRUE,
+                                     TAG_END);
     y += th + 10;
     ng.ng_TopEdge = y; ng.ng_Width = 260; ng.ng_Height = (th + 2) * 5 + 4;
     ng.ng_GadgetText = (STRPTR)"Recent"; ng.ng_Flags = PLACETEXT_LEFT;
@@ -3634,6 +3685,9 @@ static void call_dialog(void)
                     break;
                 case G_PC: pc = (src->Flags & GFLG_SELECTED) != 0; break;
                 case G_SSH: ssh = (src->Flags & GFLG_SELECTED) != 0; break;
+                case G_NEWTAB:
+                    newtab = (src->Flags & GFLG_SELECTED) != 0;
+                    break;
                 case G_LIST:
                     if (code < n) {
                         call_parse(callname[code], host, &pc, &ssh);
@@ -3667,7 +3721,14 @@ static void call_dialog(void)
             strcat(entry, "!");
         calls_add(entry);
         save_prefs();
-        call_start(host, pc, ssh);
+#ifdef NO_SSH
+        if (newtab && !ssh)             /* ssh is CTermSSH's: a window */
+#else
+        if (newtab)
+#endif
+            call_tab(host, pc, ssh);
+        else
+            call_start(host, pc, ssh);
     }
 }
 
@@ -4490,9 +4551,10 @@ static void tab_drop(struct Tab *t)
         return;
     T = t;
     if (sock >= 0) {
-        if (sshmode)
-            ssh_close();
-        else
+        if (sshmode) {
+            ssh_close(T->ssh);
+            T->ssh = NULL;
+        } else
             CloseSocket(sock);
         sock = -1;
     }
@@ -4580,7 +4642,7 @@ static void host_input(UBYTE *buf, LONG size)
             if (sshmode) {
                 /* drain it: libssh2 may hold decrypted data the socket
                  * no longer shows */
-                while ((k = ssh_read(buf, size)) > 0)
+                while ((k = ssh_read(T->ssh, buf, size)) > 0)
                     vt_write(vt, buf, k);
                 if (k < 0)
                     hung_up();
