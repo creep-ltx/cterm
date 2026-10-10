@@ -52,6 +52,7 @@
 #include "vt.h"
 #include "boxtable.h"
 #include "console.h"
+#include "ssh.h"
 
 static const char version[] = "$VER: CTerm 0.3b1 (10.10.2026)";
 
@@ -1658,6 +1659,7 @@ static int tstate, tcmd;
 static BOOL utf8 = TRUE;
 static BOOL saved_utf8 = TRUE;          /* the setting; utf8 may be LATIN1's */
 static char dialhost[128];              /* HOST: CTerm calls out */
+static BOOL sshmode;                    /* SSH: dialhost is user@host */
 static char dialtitle[140];             /* "CTerm: host" */
 static UBYTE sbuf[64];                  /* a subnegotiation coming in */
 static int sblen;
@@ -1665,7 +1667,7 @@ static int sblen;
 static void send_raw(const UBYTE *b, LONG n)
 {
     LONG done = 0;
-    if (sock < 0)
+    if (sock < 0 || sshmode)            /* telnet's own bytes only */
         return;
     while (done < n) {
         LONG k = send(sock, (APTR)(b + done), n - done, 0);
@@ -1675,11 +1677,16 @@ static void send_raw(const UBYTE *b, LONG n)
     }
 }
 
-/* Data to the host: 0xFF doubled. */
+/* Data to the host: 0xFF doubled (telnet), or through ssh. */
 static void send_data(const UBYTE *b, LONG n)
 {
     static UBYTE buf[1024];
     LONG i, k = 0;
+    if (sshmode) {
+        if (sock >= 0)
+            ssh_write(b, n);
+        return;
+    }
     for (i = 0; i < n; i++) {
         if (k >= (LONG)sizeof buf - 2) {
             send_raw(buf, k);
@@ -1694,6 +1701,10 @@ static void send_data(const UBYTE *b, LONG n)
 
 static void send_naws(void)
 {
+    if (sshmode) {                      /* the pty's size, ssh's way */
+        ssh_resize(cols, rows);
+        return;
+    }
     UBYTE m[9] = { IAC, SB, O_NAWS, 0, 0, 0, 0, IAC, SE };
     m[3] = cols >> 8; m[4] = cols & 255;
     m[5] = rows >> 8; m[6] = rows & 255;
@@ -1838,6 +1849,72 @@ static BOOL dial(void)
     return TRUE;
 }
 
+/* A line typed in the window while ssh sets up (a password: echo off).
+ * FALSE: the window was closed. */
+static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
+{
+    int n = 0;
+    say(prompt);
+    refresh();
+    for (;;) {
+        struct IntuiMessage *m;
+        WaitPort(win->UserPort);
+        while ((m = (struct IntuiMessage *)GetMsg(win->UserPort))) {
+            ULONG cl = m->Class;
+            if (cl == IDCMP_RAWKEY && !(m->Code & IECODE_UP_PREFIX)) {
+                struct InputEvent ie;
+                UBYTE k[8];
+                int got, i;
+                memset(&ie, 0, sizeof ie);
+                ie.ie_Class = IECLASS_RAWKEY;
+                ie.ie_Code = m->Code;
+                ie.ie_Qualifier = m->Qualifier;
+                ie.ie_EventAddress = m->IAddress ? *((APTR *)m->IAddress) : NULL;
+                got = MapRawKey(&ie, (STRPTR)k, sizeof k, NULL);
+                ReplyMsg((struct Message *)m);
+                for (i = 0; i < got; i++) {
+                    if (k[i] == '\r' || k[i] == '\n') {
+                        buf[n] = 0;
+                        say("\r\n");
+                        refresh();
+                        return TRUE;
+                    }
+                    if (k[i] == 8 && n > 0) {
+                        n--;
+                        if (echo) say("\b \b");
+                    } else if (k[i] >= 32 && n < max - 1) {
+                        buf[n++] = k[i];
+                        if (echo) {
+                            char e[2] = { (char)k[i], 0 };
+                            say(e);
+                        }
+                    }
+                    refresh();
+                }
+                continue;
+            }
+            ReplyMsg((struct Message *)m);
+            if (cl == IDCMP_CLOSEWINDOW) {
+                buf[0] = 0;
+                return FALSE;
+            }
+        }
+    }
+}
+
+/* Call the host: telnet, or ssh (which asks what it must in the window). */
+static BOOL connect_out(void)
+{
+    if (!sshmode)
+        return dial();
+    if (!ssh_open(dialhost, cols, rows, term_ask, say)) {
+        ssh_close();
+        return FALSE;
+    }
+    sock = ssh_socket();
+    return TRUE;
+}
+
 static void connected(void)
 {
     LONG one = 1;
@@ -1855,7 +1932,10 @@ static void connected(void)
 
 static void hung_up(void)
 {
-    CloseSocket(sock);
+    if (sshmode)
+        ssh_close();                    /* it owns the socket */
+    else
+        CloseSocket(sock);
     sock = -1;
     if (dialhost[0]) {
         say("\r\n\x1b[0;2m[the connection closed - Return calls again]"
@@ -1871,7 +1951,7 @@ static void hung_up(void)
  * Keys
  * ==================================================================== */
 
-static BOOL dial(void);
+static BOOL connect_out(void);
 
 /* After a call ended: Return calls again; other keys do nothing. */
 static BOOL redial_key(const char *b)
@@ -1883,7 +1963,7 @@ static BOOL redial_key(const char *b)
         say(dialhost);
         say("...]\x1b[0m\r\n");
         refresh();
-        if (dial())
+        if (connect_out())
             say("\x1b[2m[connected]\x1b[0m\r\n");
         else
             say("\x1b[2m[Return calls again]\x1b[0m\r\n");
@@ -3073,14 +3153,14 @@ static void own_path(char *buf, int max)
         strncpy(buf, name, max - 1);
 }
 
-static void call_start(const char *host, BOOL pc)
+static void call_start(const char *host, BOOL pc, BOOL ssh)
 {
     char cmd[400], path[256];
     BPTR nil;
     own_path(path, sizeof path);
     strcpy(cmd, "Run >NIL: \"");
     strcat(cmd, path);
-    strcat(cmd, "\" HOST \"");
+    strcat(cmd, ssh ? "\" SSH \"" : "\" HOST \"");
     strcat(cmd, host);
     strcat(cmd, pc ? "\" PC" : "\"");
     nil = Open((STRPTR)"NIL:", MODE_NEWFILE);
@@ -3089,29 +3169,36 @@ static void call_start(const char *host, BOOL pc)
         Close(nil);
 }
 
+/* A recent call's text: "ssh:user@host", or "host" with "!" for a PC BBS. */
+static void call_parse(const char *entry, char *host, BOOL *pc, BOOL *ssh)
+{
+    *ssh = !strncmp(entry, "ssh:", 4);
+    strcpy(host, *ssh ? entry + 4 : entry);
+    *pc = FALSE;
+    if (host[0] && host[strlen(host) - 1] == '!') {
+        host[strlen(host) - 1] = 0;
+        *pc = TRUE;
+    }
+}
+
 static void call_dialog(void)
 {
-    enum { G_HOST, G_PC, G_LIST, G_CALL, G_CANCEL };
-    struct Gadget *glist = NULL, *g, *gad[5];
+    enum { G_HOST, G_PC, G_SSH, G_LIST, G_CALL, G_CANCEL };
+    struct Gadget *glist = NULL, *g, *gad[6];
     struct NewGadget ng;
     struct Window *dw;
     struct TextAttr *ta = scr->Font;
     int th = ta->ta_YSize, n, W, H, x0, y, bw;
-    BOOL pc = pcmode, done = FALSE, go = FALSE;
+    BOOL pc = pcmode, ssh = FALSE, done = FALSE, go = FALSE;
     char host[128];
     ULONG dsig;
 
     n = calls_split();
     host[0] = 0;
-    if (n) {                            /* the last place, ready to call */
-        strcpy(host, callname[0]);
-        if (host[0] && host[strlen(host) - 1] == '!') {
-            host[strlen(host) - 1] = 0;
-            pc = TRUE;
-        }
-    }
+    if (n)                              /* the last place, ready to call */
+        call_parse(callname[0], host, &pc, &ssh);
     x0 = scr->WBorLeft + 8 + TextLength(&scr->RastPort, (STRPTR)"Recent", 6) + 8;
-    W = x0 + 260 + scr->WBorRight + 8;
+    W = x0 + 300 + scr->WBorRight + 8;
     bw = 90;
     memset(&ng, 0, sizeof ng);
     ng.ng_TextAttr = ta;
@@ -3130,6 +3217,11 @@ static void call_dialog(void)
     ng.ng_GadgetID = G_PC;
     g = gad[G_PC] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked, pc,
                                  GTCB_Scaled, TRUE, TAG_END);
+    ng.ng_LeftEdge = x0 + 150; ng.ng_GadgetText = (STRPTR)"ssh (user@host)";
+    ng.ng_GadgetID = G_SSH;
+    g = gad[G_SSH] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked, ssh,
+                                  GTCB_Scaled, TRUE, TAG_END);
+    ng.ng_LeftEdge = x0;
     y += th + 10;
     ng.ng_TopEdge = y; ng.ng_Width = 260; ng.ng_Height = (th + 2) * 5 + 4;
     ng.ng_GadgetText = (STRPTR)"Recent"; ng.ng_Flags = PLACETEXT_LEFT;
@@ -3194,18 +3286,16 @@ static void call_dialog(void)
                     if (code != 9) go = done = TRUE;
                     break;
                 case G_PC: pc = (src->Flags & GFLG_SELECTED) != 0; break;
+                case G_SSH: ssh = (src->Flags & GFLG_SELECTED) != 0; break;
                 case G_LIST:
                     if (code < n) {
-                        strcpy(host, callname[code]);
-                        pc = FALSE;
-                        if (host[0] && host[strlen(host) - 1] == '!') {
-                            host[strlen(host) - 1] = 0;
-                            pc = TRUE;
-                        }
+                        call_parse(callname[code], host, &pc, &ssh);
                         GT_SetGadgetAttrs(gad[G_HOST], dw, NULL,
                                           GTST_String, (ULONG)host, TAG_END);
                         GT_SetGadgetAttrs(gad[G_PC], dw, NULL,
                                           GTCB_Checked, pc, TAG_END);
+                        GT_SetGadgetAttrs(gad[G_SSH], dw, NULL,
+                                          GTCB_Checked, ssh, TAG_END);
                     }
                     break;
                 case G_CALL: go = done = TRUE; break;
@@ -3223,13 +3313,14 @@ static void call_dialog(void)
     CloseWindow(dw);
     FreeGadgets(glist);
     if (go && host[0]) {
-        char entry[130];
-        strcpy(entry, host);
+        char entry[136];
+        strcpy(entry, ssh ? "ssh:" : "");
+        strcat(entry, host);
         if (pc)
             strcat(entry, "!");
         calls_add(entry);
         save_prefs();
-        call_start(host, pc);
+        call_start(host, pc, ssh);
     }
 }
 
@@ -3367,7 +3458,7 @@ static void title_update(void)
         return;
     strcpy(title, "CTerm");
     if (dialhost[0]) {
-        strcat(title, ": ");
+        strcat(title, sshmode ? ": ssh " : ": ");
         strcat(title, dialhost);
     }
     if (t[0]) {
@@ -3436,7 +3527,7 @@ static void run(void)
         say(dialhost);
         say("...]\x1b[0m\r\n");
         refresh();
-        if (!dial())
+        if (!connect_out())
             say("\x1b[2m[Return calls again]\x1b[0m\r\n");
     } else {
         lfd = listen_on();
@@ -3530,7 +3621,17 @@ static void run(void)
                 int rounds = 0;
                 for (;;) {
                     struct timeval tv;
-                    LONG k = recv(sock, buf, sizeof buf, 0);
+                    LONG k;
+                    if (sshmode) {
+                        /* drain it: libssh2 may hold decrypted data the
+                         * socket no longer shows */
+                        while ((k = ssh_read(buf, sizeof buf)) > 0)
+                            vt_write(vt, buf, k);
+                        if (k < 0)
+                            hung_up();
+                        break;
+                    }
+                    k = recv(sock, buf, sizeof buf, 0);
                     tv.tv_sec = tv.tv_usec = 0;
                     if (k <= 0) {
                         hung_up();
@@ -3569,9 +3670,9 @@ int main(int argc, char **argv)
     (void)version;
     (void)argv;
     if (argc > 0) {
-        LONG args[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+        LONG args[10] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
         struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,"
-                                      "FROM/K,HOST/K,PC/S",
+                                      "FROM/K,HOST/K,PC/S,SSH/K,KEY/K",
                                       args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
@@ -3596,6 +3697,17 @@ int main(int argc, char **argv)
             if (!args[3]) want_cols = 80;
         }
         if (args[7]) arg_pc = TRUE;
+        if (args[8]) {                  /* ssh to user@host[:port] */
+            strncpy(dialhost, (char *)args[8], sizeof dialhost - 1);
+            strcpy(dialtitle, "CTerm: ssh ");
+            strcat(dialtitle, dialhost);
+            sshmode = TRUE;
+            local = FALSE;
+            remember = FALSE;
+            if (!args[3]) want_cols = 80;
+        }
+        if (args[9])
+            ssh_set_key((char *)args[9]);
         FreeArgs(rda);
     }
     /* the network only when there is one to talk to: the local Shell
@@ -3657,6 +3769,8 @@ int main(int argc, char **argv)
         con_free();
     }
     clip_close();
+    if (sshmode && sock >= 0)
+        ssh_close();
     close_display(FALSE);
     if (ownfont) CloseFont(ownfont);
     cache_free();

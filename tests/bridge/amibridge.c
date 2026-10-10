@@ -76,6 +76,7 @@ int main(void)
         if ((ls = take(lf)) < 0) break;
         PutStr("amibridge: joined\n");
         Flush(Output());
+        send(ps, (UBYTE *)"\001", 1, 0);   /* go: pcbridge calls the service now */
         for (;;) {
             fd_set r;
             ULONG sigs = SIGBREAKF_CTRL_C;

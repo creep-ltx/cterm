@@ -13,8 +13,19 @@ ifdef PROFILE_ECLOCK
 CFLAGS += -DPROFILE_ECLOCK
 endif
 
-CTerm: src/main.c src/vt.c src/vt.h src/boxtable.h src/console.c src/console.h
-	$(CC) $(CFLAGS) src/main.c src/vt.c src/console.c -o CTerm
+TP = third_party
+SSHINC = -I$(TP)/amiga -I$(TP)/AmiSSL/Developer/include -I$(TP)/libssh2-1.11.1/include
+SSHLIB = $(TP)/lib/libssh2.a -L$(TP)/AmiSSL/Developer/lib/AmigaOS3 -lamisslstubs -lm
+
+CTerm: src/main.c src/vt.c src/vt.h src/boxtable.h src/console.c src/console.h \
+       src/ssh.c src/ssh.h $(TP)/lib/libssh2.a
+	$(CC) $(CFLAGS) $(SSHINC) -c src/ssh.c -o src/ssh.o
+	$(CC) $(CFLAGS) src/main.c src/vt.c src/console.c src/ssh.o $(SSHLIB) -o CTerm
+
+# libssh2 and the AmiSSL SDK (downloaded by third_party/fetch.sh)
+$(TP)/lib/libssh2.a:
+	$(TP)/fetch.sh
+	$(TP)/build-libssh2.sh
 
 # Onto the A1200, through Wasabi.
 deploy: CTerm

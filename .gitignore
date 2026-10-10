@@ -16,3 +16,4 @@ third_party/lib/
 third_party/*.lha
 third_party/*.tar.gz
 tests/ssh/sshtest
+src/*.o
