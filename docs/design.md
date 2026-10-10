@@ -133,7 +133,8 @@ In the order the user and I agreed (2026-10-10):
   (AmigaTools/cdiff, ltx_drawtabs in ltxwin.c).
 - Search the scrollback;
   clickable links. (Done 2026-10-10: double/triple-click, OSC 52 copy, logging.)
-- **The phone book** (the user's spec, 2026-10-10). Each entry: a name;
+- **Done 2026-10-10 (A1200 tests pending: ssh login, letters):** the
+  phone book. Was: **the phone book** (the user's spec, 2026-10-10). Each entry: a name;
   the address (IP, host name or URL) and port; telnet or ssh; a user name
   and password (saved), sent at the host's prompt with Right Amiga+U (the
   name) and Right Amiga+P (the password), both keys configurable; the

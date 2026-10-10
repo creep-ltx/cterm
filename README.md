@@ -18,11 +18,32 @@ million colours, Latin-1, UTF-8 and the PC's character set.
 | `LATIN1` | Latin-1 instead of UTF-8 (Amiga BBSes) |
 | `COLS n` / `ROWS n` | the window's size in letters |
 | `FROM script` | the Shell runs this script first |
+| `BOOK name` | call a phone book entry |
 | `LISTEN` / `PORT n` | wait for the PC's relay (pc/cterm-relay.py) |
 
 Project/Call... (Right Amiga+K) asks for a host and remembers the last
-eight. A call opens in a new tab (or a window of its own); when it ends,
-Return calls again.
+eight; the phone book's places are listed first. A call opens in a new
+tab (or a window of its own); when it ends, Return calls again.
+
+## The phone book
+
+Settings, Phone book tab: the places you call, each with
+
+- a name, the address (a host name, an IP number, or a `telnet://` or
+  `ssh://user@host:port` link, which is taken apart) and the port;
+- telnet or ssh;
+- your user name and password. At the host's prompt, Project/Send user
+  name (Right Amiga+U) and Send password (Right Amiga+P) type them with
+  Return; the keys can be changed on the Keys tab. An ssh login is given
+  the saved password by itself, once;
+- the letters (CTerm's setting, an Amiga font, TrueType, or the PC's VGA
+  font) and the characters (UTF-8, Latin-1, PC BBS);
+- its own download and upload drawers (empty: the Files tab's).
+
+Choose a place in the Call window and Call: it opens in a new tab dressed
+the way the entry says (ssh in a CTermSSH window). `CTerm BOOK "name"`
+calls one from the Shell. The book is kept in `ENVARC:CTerm/phonebook`
+as plain text, passwords too, as the BBS dialers of old did.
 
 ## For programs on other computers
 
@@ -82,7 +103,7 @@ as they came, colour codes and all, so a BBS screen plays back from it.
 ## Settings
 
 Settings/Settings... (Right Amiga+S) opens one window for everything,
-in four tabs (it is built with OS 3.2's own window classes, so it looks
+in six tabs (it is built with OS 3.2's own window classes, so it looks
 like the system's settings programs):
 
 - **Screen:** a Workbench window or CTerm's own screen (any screen mode
@@ -95,7 +116,10 @@ like the system's settings programs):
 - **Colours:** a theme (Nord, Black, Workbench, Amber, Green, Light), and
   your own text and background colour on top of it.
 - **Keys:** what the Alt key does (Meta for programs on other
-  computers, or the Amiga's own Alt characters).
+  computers, or the Amiga's own Alt characters), and the letters for
+  sending the phone book's user name and password.
+- **Phone book:** see above.
+- **Files:** where downloads go and where the upload requester opens.
 - **Picture** (on the Colours tab): a picture behind the text (any format the Amiga's
   datatypes read: PNG, JPEG, IFF...), and how much of it shows through
   the background, 0 to 100 %. It covers the window without stretching,
