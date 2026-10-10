@@ -126,8 +126,8 @@ In the order the user and I agreed (2026-10-10):
   Screen, Text, Colours and picture, Keys, so it is not one long cluttered
   window. On OS 3.2 the clicktab gadget (ReAction) gives real tabs; a row
   of buttons switching pages works with GadTools alone.
-- Search the scrollback; double-click to select a word; OSC 52 copy;
-  clickable links; logging.
+- Search the scrollback;
+  clickable links. (Done 2026-10-10: double/triple-click, OSC 52 copy, logging.)
 - **The phone book** (the user's spec, 2026-10-10). Each entry: a name;
   the address (IP, host name or URL) and port; telnet or ssh; a user name
   and password (saved), sent at the host's prompt with Right Amiga+U (the
