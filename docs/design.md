@@ -221,7 +221,17 @@ In the order the user and I agreed (2026-10-10):
   Knowledge/amiga/graphics-and-performance.md ("A CPU text painter").
   Left on stock: colour rows over 4 planes (~8 ms a row), the 4-plane
   scroll, the parser's per-line overhead; step 2 (RTG row builder in asm)
-  is not worth it while drawing is not the RTG cost. Later, if it pays, the engine per CPU
+  is not worth it while drawing is not the RTG cost.
+  **Later the same evening** (the user: "check CCON's tricks; report when
+  near >NIL: speeds"): a Shell's writes are taken at once and parsed in
+  batches (term_take/term_sync), the main loop answers Shell packets and
+  waits again without its other checks, floods are drawn every 3x a
+  draw's cost. Stock 30.9 s (CCON 26.3, packets-only floor 13.8, NIL:
+  6.7); PiStorm A1200 4.10 s (packets-only floor 3.54, CCON 4.26, NIL:
+  0.18). NIL: needs no packet, a console always does: the floor is the
+  packet round trip. Left on stock: ~7 s of parser straight-line code
+  (per line, per escape), ~8 s drawing (colour rows over 4 planes,
+  partial rows by Text()). Later, if it pays, the engine per CPU
   (68000 / 68020+) as a file chosen at start - the plugin pattern
   (Knowledge/amiga/load-on-demand-and-plugins.md).
 
