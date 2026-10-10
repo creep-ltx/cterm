@@ -124,8 +124,11 @@ CTerm's own console handler is new C code; it takes CCON's knowledge
 In the order the user and I agreed (2026-10-10):
 - **The settings window in tabs** (the user's wish): one page each for
   Screen, Text, Colours and picture, Keys, so it is not one long cluttered
-  window. On OS 3.2 the clicktab gadget (ReAction) gives real tabs; a row
-  of buttons switching pages works with GadTools alone.
+  window. The bottom limit is AmigaOS 3.2 (the user, 2026-10-10), so the
+  plan is the whole window in ReAction with the real clicktab tabs; first
+  a small test window, a screenshot from the A1200, and the user decides
+  on the look. The other way: tabs drawn by CTerm, like cdiff's
+  (AmigaTools/cdiff, ltx_drawtabs in ltxwin.c).
 - Search the scrollback;
   clickable links. (Done 2026-10-10: double/triple-click, OSC 52 copy, logging.)
 - **The phone book** (the user's spec, 2026-10-10). Each entry: a name;
