@@ -155,7 +155,8 @@ In the order the user and I agreed (2026-10-10):
   transfer in its own process so the window and tabs stay usable; a panel
   at the bottom of that tab (file name and drawer, a bar per file and one
   for the batch, speed, time left, Stop); the tab's name shows the
-  percentage. Proposed to the user, awaiting the go.
+  percentage. **Done 2026-10-10** (the user's go): a transfer waits in
+  loop_round(), so CTerm goes on; panel, tab name, Transfers window.
 - Later idea: Hydra's chat with the other side during a transfer
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
 - Also: an ssh password login tried against a real server, ARexx,

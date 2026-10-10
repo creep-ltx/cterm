@@ -4,7 +4,7 @@
 uploads with lrz into /tmp/zbbs/up, 'q' hangs up. Telnet IAC is doubled
 and undoubled around lrzsz, as a real board does. lrzsz: see
 tests/zmodem_test.c. Listens on 127.0.0.1 (the emulator reaches it)."""
-import os, select, socket, subprocess, sys
+import os, select, socket, subprocess, sys, time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 2397
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +28,7 @@ def undouble(data, st):
         elif st[0] == 4: st[0] = 0 if c == 240 else 3
     return bytes(out)
 
-def run(conn, argv, cwd=None):
+def run(conn, argv, cwd=None, slow=0):
     p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, cwd=cwd)
     st = [0]
@@ -42,6 +42,8 @@ def run(conn, argv, cwd=None):
             if not d:
                 break
             conn.sendall(d.replace(b"\xff", b"\xff\xff"))
+            if slow:
+                time.sleep(len(d) / slow)   # bytes per second
         if conn in r:
             d = conn.recv(65536)
             if not d:
@@ -100,6 +102,12 @@ def session(conn):
             conn.sendall(b"\r\nHydra: starting\r\n")
             rc = run(conn, [os.path.join(HERE, "../hydra/hcref"), "-d", "/tmp/zbbs/up/"] + files)
             conn.sendall(b"\r\nHydraCom ended: %d\r\n" % rc)
+        elif c == b"s":
+            files = sorted(os.path.join("/tmp/zbbs/files", f)
+                           for f in os.listdir("/tmp/zbbs/files"))
+            conn.sendall(b"\r\nsending slowly (20 KB/s)...\r\n")
+            rc = run(conn, [LRZSZ + "lsz", "-b"] + files, slow=20000)
+            conn.sendall(b"\r\nlsz ended: %d\r\n" % rc)
         elif c == b"q":
             return
 

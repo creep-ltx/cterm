@@ -7,7 +7,6 @@ static void open_settings_(void);
 static void close_settings_(void);
 static void settings_events_(void);
 
-static BOOL reaction_open(void);
 static void set_attr(int id, ULONG tag, ULONG val);
 static ULONG get_attr(int id, ULONG tag);
 static Object *r_label(const char *t);
@@ -120,7 +119,7 @@ static STRPTR booklettlabels[] = { (STRPTR)"CTerm's setting",
                                    (STRPTR)"PC font (IBM VGA)", NULL };
 static STRPTR themelabels[NTHEMES + 1];
 
-static BOOL reaction_open(void)
+BOOL reaction_open(void)
 {
     static const char *const name[] = {
         "window.class", "gadgets/layout.gadget", "gadgets/clicktab.gadget",

@@ -680,7 +680,6 @@ static void host_input(UBYTE *buf, LONG size)
 
 static void run(void)
 {
-    static UBYTE buf[16384];
 #ifdef PROFILE
     {   /* what one clock read costs, to take it out of the buckets */
         int k;
@@ -736,69 +735,8 @@ static void run(void)
     refresh();
 
     for (;;) {
-        fd_set rd;
-        LONG maxfd = -1, n = 0;
-        ULONG winsig = 1UL << win->UserPort->mp_SigBit;
-        ULONG setsig = setwin ? 1UL << setwin->UserPort->mp_SigBit : 0;
-        ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig();
-        BOOL hostdata = FALSE;
         int i;
-        FD_ZERO(&rd);
-        for (i = 0; i < ntabs; i++) {
-            struct Tab *t = tabs[i];
-            LONG fd = t->t_sock >= 0 ? t->t_sock : t->t_lfd;
-            if (t->con)
-                sigs |= con_sigmask(t->con);
-            if (fd >= 0) {
-                FD_SET(fd, &rd);
-                if (fd > maxfd)
-                    maxfd = fd;
-            }
-        }
-        if (maxfd < 0) {
-            /* no network: the plain Amiga wait - the socket library's
-             * WaitSelect costs far more per round, and a flood of tiny
-             * writes is all rounds */
-            PF_START(tw);
-            sigs = Wait(sigs);
-            PF_ADD(pf_wait, tw);
-        } else
-            n = WaitSelect(maxfd + 1, &rd, NULL, NULL, NULL, &sigs);
-        T = shown;
-        if ((sigs & SIGBREAKF_CTRL_C) && !quitting)
-            quit_all();
-        if (setwin && (sigs & setsig))
-            settings_events();
-        T = shown;
-        if ((sigs & winsig) && !window_events() && !quitting)
-            quit_all();
-        /* every tab: its Shell's packets, its host's bytes */
-        for (i = 0; i < ntabs; i++) {
-            T = tabs[i];
-            if (T->con) {
-                char r[256];
-                int k;
-                PF_START(tp);
-                con_handle(T->con, sigs);
-                PF_ADD(pf_pkt, tp);
-                k = vt_take_reply(vt, r, sizeof r);
-                if (k > 0)
-                    con_reply(T->con, (UBYTE *)r, k);
-                host_clip();            /* the Shell's programs may copy too */
-                if (!con_alive(T->con))
-                    T->ended = TRUE;    /* the Shell ended */
-            }
-            if (n > 0) {
-                LONG fd = sock >= 0 ? sock : lfd;
-                if (fd >= 0 && FD_ISSET(fd, &rd)) {
-                    host_input(buf, sizeof buf);
-                    if (T == shown)
-                        hostdata = TRUE;
-                }
-            }
-            if (vt_take_bell(vt) && T == shown)
-                DisplayBeep(scr);
-        }
+        loop_round(-1, -1);
         /* tabs whose Shell has ended go */
         for (i = 0; i < ntabs; i++)
             if (tabs[i]->ended && !(tabs[i]->con &&
@@ -809,19 +747,112 @@ static void run(void)
         if (ntabs == 0)
             break;
         T = shown;
-        title_update();
-        if (win && !win->MenuStrip && menu)
-            SetMenuStrip(win, menu);    /* Ed has gone */
-        if (con_render_due() && owed)
-            draw_now();
-        if (hostdata)
-            refresh();
-        mouse_reporting();
         if (want_switch)
             switch_display();
         if (!win)
             break;
     }
+}
+
+/* One round of CTerm's life: wait for anything - the window, the Shells,
+ * the hosts, at most ms (-1: as long as it takes) - and handle it. A
+ * transfer waits in here (xfd: its socket, which it reads itself), so the
+ * window and the other tabs go on meanwhile; then tabs are not dropped
+ * and the screen is not switched (run() does that, at the top). TRUE:
+ * xfd has data. */
+BOOL loop_round(LONG xfd, LONG ms)
+{
+    static UBYTE buf[16384];
+    struct Tab *me = T;
+    fd_set rd;
+    LONG maxfd = -1, n = 0;
+    ULONG winsig = 1UL << win->UserPort->mp_SigBit;
+    ULONG setsig = setwin ? 1UL << setwin->UserPort->mp_SigBit : 0;
+    ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
+                 xwin_sigmask();
+    BOOL hostdata = FALSE, ready = FALSE;
+    int i;
+    FD_ZERO(&rd);
+    for (i = 0; i < ntabs; i++) {
+        struct Tab *t = tabs[i];
+        LONG fd = t->t_sock >= 0 ? t->t_sock : t->t_lfd;
+        if (t->con)
+            sigs |= con_sigmask(t->con);
+        if (fd >= 0 && !t->t_xfer) {    /* a transfer reads its own */
+            FD_SET(fd, &rd);
+            if (fd > maxfd)
+                maxfd = fd;
+        }
+    }
+    if (xfd >= 0) {
+        FD_SET(xfd, &rd);
+        if (xfd > maxfd)
+            maxfd = xfd;
+    }
+    if (maxfd < 0 && ms < 0) {
+        /* no network: the plain Amiga wait - the socket library's
+         * WaitSelect costs far more per round, and a flood of tiny
+         * writes is all rounds */
+        PF_START(tw);
+        sigs = Wait(sigs);
+        PF_ADD(pf_wait, tw);
+    } else {
+        struct timeval tv;
+        tv.tv_sec = ms > 0 ? ms / 1000 : 0;
+        tv.tv_usec = ms > 0 ? (ms % 1000) * 1000 : 0;
+        n = WaitSelect(maxfd + 1, &rd, NULL, NULL, ms >= 0 ? &tv : NULL,
+                       &sigs);
+    }
+    if (xfd >= 0 && n > 0 && FD_ISSET(xfd, &rd))
+        ready = TRUE;
+    T = shown;
+    if ((sigs & SIGBREAKF_CTRL_C) && !quitting)
+        quit_all();
+    if (setwin && (sigs & setsig))
+        settings_events();
+    if (sigs & xwin_sigmask())
+        xwin_events();
+    T = shown;
+    if ((sigs & winsig) && !window_events() && !quitting)
+        quit_all();
+    /* every tab: its Shell's packets, its host's bytes */
+    for (i = 0; i < ntabs; i++) {
+        T = tabs[i];
+        if (T->con) {
+            char r[256];
+            int k;
+            PF_START(tp);
+            con_handle(T->con, sigs);
+            PF_ADD(pf_pkt, tp);
+            k = vt_take_reply(vt, r, sizeof r);
+            if (k > 0)
+                con_reply(T->con, (UBYTE *)r, k);
+            host_clip();            /* the Shell's programs may copy too */
+            if (!con_alive(T->con))
+                T->ended = TRUE;    /* the Shell ended */
+        }
+        if (n > 0 && !T->t_xfer) {
+            LONG fd = sock >= 0 ? sock : lfd;
+            if (fd >= 0 && FD_ISSET(fd, &rd)) {
+                host_input(buf, sizeof buf);
+                if (T == shown)
+                    hostdata = TRUE;
+            }
+        }
+        if (vt_take_bell(vt) && T == shown)
+            DisplayBeep(scr);
+    }
+    T = shown;
+    title_update();
+    if (win && !win->MenuStrip && menu)
+        SetMenuStrip(win, menu);    /* Ed has gone */
+    if (con_render_due() && owed)
+        draw_now();
+    if (hostdata)
+        refresh();
+    mouse_reporting();
+    T = me;
+    return ready;
 }
 
 static BOOL arg_pc, arg_latin1;
@@ -1080,6 +1111,7 @@ static int cterm_main(int argc, char **argv)
             con_free(spent[--nspent]);
     }
     close_settings();
+    xwin_shut();                        /* before its classes and screen go */
     reaction_close();
     clip_close();
     close_display(FALSE);

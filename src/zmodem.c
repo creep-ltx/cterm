@@ -650,6 +650,17 @@ static int zm_receive_(struct Z *z, XferIO *io, const unsigned char *pre,
                 strcpy(name, "file");
             p = (const char *)z->data + strlen((const char *)z->data) + 1;
             size = (p < (const char *)z->data + z->dlen) ? num(&p, 10) : 0;
+            if (io->batch && p < (const char *)z->data + z->dlen) {
+                /* mtime (octal), mode, serial, then files and bytes left */
+                unsigned long fl, bl;
+                (void)num(&p, 8);
+                (void)num(&p, 8);
+                (void)num(&p, 10);
+                fl = num(&p, 10);
+                bl = num(&p, 10);
+                if (fl || bl)
+                    io->batch(io->u, (long)fl, bl);
+            }
             if (f)
                 io->wclose(io->u, f, 0);
             have = 0;

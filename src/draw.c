@@ -46,7 +46,6 @@ static void forget_shown(void);
 static void paint_row(int r);
 static APTR mksysi(ULONG which, int sysz);
 static void mkarrow(struct Gadget *g, APTR im, int le, int te, int id);
-static void draw_tabbar(void);
 static void __attribute__((noinline)) load_pic_(void);
 static void backdrop_put(LONG x, LONG y, LONG w, LONG h);
 static void forget_shown(void);
@@ -1564,9 +1563,19 @@ void tab_label(struct Tab *t, char *out)
         strncat(out, t->t_dialhost, 40);
     } else
         strcpy(out, "relay");
+    if (t->t_xfer) {                    /* a transfer: how far, in the name */
+        struct Xfer *x = t->t_xfer;
+        ULONG all = x->bsize ? x->bsize : x->size,
+              got = x->bsize ? x->bdone : x->done;
+        strcat(out, x->dir == 1 ? " v" : x->dir == 2 ? " ^" : " ^v");
+        if (all) {
+            numstr_cat(out, (LONG)pct100(got, all));
+            strcat(out, "%");
+        }
+    }
 }
 
-static void draw_tabbar(void)
+void draw_tabbar(void)
 {
     int h = tabbar_h(), x0 = win->BorderLeft, y0 = win->BorderTop;
     int x1 = win->Width - win->BorderRight - 1, wd = x1 - x0 + 1, i;
@@ -1760,6 +1769,8 @@ void redraw_all(void)
         draw_row(r);
     draw_cursor(TRUE);
     update_knob();
+    if (shown && shown->t_xfer)
+        xfer_panel();
 }
 
 /* Bring the window up to date with the emulator: one blit for a scroll,
@@ -1768,6 +1779,7 @@ void refresh(void)
 {
     VtChanges chg;
     int r;
+    BOOL xp;
     static int syncwait;
     /* the program is between "begin" and "end" of a frame (2026): show
      * the finished one - but never hold the window more than ~8 frames */
@@ -1778,8 +1790,13 @@ void refresh(void)
         return;
     }
     syncwait = 0;
+    if (T != shown)
+        return;                         /* drawn when it is shown again */
     if (!vt_take_changes(vt, &chg))
         return;
+    xp = shown && T == shown && shown->t_xfer;
+    if (xp)
+        chg.all = 1;                    /* a scroll would carry the panel */
     rp_forget();
     if (sel_on && (chg.all || chg.scroll_n)) {
         sel_on = sel_drag = FALSE;      /* the text under it moved */
@@ -1833,6 +1850,8 @@ void refresh(void)
         update_knob();
         PF_ADD(pf_knob, tk);
     }
+    if (xp)
+        xfer_panel();                   /* over the last rows again */
 }
 
 /* What came from the host, as it came (escape codes and all: a BBS
@@ -1841,4 +1860,157 @@ void log_bytes(const UBYTE *b, LONG n)
 {
     if (T->t_log)
         FWrite(T->t_log, (APTR)b, 1, n);
+}
+
+/* ---- a transfer's panel: over the tab's last three rows ---------------
+ * The text under it is left as it is (no resize: the host would hear of
+ * it), and drawn again when the transfer ends. */
+
+/* done of all in per cent, in whole numbers (no floating point: a stock
+ * A1200 has no FPU, and CTerm links no maths library) */
+ULONG pct100(ULONG done, ULONG all)
+{
+    if (!all)
+        return 0;
+    if (done >= all)
+        return 100;
+    return all > 0x00FFFFFFUL ? done / (all / 100) : done * 100 / all;
+}
+
+static void bar(int x, int y, int w, int h, ULONG done, ULONG all)
+{
+    int k = all ? (int)((ULONG)w * pct100(done, all) / 100) : 0;
+    apen(mix(defbg, deffg, 25));
+    RectFill(rp, x, y, x + w - 1, y + h - 1);
+    if (k > 2) {
+        apen(deffg);                    /* apart from the rest on 4 pens too */
+        RectFill(rp, x + 1, y + 1, x + k - 2, y + h - 2);
+    }
+}
+
+static void ptext(int x, int y, const char *s, int maxw)
+{
+    int n = strlen(s), fit = font->tf_XSize ? maxw / font->tf_XSize : n;
+    if (n > fit)
+        n = fit > 0 ? fit : 0;
+    Move(rp, x, y + font->tf_Baseline);
+    Text(rp, (STRPTR)s, n);
+}
+
+static void kb(char *out, ULONG v)
+{
+    if (v >= 10UL * 1024 * 1024) {
+        numstr_cat(out, (LONG)(v >> 20));
+        strcat(out, " MB");
+    } else {
+        numstr_cat(out, (LONG)(v >> 10));
+        strcat(out, " KB");
+    }
+}
+
+void xfer_panel(void)
+{
+    struct Xfer *x = shown ? shown->t_xfer : NULL;
+    int lh, y0, x0, w, bw, tx;
+    ULONG secs, rate = 0, left;
+    char s[200];
+    if (!x || !win || rows < 4)
+        return;
+    lh = ch > font->tf_YSize + 2 ? ch : font->tf_YSize + 2;
+    y0 = oy + rows * ch - 3 * lh;
+    x0 = ox;
+    w = cols * cw;
+    rp_forget();
+    SetWriteMask(rp, 0xFF);             /* all planes: the text's mask would */
+    SetDrMd(rp, JAM1);                  /* keep old letters under the fill */
+    apen(mix(defbg, deffg, 10));
+    RectFill(rp, x0, y0, x0 + w - 1, y0 + 3 * lh - 1);
+    apen(mix(defbg, deffg, 35));
+    RectFill(rp, x0, y0, x0 + w - 1, y0);
+    secs = (ticks50() - x->t0) / 50;
+    if (secs)
+        rate = x->bdone / secs;
+    /* 1: what, where */
+    apen(deffg);
+    strcpy(s, x->dir == 1 ? "Receiving " : x->dir == 2 ? "Sending "
+                                                       : "Hydra: ");
+    strcat(s, x->name[0] ? x->name : "...");
+    if (x->dir != 2 && x->where[0]) {
+        strcat(s, " into ");
+        strncat(s, x->where, 60);
+    }
+    strcat(s, "  (");
+    strcat(s, x->proto);
+    strcat(s, ")");
+    ptext(x0 + 4, y0 + 2, s, w - 8);
+    /* 2: the file */
+    bw = w / 3;
+    tx = x0 + 4 + bw + 8;
+    bar(x0 + 4, y0 + lh + 2, bw, lh - 4, x->done, x->size);
+    s[0] = 0;
+    kb(s, x->done);
+    if (x->size) {
+        strcat(s, " of ");
+        kb(s, x->size);
+        strcat(s, "  ");
+        numstr_cat(s, (LONG)pct100(x->done, x->size));
+        strcat(s, "%");
+    }
+    if (rate) {
+        strcat(s, "  ");
+        numstr_cat(s, (LONG)(rate / 1024));
+        strcat(s, " KB/s");
+        if (x->size > x->done) {
+            left = (x->size - x->done) / rate;
+            strcat(s, "  ");
+            numstr_cat(s, (LONG)(left / 60));
+            strcat(s, left % 60 < 10 ? ":0" : ":");
+            numstr_cat(s, (LONG)(left % 60));
+            strcat(s, " left");
+        }
+    }
+    apen(deffg);
+    ptext(tx, y0 + lh + 1, s, x0 + w - tx - 4);
+    /* 3: the batch, and Stop */
+    bar(x0 + 4, y0 + 2 * lh + 2, bw, lh - 4, x->bdone, x->bsize);
+    strcpy(s, "file ");
+    numstr_cat(s, x->files + 1);
+    if (x->nfiles) {
+        strcat(s, " of ");
+        numstr_cat(s, x->nfiles);
+    }
+    strcat(s, ", ");
+    kb(s, x->bdone);
+    if (x->bsize) {
+        strcat(s, " of ");
+        kb(s, x->bsize);
+    }
+    strcat(s, " in all");
+    apen(deffg);
+    {
+        int sw = 8 * (font->tf_XSize ? font->tf_XSize : 8);
+        x->stopx1 = x0 + w - 4;
+        x->stopx0 = x->stopx1 - sw;
+        x->stopy0 = y0 + 2 * lh + 1;
+        x->stopy1 = y0 + 3 * lh - 2;
+        ptext(tx, y0 + 2 * lh + 1, s, x->stopx0 - tx - 8);
+        apen(mix(defbg, deffg, 30));
+        RectFill(rp, x->stopx0, x->stopy0, x->stopx1, x->stopy1);
+        apen(deffg);
+        ptext(x->stopx0 + (sw - 4 * font->tf_XSize) / 2, x->stopy0, "Stop",
+              sw);
+    }
+    SetWriteMask(rp, pmask);            /* the text's own again */
+    rp_forget();
+}
+
+/* A click on the shown tab's Stop: TRUE when it was one. */
+BOOL xfer_click(int mx, int my)
+{
+    struct Xfer *x = shown ? shown->t_xfer : NULL;
+    if (!x || mx < x->stopx0 || mx > x->stopx1 || my < x->stopy0 ||
+        my > x->stopy1)
+        return FALSE;
+    x->stop = 1;
+    return TRUE;
 }

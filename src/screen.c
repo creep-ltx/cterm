@@ -32,6 +32,8 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Send with Ymodem...", 0, 0, 0, (APTR)M_YSEND },
     {  NM_ITEM, (STRPTR)"Send with Xmodem...", 0, 0, 0, (APTR)M_XSEND },
     {  NM_ITEM, (STRPTR)"Send with Hydra...", 0, 0, 0, (APTR)M_HSEND },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Show transfers...", 0, 0, 0, (APTR)M_XWIN },
     { NM_TITLE, (STRPTR)"Settings", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Settings...", (STRPTR)"S", 0, 0, (APTR)M_SETTINGS },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
@@ -284,6 +286,7 @@ void switch_display(void)
 {
     if (setwin)
         close_settings();               /* its screen may be going */
+    xwin_shut();
     BOOL keep = want_mode == SCR_OWN && scrmode == SCR_OWN &&
                 want_depth == owndepth;
     want_switch = FALSE;
@@ -331,6 +334,7 @@ BOOL menu_pick(ULONG id)
     case M_SENDUSER: send_login(FALSE); break;
     case M_SENDPASS: send_login(TRUE); break;
     case M_YRECV: case M_XRECV: case M_YSEND: case M_XSEND: case M_HSEND:
+    case M_XWIN:
         transfer_menu((int)id);
         break;
     case M_LOGSTOP: log_stop(); break;

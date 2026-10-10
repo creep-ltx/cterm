@@ -112,8 +112,13 @@ cannot read it.
   on the host: Transfer/Receive with Ymodem (names come with the files),
   Receive with Xmodem... (asks the name), Send with Ymodem... and Send
   with Xmodem... Xmodem pads a file's end to a whole block, as it must.
-- The window title shows the file, how far it is and the speed; **Esc
-  stops** a transfer. The other tabs' Shells go on meanwhile.
+- **CTerm goes on while files move**: switch tabs, use a Shell, call
+  another board. A panel over the transferring tab's last rows shows the
+  file and its drawer, a bar for the file and one for the whole batch,
+  the speed and the time left, and a Stop button (Esc stops too); the
+  tab's name shows the per cent (v down, ^ up). Transfer/Show
+  transfers... opens a window listing every transfer with its bars and a
+  Stop for each; it never opens by itself.
 - Tested against lrzsz, the reference (`make ztest`): every file the same,
   also over a line that loses and garbles bytes (Zmodem).
 

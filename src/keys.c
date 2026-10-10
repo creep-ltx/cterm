@@ -67,6 +67,14 @@ void key(struct IntuiMessage *m)
         "\x1bOP", "\x1bOQ", "\x1bOR", "\x1bOS", "\x1b[15~", "\x1b[17~",
         "\x1b[18~", "\x1b[19~", "\x1b[20~", "\x1b[21~"
     };
+    if (shown && shown->t_xfer) {
+        /* a transfer has the line: Esc stops it, other keys wait, but
+         * Right Amiga keys (tabs, menus) still work */
+        if (code == 0x45)
+            shown->t_xfer->stop = 1;
+        if (!(q & IEQUALIFIER_RCOMMAND))
+            return;
+    }
 
     if (code & IECODE_UP_PREFIX)
         return;
@@ -345,6 +353,9 @@ BOOL window_events(void)
                                         ? "\x1b[I" : "\x1b[O"), 3);
             break;
         case IDCMP_MOUSEBUTTONS:
+            if (copy.Code == SELECTDOWN &&
+                xfer_click(copy.MouseX, copy.MouseY))
+                break;                  /* the transfer's Stop */
             if (copy.Code == SELECTDOWN && fullscreen &&
                 copy.MouseX >= win->Width - POSBAR - 4 && copy.MouseY >= oy &&
                 copy.MouseY < oy + rows * ch && vt_history(vt) > 0) {

@@ -52,6 +52,7 @@
 #include <gadgets/listbrowser.h>
 #include <gadgets/string.h>
 #include <gadgets/integer.h>
+#include <gadgets/fuelgauge.h>
 #include <images/label.h>
 #include <images/bevel.h>
 #include <reaction/reaction_macros.h>
@@ -68,6 +69,7 @@
 #include <proto/listbrowser.h>
 #include <proto/string.h>
 #include <proto/integer.h>
+#include <proto/fuelgauge.h>
 #include <proto/label.h>
 
 /* The ReAction macros (LayoutObject ... End) spread one NewObject call
@@ -160,6 +162,23 @@ extern ULONG pf_calib;
 #define MAXTABS 9
 
 
+/* A transfer running in a tab: what the panel, the tab's name and the
+ * Transfers window show. */
+struct Xfer {
+    int stop;                           /* Esc, Stop, the tab closing */
+    int dir;                            /* 1 receiving, 2 sending, 3 both */
+    const char *proto;                  /* "Zmodem"... */
+    char name[108];                     /* the file now */
+    char where[160];                    /* its drawer (receiving) */
+    ULONG done, size;                   /* the file now: bytes, its size */
+    ULONG bdone, bsize;                 /* the batch: bytes, all (0: ?) */
+    ULONG fbase;                        /* bdone when this file began */
+    int files, nfiles;                  /* files done, all (0: ?) */
+    ULONG t0;                           /* when it began (ticks) */
+    ULONG tlast;                        /* last shown */
+    int stopx0, stopx1, stopy0, stopy1; /* the panel's Stop button */
+};
+
 struct Tab {
     Vt *t_vt;
     struct Con *con;                    /* a local Shell's console */
@@ -183,6 +202,7 @@ struct Tab {
     int t_letters;                      /* its letters: BL_* */
     char t_down[160], t_up[160];        /* its drawers for files */
     BPTR t_log;                         /* Start log: everything that came */
+    struct Xfer *t_xfer;                /* a transfer in it, or NULL */
 };
 
 /* Themes: the text and background, the 16 ANSI colours, and what the
@@ -198,7 +218,7 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
        M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
        M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS, M_YRECV, M_XRECV, M_YSEND,
-       M_XSEND, M_HSEND };
+       M_XSEND, M_HSEND, M_XWIN };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -290,6 +310,18 @@ BOOL asl_open(void);
 ULONG history_lines(void);
 BOOL diskfont_open(void);
 BOOL transfer_take(UBYTE *buf, LONG n);
+BOOL loop_round(LONG xfd, LONG ms);
+ULONG xwin_sigmask(void);
+void xwin_open(void);
+void xwin_update(void);
+void xwin_shut(void);
+BOOL reaction_open(void);
+void xwin_events(void);
+ULONG ticks50(void);
+ULONG pct100(ULONG done, ULONG all);
+void xfer_panel(void);
+void draw_tabbar(void);
+BOOL xfer_click(int x, int y);
 void transfer_menu(int what);
 void transfer_free(void);
 void deep_call(void (*fn)(void));

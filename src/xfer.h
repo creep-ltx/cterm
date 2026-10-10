@@ -21,6 +21,9 @@ struct XferIO {
      * what: 0 going, 1 file done, 2 skipped, 3 failed. */
     void (*show)(void *u, const char *name, unsigned long done,
                  unsigned long size, int what);
+    /* What is still to come, when the protocol says (Zmodem's ZFILE): the
+     * files and bytes left, this one's included. May be NULL. */
+    void (*batch)(void *u, long files, unsigned long bytes);
     /* Files. A download is made in the download drawer under the name it
      * came with (the caller makes it unique); the handle is opaque. */
     void *(*wopen)(void *u, const char *name, unsigned long size,
