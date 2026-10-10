@@ -64,8 +64,20 @@ not looking at keep running.
 
 ## Copy and paste
 
-Mark text with the left mouse button. Right Amiga+C copies it, Right
-Amiga+V types the clipboard in.
+Mark text with the left mouse button: drag, double-click a word (a file
+name or a path is one word) or triple-click a whole line. Right Amiga+C
+copies it, Right Amiga+V types the clipboard in.
+
+Programs on the other computer can copy too: what you copy in vim, tmux
+and the like (the OSC 52 code) lands on the Amiga's clipboard. They
+cannot read it.
+
+## Logging
+
+Project/Start log... (Right Amiga+L) saves everything that comes into
+the tab to a file, added to the end if the file is there; the title says
+"(logging)" until Project/Stop log or the tab closes. The bytes are kept
+as they came, colour codes and all, so a BBS screen plays back from it.
 
 ## Settings
 

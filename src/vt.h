@@ -88,6 +88,9 @@ int vt_focus(const Vt *vt);             /* 1004: focus in/out reports */
 int vt_sync(const Vt *vt);              /* 2026: hold drawing till done */
 int vt_cursor_shape(const Vt *vt, int *blink);  /* 0 block, 1 under, 2 bar */
 const char *vt_title(Vt *vt, int *changed);
+/* Text a program copied (OSC 52), UTF-8, len bytes: the caller frees it
+ * (free()). NULL: none since last asked. */
+char *vt_take_clip(Vt *vt, int *len);
 int vt_take_bell(Vt *vt);
 
 #endif

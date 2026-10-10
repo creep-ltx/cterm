@@ -98,6 +98,7 @@ struct Tab {
     int t_sa_r, t_sa_c, t_sb_r, t_sb_c;
     BOOL ended;                         /* its Shell or connection is over */
     void *ssh;                          /* its ssh connection */
+    BPTR t_log;                         /* Start log: everything that came */
 };
 
 #define MAXTABS 9
@@ -1989,6 +1990,14 @@ static void refresh(void)
     }
 }
 
+/* What came from the host, as it came (escape codes and all: a BBS
+ * screen plays back from it), into the tab's log. */
+static void log_bytes(const UBYTE *b, LONG n)
+{
+    if (T->t_log)
+        FWrite(T->t_log, (APTR)b, 1, n);
+}
+
 /* ---- for console.c ------------------------------------------------- */
 
 /* The console's calls, for its tab (t): the text goes into that tab's
@@ -1996,6 +2005,8 @@ static void refresh(void)
 void term_write(void *t, const UBYTE *b, LONG n)
 {
     PF_START(t0);
+    if (((struct Tab *)t)->t_log)
+        FWrite(((struct Tab *)t)->t_log, (APTR)b, 1, n);
     vt_write(((struct Tab *)t)->t_vt, b, n);
     PF_ADD(pf_vt, t0);
 #ifdef PROFILE
@@ -2200,7 +2211,7 @@ static void from_host(UBYTE *b, LONG n)
             else tstate = 0;
             break;
         case 2:
-            if (k) { vt_write(vt, b, k); k = 0; }
+            if (k) { log_bytes(b, k); vt_write(vt, b, k); k = 0; }
             telnet_option(tcmd, c);
             tstate = 0;
             break;
@@ -2228,8 +2239,10 @@ static void from_host(UBYTE *b, LONG n)
             break;
         }
     }
-    if (k)
+    if (k) {
+        log_bytes(b, k);
         vt_write(vt, b, k);
+    }
 }
 
 static void numstr_cat(char *out, LONG n)
@@ -2599,13 +2612,16 @@ static void key(struct IntuiMessage *m)
 
 enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
-       M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB };
+       M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
+       M_LOG, M_LOGSTOP };
 
 static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"New Shell tab", (STRPTR)"T", 0, 0, (APTR)M_NEWTAB },
     {  NM_ITEM, (STRPTR)"Call...", (STRPTR)"K", 0, 0, (APTR)M_CALL },
     {  NM_ITEM, (STRPTR)"Close tab", (STRPTR)"W", 0, 0, (APTR)M_CLOSETAB },
+    {  NM_ITEM, (STRPTR)"Start log...", (STRPTR)"L", 0, 0, (APTR)M_LOG },
+    {  NM_ITEM, (STRPTR)"Stop log", 0, 0, 0, (APTR)M_LOGSTOP },
     {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
     {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
     {  NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
@@ -2644,6 +2660,10 @@ static void close_settings(void);
 static void settings_events(void);
 static struct Window *setwin;
 static void sel_copy(void);
+static void clip_put(UBYTE *buf, ULONG n);
+static void host_clip(void);
+static void log_start(void);
+static void log_stop(void);
 static void paste(void);
 static void clip_close(void);
 
@@ -3486,6 +3506,8 @@ static BOOL menu_pick(ULONG id)
     case M_CLOSETAB: tab_close_current(); break;
     case M_COPY: sel_copy(); break;
     case M_PASTE: paste(); break;
+    case M_LOG: log_start(); break;
+    case M_LOGSTOP: log_stop(); break;
     case M_ABOUT:
         say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
             "Amiga.\r\n");
@@ -3618,6 +3640,32 @@ static void sel_redraw(int ra, int rb)
     draw_cursor(TRUE);
 }
 
+/* Double-click: the word at r,c (letters, digits and what names and
+ * paths are made of); triple-click: the whole line. FALSE: nothing
+ * there to mark. */
+static BOOL sel_word(int r, int c, BOOL line)
+{
+    int w, a, b;
+    const VtCell *l = vt_line(vt, r, back, &w);
+#define WORDY(x) (l[x].cp == VT_WIDE_TAIL || (l[x].cp > ' ' && \
+    (l[x].cp >= 128 || !strchr("\"'`()[]{}<>,;|", (int)l[x].cp))))
+    if (line) {
+        sa_c = 0;
+        sb_c = cols - 1;
+        return TRUE;
+    }
+    if (!l || c >= w || !WORDY(c))
+        return FALSE;
+    for (a = c; a > 0 && WORDY(a - 1); a--)
+        ;
+    for (b = c; b + 1 < w && b + 1 < cols && WORDY(b + 1); b++)
+        ;
+#undef WORDY
+    sa_c = a;
+    sb_c = b;
+    return TRUE;
+}
+
 static void sel_clear(void)
 {
     int r0, c0, r1, c1;
@@ -3657,6 +3705,14 @@ static void sel_copy(void)
         if (r < r1)
             buf[20 + n++] = '\n';
     }
+    clip_put(buf, n);
+    FreeVec(buf);
+}
+
+/* buf+20 holds n bytes of Latin-1: an FTXT around them, onto the
+ * clipboard (buf has room for the 20-byte head and a pad byte). */
+static void clip_put(UBYTE *buf, ULONG n)
+{
     memcpy(buf, "FORM", 4);
     put_be(buf + 4, 12 + n + (n & 1));
     memcpy(buf + 8, "FTXTCHRS", 8);
@@ -3673,7 +3729,80 @@ static void sel_copy(void)
         clipreq->io_Command = CMD_UPDATE;   /* publishes it */
         DoIO((struct IORequest *)clipreq);
     }
-    FreeVec(buf);
+}
+
+/* What a program on the host copied (OSC 52, vim/tmux): onto the
+ * Amiga's clipboard, UTF-8 made Latin-1. */
+static void host_clip(void)
+{
+    int len, i;
+    ULONG n = 0;
+    UBYTE *buf;
+    char *t = vt_take_clip(vt, &len);
+    if (!t)
+        return;
+    if (len > 0 && clip_open() && (buf = AllocVec(len + 22, MEMF_ANY))) {
+        for (i = 0; i < len; i++) {
+            UBYTE c = (UBYTE)t[i];
+            if (c < 0x80 || !utf8)
+                buf[20 + n++] = c;
+            else if ((c & 0xE0) == 0xC0 && i + 1 < len) {
+                ULONG cp = ((c & 0x1F) << 6) | (t[++i] & 0x3F);
+                buf[20 + n++] = cp < 256 ? (UBYTE)cp : '?';
+            } else if (c >= 0xC0) {
+                while (i + 1 < len && ((UBYTE)t[i + 1] & 0xC0) == 0x80)
+                    i++;
+                buf[20 + n++] = '?';
+            }
+        }
+        clip_put(buf, n);
+        FreeVec(buf);
+    }
+    free(t);
+}
+
+/* ---- the log: what came in, into a file ---------------------------- */
+
+static void log_stop(void)
+{
+    if (!T->t_log)
+        return;
+    Close(T->t_log);
+    T->t_log = 0;
+    if (T == shown)
+        title_update_now();
+}
+
+/* Start log...: a file for this tab, added to when it is there. */
+static void log_start(void)
+{
+    struct FileRequester *req;
+    char path[256];
+    BPTR fh;
+    if (!AslBase)
+        return;
+    req = AllocAslRequestTags(ASL_FileRequest,
+        ASLFR_Window, (ULONG)win, ASLFR_SleepWindow, TRUE,
+        ASLFR_TitleText, (ULONG)"CTerm: log this tab to...",
+        ASLFR_DoSaveMode, TRUE, ASLFR_InitialDrawer, (ULONG)"RAM:",
+        ASLFR_InitialFile, (ULONG)"CTerm.log", ASLFR_RejectIcons, TRUE,
+        TAG_END);
+    if (!req)
+        return;
+    if (AslRequest(req, NULL) && req->fr_File[0]) {
+        strncpy(path, (char *)req->fr_Drawer, sizeof path - 1);
+        path[sizeof path - 1] = 0;
+        AddPart((STRPTR)path, req->fr_File, sizeof path);
+        fh = Open((STRPTR)path, MODE_READWRITE);    /* made if missing */
+        if (fh) {
+            Seek(fh, 0, OFFSET_END);
+            log_stop();
+            T->t_log = fh;
+            title_update_now();
+        } else
+            DisplayBeep(scr);
+    }
+    FreeAslRequest(req);
 }
 
 /* The clipboard's text, typed in: to the Shell's line, or to the host
@@ -4828,12 +4957,25 @@ static BOOL window_events(void)
             if (copy.Code == SELECTDOWN && copy.MouseX >= ox &&
                 copy.MouseY >= oy && copy.MouseY < oy + rows * ch &&
                 copy.MouseX < ox + cols * cw) {
+                static ULONG ls, lm;
+                static int lr = -1, lc, clicks;
                 int r, c;
                 sel_clear();
                 mouse_cell(copy.MouseX, copy.MouseY, &r, &c);
+                if (r == lr && c == lc &&
+                    DoubleClick(ls, lm, copy.Seconds, copy.Micros))
+                    clicks = clicks % 3 + 1;
+                else
+                    clicks = 1;
+                ls = copy.Seconds; lm = copy.Micros;
+                lr = r; lc = c;
                 sa_r = sb_r = r;
                 sa_c = sb_c = c;
-                sel_drag = TRUE;        /* a selection only once it moves */
+                if (clicks > 1 && sel_word(r, c, clicks == 3)) {
+                    sel_on = TRUE;      /* a word or the line, marked */
+                    sel_redraw(r, r);
+                } else
+                    sel_drag = TRUE;    /* a selection only once it moves */
                 mouse_reporting();
             } else if (copy.Code == SELECTUP && sel_drag) {
                 sel_drag = FALSE;
@@ -4932,6 +5074,8 @@ static void title_update(void)
         strcat(title, sshmode ? ": ssh " : ": ");
         strcat(title, dialhost);
     }
+    if (T->t_log)
+        strcat(title, " (logging)");
     if (t[0]) {
         UBYTE *d;
         int i = 8;
@@ -5048,6 +5192,7 @@ static void tab_drop(struct Tab *t)
     if (i < 0)
         return;
     T = t;
+    log_stop();
     if (sock >= 0) {
         if (sshmode) {
             ssh_close(T->ssh);
@@ -5140,8 +5285,10 @@ static void host_input(UBYTE *buf, LONG size)
             if (sshmode) {
                 /* drain it: libssh2 may hold decrypted data the socket
                  * no longer shows */
-                while ((k = ssh_read(T->ssh, buf, size)) > 0)
+                while ((k = ssh_read(T->ssh, buf, size)) > 0) {
+                    log_bytes(buf, k);
                     vt_write(vt, buf, k);
+                }
                 if (k < 0)
                     hung_up();
                 break;
@@ -5170,6 +5317,7 @@ static void host_input(UBYTE *buf, LONG size)
         if (k > 0)
             send_data((UBYTE *)r, k);
     }
+    host_clip();
 }
 
 static void run(void)
@@ -5278,6 +5426,7 @@ static void run(void)
                 k = vt_take_reply(vt, r, sizeof r);
                 if (k > 0)
                     con_reply(T->con, (UBYTE *)r, k);
+                host_clip();            /* the Shell's programs may copy too */
                 if (!con_alive(T->con))
                     T->ended = TRUE;    /* the Shell ended */
             }

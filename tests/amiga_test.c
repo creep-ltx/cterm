@@ -2,6 +2,7 @@
 #include "../src/vt.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 static int fails;
 #define CHECK(c, msg) do { if (!(c)) { printf("FAIL: %s\n", msg); fails++; } } while (0)
@@ -195,6 +196,20 @@ int main(void)
         vt_resize(f, 10, 3);
         CHECK(vt_history(f) == 4, "and back");
         vt_free(f);
+    }
+    {   /* OSC 52: a program's copy, decoded for the clipboard */
+        Vt *o = vt_new(20, 5, 0);
+        int len;
+        char *t;
+        feed(o, "\x1b]52;c;aGVsbG8gd8O2cmxk\x07");   /* "hello w\xc3\xb6rld" */
+        t = vt_take_clip(o, &len);
+        CHECK(t && len == 12 && !memcmp(t, "hello w\xc3\xb6rld", 12),
+              "52: base64 decoded");
+        free(t);
+        CHECK(vt_take_clip(o, &len) == NULL, "taken once");
+        feed(o, "\x1b]52;c;?\x1b\\");
+        CHECK(vt_take_clip(o, &len) == NULL, "a query is not answered");
+        vt_free(o);
     }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     vt_free(v);

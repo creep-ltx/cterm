@@ -9,7 +9,7 @@
 #include <stdio.h>
 
 #define MAXPARAM 16
-#define OSCMAX   512
+#define OSCMAX   8192                   /* OSC 52 brings copied text */
 #define REPLYMAX 256
 
 enum { S_GROUND, S_ESC, S_ESC_INT, S_CSI, S_OSC, S_OSC_ESC, S_STR,
@@ -75,6 +75,8 @@ struct Vt {
     int rlen;
     char title[128];
     int title_changed, bell;
+    char *clip;                         /* OSC 52: text for the clipboard */
+    int cliplen;
 };
 
 /* ---- small things ---------------------------------------------------- */
@@ -999,6 +1001,39 @@ static void esc(Vt *v, int c)
     }
 }
 
+/* OSC 52;targets;base64: the program copied text (vim, tmux) - decoded
+ * and kept for the clipboard. A query ("?") is not answered: the host
+ * may not read the Amiga's clipboard. */
+static void osc_clip(Vt *v, const char *p)
+{
+    static const char abc[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    unsigned long acc = 0;
+    int bits = 0, n = 0;
+    char *out;
+    while (*p && *p != ';')             /* the targets (c, p, s...) */
+        p++;
+    if (*p++ != ';' || *p == '?')
+        return;
+    out = malloc(strlen(p) * 3 / 4 + 1);
+    if (!out)
+        return;
+    for (; *p; p++) {
+        const char *q = strchr(abc, *p);
+        if (!q || *p == 0)
+            continue;                   /* '=' and line breaks */
+        acc = (acc << 6) | (unsigned long)(q - abc);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out[n++] = (char)((acc >> bits) & 255);
+        }
+    }
+    free(v->clip);
+    v->clip = out;
+    v->cliplen = n;
+}
+
 static void osc_done(Vt *v)
 {
     int n = 0, i = 0;
@@ -1009,7 +1044,8 @@ static void osc_done(Vt *v)
         strncpy(v->title, v->osc + i + 1, sizeof v->title - 1);
         v->title[sizeof v->title - 1] = 0;
         v->title_changed = 1;
-    }
+    } else if (v->osc[i] == ';' && n == 52)
+        osc_clip(v, v->osc + i + 1);
 }
 
 /* ---- control characters ------------------------------------------- */
@@ -1439,6 +1475,7 @@ void vt_free(Vt *v)
         return;
     for (i = 0; i < v->hist_cap && v->hist; i++)
         row_free(v->hist[i]);
+    free(v->clip);
     free(v->hist);
     free(v->hist_w);
     free_screen(v->lines[0], v->rows);
@@ -1797,6 +1834,15 @@ int vt_take_reply(Vt *v, char *buf, int max)
     memmove(v->reply, v->reply + n, v->rlen - n);
     v->rlen -= n;
     return n;
+}
+
+char *vt_take_clip(Vt *v, int *len)
+{
+    char *c = v->clip;
+    *len = v->cliplen;
+    v->clip = NULL;
+    v->cliplen = 0;
+    return c;
 }
 
 const char *vt_title(Vt *v, int *changed)
