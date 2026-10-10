@@ -45,6 +45,7 @@ struct Vt {
     int autowrap, origin, insert, lnm, cursor_on, app_cursor, app_keypad;
     int bracketed, reverse, utf8;
     int amigamode;                  /* the Amiga console's ways (local) */
+    int cp437;                      /* bytes 0x80-0xFF are the PC's */
     unsigned long rawev;            /* raw event classes asked for: CSI n{ */
     int winbg;                      /* CSI >n m: the window's own colour */
     char g[2];                      /* G0, G1: 'B' ASCII, '0' DEC lines */
@@ -1032,6 +1033,26 @@ static int c1(Vt *v, int c)
     return 0;
 }
 
+/* The PC's character set (code page 437), 0x80-0xFF, as BBSes send it. */
+static const uint16_t cp437[128] = {
+    0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7,
+    0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
+    0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9,
+    0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192,
+    0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x00F1, 0x00D1, 0x00AA, 0x00BA,
+    0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
+    0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556,
+    0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,
+    0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,
+    0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,
+    0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B,
+    0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
+    0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4,
+    0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,
+    0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
+    0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0
+};
+
 /* ---- the byte loop --------------------------------------------------- */
 
 static void start_csi(Vt *v)
@@ -1243,7 +1264,7 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
          * (colour changes, cursor moves - most of what programs send) */
         if (v->state == S_GROUND && !v->uneed &&
             ((c == 0x1B && i + 1 < len && buf[i + 1] == '[') ||
-             (c == 0x9B && !v->utf8))) {
+             (c == 0x9B && !v->utf8 && !v->cp437))) {
             int j = i + (c == 0x1B ? 2 : 1), np = 0, ok = 0;
             int par[MAXPARAM];
             par[0] = -1;
@@ -1294,6 +1315,11 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
             }
             if (v->lnm)
                 v->x = 0;
+            continue;
+        }
+        /* the PC's code page: every high byte is a character */
+        if (v->cp437 && c >= 0x80 && v->state == S_GROUND) {
+            put(v, cp437[c - 0x80]);
             continue;
         }
         /* Latin-1 (the Amiga's ANSI): bytes 0x80-0x9F are C1 controls */
@@ -1453,7 +1479,17 @@ void vt_resize(Vt *v, int cols, int rows)
 
 /* ---- for the display ------------------------------------------------- */
 
-void vt_set_utf8(Vt *v, int on) { v->utf8 = on; v->uneed = 0; }
+void vt_set_utf8(Vt *v, int on) { v->utf8 = on; v->uneed = 0; v->cp437 = 0; }
+
+/* A PC BBS's bytes: code page 437 (box lines, blocks, accents). */
+void vt_set_cp437(Vt *v, int on)
+{
+    v->cp437 = on;
+    if (on) {
+        v->utf8 = 0;
+        v->uneed = 0;
+    }
+}
 
 /* The Amiga console's ways, for the local Shell: Latin-1 with 0x9B as
  * CSI, LF as a new line, FF a clear page, VT a line up, and its own

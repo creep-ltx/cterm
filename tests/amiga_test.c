@@ -128,6 +128,18 @@ int main(void)
         CHECK(vt_history(s3) == 29, "20 more: 29 history lines");
         vt_free(s3);
     }
+    {   /* code page 437: a PC BBS's box and blocks, and 0x9B is a cent */
+        Vt *pc = vt_new(20, 3, 0);
+        int w;
+        const VtCell *l;
+        vt_set_cp437(pc, 1);
+        feed(pc, "\xC9\xCD\xBB\xB0\xDB\x9B\x81");
+        l = vt_line(pc, 0, 0, &w);
+        CHECK(w >= 7 && l[0].cp == 0x2554 && l[1].cp == 0x2550 && l[2].cp == 0x2557 &&
+              l[3].cp == 0x2591 && l[4].cp == 0x2588 && l[5].cp == 0xA2 &&
+              l[6].cp == 0xFC, "CP437 high bytes are the PC's characters");
+        vt_free(pc);
+    }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     vt_free(v);
     return fails != 0;

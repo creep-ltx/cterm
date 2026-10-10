@@ -21,6 +21,7 @@
 #include <intuition/screens.h>
 #include <graphics/gfxbase.h>
 #include <graphics/text.h>
+#include <graphics/gfxmacros.h>
 #include <graphics/view.h>
 #include <graphics/modeid.h>
 #include <devices/inputevent.h>
@@ -235,6 +236,9 @@ static LONG pen_for(ULONG rgb)
  * full clear every plane outside the mask holds the background's bit
  * everywhere, so skipping it changes nothing (CCON's plane mask). */
 static BOOL painter;                    /* rows built in memory (RTG) */
+static BOOL pcmode;                     /* a PC BBS: CP437, PC colours, bold
+                                           is bright, blink a bright
+                                           background (iCE colours) */
 static LONG pbase = -1;                 /* the clear's pen; -1: no mask */
 static UBYTE pmask;
 
@@ -372,10 +376,29 @@ static void cell_rgb(const VtCell *c, ULONG *fg, ULONG *bg)
 
 static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg)
 {
-    ULONG f = c->fg == VT_DEFAULT ? deffg : VT_IS_INDEX(c->fg)
-            ? pen_rgb(c->fg & 255) : c->fg & 0xFFFFFF;
-    ULONG b = c->bg == VT_DEFAULT ? defbg : VT_IS_INDEX(c->bg)
-            ? pen_rgb(c->bg & 255) : c->bg & 0xFFFFFF;
+    ULONG f, b, cf = c->fg, cb = c->bg;
+    if (pcmode) {
+        /* a PC: bold is the bright half of the 16 colours, blink the
+         * bright backgrounds; the default is grey on black */
+        if (cf == VT_DEFAULT)
+            cf = VT_INDEX(7);
+        if (cb == VT_DEFAULT)
+            cb = VT_INDEX(0);
+        if ((c->attr & VT_BOLD) && VT_IS_INDEX(cf) && (cf & 255) < 8)
+            cf += 8;
+        if ((c->attr & VT_BLINK) && VT_IS_INDEX(cb) && (cb & 255) < 8)
+            cb += 8;
+        f = VT_IS_INDEX(cf) ? index_rgb(cf & 255) : cf & 0xFFFFFF;
+        /* black behind text is the window's own background: on a
+         * Workbench of few colours "black" may come out as another pen */
+        b = cb == VT_INDEX(0) ? defbg
+          : VT_IS_INDEX(cb) ? index_rgb(cb & 255) : cb & 0xFFFFFF;
+    } else {
+        f = cf == VT_DEFAULT ? deffg : VT_IS_INDEX(cf)
+          ? pen_rgb(cf & 255) : cf & 0xFFFFFF;
+        b = cb == VT_DEFAULT ? defbg : VT_IS_INDEX(cb)
+          ? pen_rgb(cb & 255) : cb & 0xFFFFFF;
+    }
     BOOL inv = (c->attr & VT_INVERSE) != 0;
     if (vt_reverse_video(vt))
         inv = !inv;
@@ -491,9 +514,28 @@ static void draw_block(ULONG cp, int x, int y, ULONG fg, ULONG bg)
         return;
     }
     if (cp == 0x2590) { RF(x + hw, y, x + cw - 1, y + ch - 1); return; }
-    if (cp >= 0x2591 && cp <= 0x2593) {          /* shades: blended */
-        SETCOL(mix(bg, fg, (int)(cp - 0x2590) * 25));
-        RF(x, y, x + cw - 1, y + ch - 1);
+    if (cp >= 0x2591 && cp <= 0x2593) {
+        /* shades: dots, as the PC's font has them (ANSI art lives on
+         * their texture): a quarter, half, three quarters */
+        static UWORD pat[3][2] = { { 0x2222, 0x8888 }, { 0x5555, 0xAAAA },
+                                   { 0x7777, 0xDDDD } };
+        const UWORD *pp = pat[cp - 0x2591];
+        if (cellbuf) {
+            int px, py;
+            for (py = 0; py < ch; py++) {
+                ULONG *row = cellbuf + (y + py) * cellw + x;
+                UWORD bits = pp[py & 1];
+                for (px = 0; px < cw; px++)
+                    row[px] = bits & (0x8000 >> (px & 15)) ? fg : bg;
+            }
+        } else {
+            apen(fg);
+            bpen(bg);
+            drmd(JAM2);
+            SetAfPt(rp, (UWORD *)pp, 1);    /* two lines, from the window */
+            RectFill(rp, x, y, x + cw - 1, y + ch - 1);
+            SetAfPt(rp, NULL, 0);
+        }
         return;
     }
     if (cp == 0x2594) { RF(x, y, x + cw - 1, y + ch / 8); return; }
@@ -631,6 +673,8 @@ static ULONG tt_stand_in(ULONG cp)
 
 static APTR tt_for(UWORD attr)
 {
+    if (pcmode)
+        attr &= ~VT_BOLD;               /* a PC's bold is a colour */
     int i = (attr & VT_BOLD ? 1 : 0) | (attr & VT_ITALIC ? 2 : 0);
     return ttface[i] ? ttface[i] : ttface[i & 1] ? ttface[i & 1] : ttface[0];
 }
@@ -683,7 +727,7 @@ static void draw_cells(int r, int x0, int x1)
         const VtCell *c = x < w && line ? &line[x] : &empty;
         ULONG fg, bg, cp = c->cp;
         int n = 0, start = x;
-        UWORD style = (c->attr & VT_BOLD ? FSF_BOLD : 0) |
+        UWORD style = (c->attr & VT_BOLD && !pcmode ? FSF_BOLD : 0) |
                       (c->attr & VT_ITALIC ? FSF_ITALIC : 0) |
                       (c->attr & VT_UNDERLINE ? FSF_UNDERLINED : 0);
 
@@ -1189,7 +1233,8 @@ static void paint_row(int r)
             pe->bg == bg)
             e = pe;                     /* the same cell again (spaces) */
         else
-            e = pe = cell_get(cp, fg, bg, c->attr, wide);
+            e = pe = cell_get(cp, fg, bg,
+                              pcmode ? c->attr & ~VT_BOLD : c->attr, wide);
         n = wide ? 2 * cw : cw;
         if (x * cw + n > rw)
             n = rw - x * cw;
@@ -1528,11 +1573,15 @@ static void scroll_view(int to)
 #define O_ECHO   1
 #define O_SGA    3
 #define O_NAWS   31
+#define O_TTYPE  24
 
 static LONG lfd = -1, sock = -1;
 static LONG port = DEFAULT_PORT;
 static int tstate, tcmd;
 static BOOL utf8 = TRUE;
+static char dialhost[128];              /* HOST: CTerm calls out */
+static UBYTE sbuf[64];                  /* a subnegotiation coming in */
+static int sblen;
 
 static void send_raw(const UBYTE *b, LONG n)
 {
@@ -1577,7 +1626,8 @@ static void telnet_option(int cmd, int opt)
     UBYTE r[3] = { IAC, 0, 0 };
     r[2] = opt;
     if (cmd == DO)
-        r[1] = (opt == O_NAWS || opt == O_BINARY) ? WILL : WONT;
+        r[1] = (opt == O_NAWS || opt == O_BINARY || opt == O_TTYPE) ? WILL
+                                                                   : WONT;
     else if (cmd == WILL)
         r[1] = (opt == O_ECHO || opt == O_SGA || opt == O_BINARY) ? DO : DONT;
     else
@@ -1601,7 +1651,7 @@ static void from_host(UBYTE *b, LONG n)
         case 1:
             if (c == IAC) { b[k++] = IAC; tstate = 0; }
             else if (c >= WILL && c <= DONT) { tcmd = c; tstate = 2; }
-            else if (c == SB) tstate = 3;
+            else if (c == SB) { tstate = 3; sblen = 0; }
             else tstate = 0;
             break;
         case 2:
@@ -1609,11 +1659,27 @@ static void from_host(UBYTE *b, LONG n)
             telnet_option(tcmd, c);
             tstate = 0;
             break;
-        case 3:                         /* subnegotiation: skipped */
+        case 3:                         /* subnegotiation */
             if (c == IAC) tstate = 4;
+            else if (sblen < (int)sizeof sbuf) sbuf[sblen++] = c;
             break;
         case 4:
-            tstate = c == SE ? 0 : 3;
+            if (c == SE) {
+                /* "which terminal are you?": a BBS picks ANSI or not by it */
+                if (sblen >= 2 && sbuf[0] == O_TTYPE && sbuf[1] == 1) {
+                    static const UBYTE head[4] = { IAC, SB, O_TTYPE, 0 };
+                    static const UBYTE tail[2] = { IAC, SE };
+                    const char *name = pcmode ? "ANSI" : "XTERM-256COLOR";
+                    send_raw(head, 4);
+                    send_raw((const UBYTE *)name, strlen(name));
+                    send_raw(tail, 2);
+                }
+                sblen = 0;
+                tstate = 0;
+            } else {
+                if (c == IAC && sblen < (int)sizeof sbuf) sbuf[sblen++] = c;
+                tstate = 3;
+            }
             break;
         }
     }
@@ -1654,6 +1720,45 @@ static LONG listen_on(void)
     return fd;
 }
 
+/* HOST: call out ("name" or "name:port", telnet's 23 by default). */
+static BOOL dial(void)
+{
+    char name[128], *colon;
+    struct hostent *he;
+    struct sockaddr_in sa;
+    LONG one = 1, p = 23;
+    strcpy(name, dialhost);
+    colon = strchr(name, ':');
+    if (colon) {
+        *colon = 0;
+        p = atol(colon + 1);
+    }
+    memset(&sa, 0, sizeof sa);
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(p);
+    sa.sin_addr.s_addr = inet_addr(name);
+    if (sa.sin_addr.s_addr == INADDR_NONE) {
+        he = gethostbyname((STRPTR)name);
+        if (!he) {
+            say("\x1b[1;31m[no such host]\x1b[0m\r\n");
+            return FALSE;
+        }
+        memcpy(&sa.sin_addr, he->h_addr, 4);
+    }
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0)
+        return FALSE;
+    if (connect(sock, (struct sockaddr *)&sa, sizeof sa) < 0) {
+        CloseSocket(sock);
+        sock = -1;
+        say("\x1b[1;31m[the call was not answered]\x1b[0m\r\n");
+        return FALSE;
+    }
+    setsockopt(sock, IPPROTO_TCP, 1 /* TCP_NODELAY */, &one, sizeof one);
+    tstate = 0;
+    return TRUE;
+}
+
 static void connected(void)
 {
     LONG one = 1;
@@ -1673,6 +1778,10 @@ static void hung_up(void)
 {
     CloseSocket(sock);
     sock = -1;
+    if (dialhost[0]) {
+        say("\r\n\x1b[0;2m[the connection closed]\x1b[0m\r\n");
+        return;
+    }
     say("\r\n\x1b[0;2m[the connection closed - waiting for it again]"
         "\x1b[0m\r\n");
     lfd = listen_on();
@@ -1799,7 +1908,8 @@ static void key(struct IntuiMessage *m)
  * ==================================================================== */
 
 enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
-       M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED };
+       M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
+       M_PC };
 
 static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
@@ -1825,6 +1935,8 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Scroll bar", 0, CHECKIT | MENUTOGGLE, 0,
        (APTR)M_BAR },
     {  NM_ITEM, (STRPTR)"UTF-8", 0, CHECKIT | MENUTOGGLE, 0, (APTR)M_UTF8 },
+    {  NM_ITEM, (STRPTR)"PC BBS (CP437)", 0, CHECKIT | MENUTOGGLE, 0,
+       (APTR)M_PC },
     { NM_END, 0, 0, 0, 0, 0 },
 };
 
@@ -1845,7 +1957,8 @@ static void make_menus(void)
             else n->nm_Flags |= NM_ITEMDISABLED;
             break;
         case M_BAR: on = scrollbar; break;
-        case M_UTF8: on = utf8; break;
+        case M_UTF8: on = utf8 && !pcmode; break;
+        case M_PC: on = pcmode; break;
         default: continue;
         }
         if (on) n->nm_Flags |= CHECKED;
@@ -2508,7 +2621,19 @@ static BOOL menu_pick(ULONG id)
         break;
     case M_UTF8:
         utf8 = !utf8;
+        pcmode = FALSE;
         vt_set_utf8(vt, utf8);
+        painter_forget();
+        redraw_all();
+        break;
+    case M_PC:
+        pcmode = !pcmode;
+        if (pcmode)
+            vt_set_cp437(vt, 1);
+        else
+            vt_set_utf8(vt, utf8);
+        painter_forget();
+        redraw_all();
         break;
     case M_BAR: ask_switch(scrmode, owndepth, fullscreen, !scrollbar); break;
     case M_FULL: ask_switch(scrmode, owndepth, !fullscreen, scrollbar); break;
@@ -2695,6 +2820,12 @@ static void run(void)
                     return;
             }
         }
+    } else if (dialhost[0]) {
+        say("\x1b[2m[calling ");
+        say(dialhost);
+        say("...]\x1b[0m\r\n");
+        refresh();
+        dial();
     } else {
         lfd = listen_on();
         if (lfd < 0)
@@ -2818,14 +2949,17 @@ static void run(void)
     if (lfd >= 0) CloseSocket(lfd);
 }
 
+static BOOL arg_pc;
+
 int main(int argc, char **argv)
 {
     int rc = RETURN_OK;
     (void)version;
     (void)argv;
     if (argc > 0) {
-        LONG args[6] = { 0, 0, 0, 0, 0, 0 };
-        struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,FROM/K",
+        LONG args[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+        struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,"
+                                      "FROM/K,HOST/K,PC/S",
                                       args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
@@ -2840,6 +2974,12 @@ int main(int argc, char **argv)
             strncpy(fromfile, (char *)args[5], sizeof fromfile - 1);
             fromfile[sizeof fromfile - 1] = 0;
         }
+        if (args[6]) {                  /* call a host (a BBS...) */
+            strncpy(dialhost, (char *)args[6], sizeof dialhost - 1);
+            local = FALSE;
+            if (!args[3]) want_cols = 80;
+        }
+        if (args[7]) arg_pc = TRUE;
         FreeArgs(rda);
     }
     /* the network only when there is one to talk to: the local Shell
@@ -2853,6 +2993,8 @@ int main(int argc, char **argv)
     TTEngineBase = OpenLibrary("ttengine.library", 6);
     CyberGfxBase = OpenLibrary("cybergraphics.library", 40);
     load_prefs();
+    if (arg_pc)
+        pcmode = TRUE;
     /* first start: TrueType if it is installed (DejaVu Sans Mono) */
     if (!hadprefs)
         usett = TTEngineBase && file_exists(ttfile);
@@ -2865,12 +3007,14 @@ int main(int argc, char **argv)
     }
     if (vt) {
         vt_set_utf8(vt, utf8);
+        if (pcmode)
+            vt_set_cp437(vt, 1);
         if (local)
             vt_set_amiga(vt, 1);        /* the Amiga console's ways */
     }
     want_bar = scrollbar;
     if (!local && !SocketBase) {
-        PutStr("CTerm LISTEN needs a TCP/IP stack (bsdsocket.library)\n");
+        PutStr("CTerm HOST and LISTEN need a TCP/IP stack (bsdsocket.library)\n");
         rc = RETURN_FAIL;
     } else if (!vt || !KeymapBase || !GadToolsBase ||
         !open_display()) {
