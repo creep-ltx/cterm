@@ -26,6 +26,7 @@
 #include <graphics/view.h>
 #include <graphics/modeid.h>
 #include <devices/inputevent.h>
+#include <devices/clipboard.h>
 #include <libraries/gadtools.h>
 #include <libraries/asl.h>
 #include <proto/exec.h>
@@ -720,6 +721,35 @@ static void tt_run(const ULONG *u, const int *cols, int n, int y,
  * ~3 ms; only assembly could win, and only on many-coloured rows. */
 static BOOL planar;                     /* a native screen, real planes */
 
+/* ---- the selection: text marked with the mouse ------------------------
+ * In screen cells, reading order from the anchor (a) to the end (b),
+ * both included; it goes when the text under it moves (a scroll). */
+static BOOL sel_on, sel_drag;
+static int sa_r, sa_c, sb_r, sb_c;
+
+static void sel_bounds(int *r0, int *c0, int *r1, int *c1)
+{
+    if (sa_r < sb_r || (sa_r == sb_r && sa_c <= sb_c)) {
+        *r0 = sa_r; *c0 = sa_c; *r1 = sb_r; *c1 = sb_c;
+    } else {
+        *r0 = sb_r; *c0 = sb_c; *r1 = sa_r; *c1 = sa_c;
+    }
+}
+
+/* The selected columns of row r: FALSE when none. */
+static BOOL sel_span(int r, int *s0, int *s1)
+{
+    int r0, c0, r1, c1;
+    if (!sel_on)
+        return FALSE;
+    sel_bounds(&r0, &c0, &r1, &c1);
+    if (r < r0 || r > r1)
+        return FALSE;
+    *s0 = r == r0 ? c0 : 0;
+    *s1 = r == r1 ? c1 : cols - 1;
+    return TRUE;
+}
+
 static void draw_cells(int r, int x0, int x1)
 {
     static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
@@ -727,17 +757,27 @@ static void draw_cells(int r, int x0, int x1)
     int w, x, y = oy + r * ch;
     const VtCell *line = vt_line(vt, r, back, &w);
 
+    int s0 = -1, s1 = -2, xend = x1;
+    BOOL insel;
+    sel_span(r, &s0, &s1);
     drmd(JAM2);
     x = x0;
-    while (x <= x1) {
+    while (x <= xend) {
         const VtCell *c = x < w && line ? &line[x] : &empty;
         ULONG fg, bg, cp = c->cp;
         int n = 0, start = x;
+        /* a run stays on one side of the selection's edges */
+        insel = x >= s0 && x <= s1;
+        x1 = insel ? (s1 < xend ? s1 : xend)
+                   : (x < s0 && s0 - 1 < xend ? s0 - 1 : xend);
         UWORD style = (c->attr & VT_BOLD && !pcmode ? FSF_BOLD : 0) |
                       (c->attr & VT_ITALIC ? FSF_ITALIC : 0) |
                       (c->attr & VT_UNDERLINE ? FSF_UNDERLINED : 0);
 
         cell_rgb(c, &fg, &bg);
+        if (insel) {
+            ULONG t = fg; fg = bg; bg = t;
+        }
         if (usett)
             cp = tt_stand_in(cp);
         if (is_special(cp)) {
@@ -875,6 +915,11 @@ static void draw_span(int r, int a, int b)
                 last--;
             }
         }
+    }
+    {
+        int s0, s1;                     /* marked cells are drawn, blank or not */
+        if (sel_span(r, &s0, &s1) && s1 >= a && s0 <= b && last < s1)
+            last = s1 < b ? s1 : b;
     }
     if (last < a && a == 0 && b == cols - 1 &&
         r < (int)sizeof shown_blank && shown_blank[r])
@@ -1183,6 +1228,7 @@ static void forget_shown(void)
 /* One text row: put together from cell pictures, written in one go. */
 static void paint_row(int r)
 {
+    int ps0 = -1, ps1 = -2;
     static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
     int w, x, cx = -1, cy = -1, vis = 0, rw = cols * cw;
     const VtCell *line = vt_line(vt, r, back, &w);
@@ -1194,8 +1240,9 @@ static void paint_row(int r)
     vt_cursor(vt, &cx, &cy, &vis);
     if (!vis || back > 0)
         cy = -1;
+    sel_span(r, &ps0, &ps1);
     /* a blank row (all default spaces, no cursor): one fill, or nothing */
-    if (r != cy && !vt_reverse_video(vt)) {
+    if (r != cy && !vt_reverse_video(vt) && ps1 < 0) {
         int blank = 1;
         for (x = 0; x < w && x < cols && line; x++) {
             const VtCell *c = &line[x];
@@ -1240,7 +1287,8 @@ static void paint_row(int r)
             pe = NULL;
         }
         prev = c;
-        if (r == cy && x == cx) {       /* the cursor: the cell reversed */
+        if ((r == cy && x == cx) ^ (x >= ps0 && x <= ps1)) {
+            /* the cursor, or a marked cell: reversed */
             ULONG t = fg; fg = bg; bg = t;
             pe = NULL;
             prev = NULL;
@@ -1452,6 +1500,15 @@ static void refresh(void)
     if (!vt_take_changes(vt, &chg))
         return;
     rp_forget();
+    if (sel_on && (chg.all || chg.scroll_n)) {
+        sel_on = sel_drag = FALSE;      /* the text under it moved */
+        if (!chg.all) {
+            int r;
+            for (r = 0; r < rows; r++)  /* repaint where it was */
+                ((uint8_t *)chg.dirty)[r] = 1, ((uint16_t *)chg.x0)[r] = 0,
+                ((uint16_t *)chg.x1)[r] = cols - 1;
+        }
+    }
     draw_cursor(FALSE);
     flood = chg.all || chg.scroll_n != 0;
 #ifdef PROFILE
@@ -1954,7 +2011,7 @@ static void key(struct IntuiMessage *m)
 
 enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
-       M_PC, M_CALL };
+       M_PC, M_CALL, M_COPY, M_PASTE };
 
 static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
@@ -1962,6 +2019,9 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
     {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
     {  NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
+    { NM_TITLE, (STRPTR)"Edit", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Copy", (STRPTR)"C", 0, 0, (APTR)M_COPY },
+    {  NM_ITEM, (STRPTR)"Paste", (STRPTR)"V", 0, 0, (APTR)M_PASTE },
     { NM_TITLE, (STRPTR)"Settings", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Amiga font...", 0, 0, 0, (APTR)M_FONT },
     {  NM_ITEM, (STRPTR)"TrueType font...", (STRPTR)"T", 0, 0,
@@ -1987,6 +2047,9 @@ static struct NewMenu newmenu[] = {
 };
 
 static void call_dialog(void);
+static void sel_copy(void);
+static void paste(void);
+static void clip_close(void);
 
 static void make_menus(void)
 {
@@ -2307,7 +2370,7 @@ static BOOL open_display(void)
     ULONG idcmp = IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE | IDCMP_RAWKEY |
                   IDCMP_GADGETDOWN | IDCMP_GADGETUP | IDCMP_MOUSEMOVE |
                   IDCMP_INTUITICKS | IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW |
-                  IDCMP_INACTIVEWINDOW;
+                  IDCMP_INACTIVEWINDOW | IDCMP_MOUSEBUTTONS;
     if (scrmode == SCR_OWN && !ownscr && !open_own_screen())
         scrmode = SCR_WB;
     if (scrmode == SCR_WB) {
@@ -2693,6 +2756,8 @@ static BOOL menu_pick(ULONG id)
     case M_SMALLER: tt_size(-2); break;
     case M_SPEED: speed_test(); break;
     case M_CALL: call_dialog(); break;
+    case M_COPY: sel_copy(); break;
+    case M_PASTE: paste(); break;
     case M_ABOUT:
         say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
             "Amiga.\r\n");
@@ -2762,6 +2827,184 @@ static void raw_report(int cls, int code, int qual)
     numstr_cat(r, qual); strcat(r, ";0;0;0;0|");
     p = (UBYTE *)r;
     con_reply(p, strlen(r));
+}
+
+/* ---- copy and paste: clipboard.device unit 0, IFF FTXT (the console
+ * family's format: Knowledge/amiga/clipboard-and-selection.md) ---------- */
+
+static struct MsgPort *clipport;
+static struct IOClipReq *clipreq;
+
+static BOOL clip_open(void)
+{
+    if (clipreq)
+        return TRUE;
+    if (!(clipport = CreateMsgPort()))
+        return FALSE;
+    clipreq = (struct IOClipReq *)CreateIORequest(clipport, sizeof *clipreq);
+    if (!clipreq || OpenDevice((STRPTR)"clipboard.device", PRIMARY_CLIP,
+                               (struct IORequest *)clipreq, 0)) {
+        if (clipreq) DeleteIORequest((struct IORequest *)clipreq);
+        DeleteMsgPort(clipport);
+        clipreq = NULL;
+        clipport = NULL;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void clip_close(void)
+{
+    if (!clipreq)
+        return;
+    CloseDevice((struct IORequest *)clipreq);
+    DeleteIORequest((struct IORequest *)clipreq);
+    DeleteMsgPort(clipport);
+    clipreq = NULL;
+    clipport = NULL;
+}
+
+static void put_be(UBYTE *p, ULONG v)
+{
+    p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
+}
+
+static ULONG get_be(const UBYTE *p)
+{
+    return ((ULONG)p[0] << 24) | ((ULONG)p[1] << 16) | ((ULONG)p[2] << 8) | p[3];
+}
+
+/* Redraw the rows between two (the selection grew or went). */
+static void sel_redraw(int ra, int rb)
+{
+    int r;
+    if (ra > rb) { r = ra; ra = rb; rb = r; }
+    if (ra < 0) ra = 0;
+    if (rb >= rows) rb = rows - 1;
+    rp_forget();
+    draw_cursor(FALSE);
+    for (r = ra; r <= rb; r++)
+        draw_row(r);
+    draw_cursor(TRUE);
+}
+
+static void sel_clear(void)
+{
+    int r0, c0, r1, c1;
+    if (!sel_on)
+        return;
+    sel_bounds(&r0, &c0, &r1, &c1);
+    sel_on = sel_drag = FALSE;
+    sel_redraw(r0, r1);
+}
+
+/* The marked text onto the clipboard: Latin-1, lines ended by LF, the
+ * spaces at a line's end left off. */
+static void sel_copy(void)
+{
+    int r0, c0, r1, c1, r, x;
+    ULONG n = 0;
+    UBYTE *buf;
+    if (!sel_on || !clip_open())
+        return;
+    sel_bounds(&r0, &c0, &r1, &c1);
+    buf = AllocVec(20 + (r1 - r0 + 1) * (cols + 1) + 2, MEMF_ANY);
+    if (!buf)
+        return;
+    for (r = r0; r <= r1; r++) {
+        int w, a = r == r0 ? c0 : 0, b = r == r1 ? c1 : cols - 1;
+        const VtCell *line = vt_line(vt, r, back, &w);
+        ULONG start = n;
+        for (x = a; x <= b; x++) {
+            ULONG cp = line && x < w ? line[x].cp : 0;
+            if (cp == VT_WIDE_TAIL)
+                continue;
+            buf[20 + n++] = cp == 0 ? ' ' : cp < 256 ? (UBYTE)cp
+                          : (cp >= 0x2500 && cp <= 0x257F) ? '+' : '?';
+        }
+        while (n > start && buf[20 + n - 1] == ' ')
+            n--;
+        if (r < r1)
+            buf[20 + n++] = '\n';
+    }
+    memcpy(buf, "FORM", 4);
+    put_be(buf + 4, 12 + n + (n & 1));
+    memcpy(buf + 8, "FTXTCHRS", 8);
+    put_be(buf + 16, n);
+    if (n & 1)
+        buf[20 + n] = 0;
+    clipreq->io_Command = CMD_WRITE;
+    clipreq->io_Data = (STRPTR)buf;
+    clipreq->io_Length = 20 + n + (n & 1);
+    clipreq->io_Offset = 0;
+    clipreq->io_ClipID = 0;
+    DoIO((struct IORequest *)clipreq);
+    if (!clipreq->io_Error) {
+        clipreq->io_Command = CMD_UPDATE;   /* publishes it */
+        DoIO((struct IORequest *)clipreq);
+    }
+    FreeVec(buf);
+}
+
+/* The clipboard's text, typed in: to the Shell's line, or to the host
+ * (bracketed when the program asked); a new line is a Return. */
+static void paste(void)
+{
+    static UBYTE buf[16384], scratch[256];
+    ULONG got, o;
+    if (!clip_open())
+        return;
+    clipreq->io_Command = CMD_READ;
+    clipreq->io_Data = (STRPTR)buf;
+    clipreq->io_Length = sizeof buf;
+    clipreq->io_Offset = 0;
+    clipreq->io_ClipID = 0;
+    DoIO((struct IORequest *)clipreq);
+    got = clipreq->io_Error ? 0 : clipreq->io_Actual;
+    do {                                /* read it dry, or it stays held */
+        clipreq->io_Command = CMD_READ;
+        clipreq->io_Data = (STRPTR)scratch;
+        clipreq->io_Length = sizeof scratch;
+        DoIO((struct IORequest *)clipreq);
+    } while (!clipreq->io_Error && clipreq->io_Actual > 0);
+    if (got < 20 || memcmp(buf, "FORM", 4) || memcmp(buf + 8, "FTXT", 4))
+        return;
+    for (o = 12; o + 8 <= got; ) {
+        ULONG id = get_be(buf + o), sz = get_be(buf + o + 4), i;
+        if (id == 0x43485253) {         /* CHRS */
+            UBYTE *t = buf + o + 8;
+            if (sz > got - o - 8)
+                sz = got - o - 8;
+            for (i = 0; i < sz; i++)
+                if (t[i] == '\n')
+                    t[i] = '\r';
+            if (back)
+                scroll_view(0);
+            if (local)
+                con_keys(t, sz);
+            else {
+                if (vt_bracketed_paste(vt))
+                    send_str("\x1b[200~");
+                send_typed(t, sz);
+                if (vt_bracketed_paste(vt))
+                    send_str("\x1b[201~");
+            }
+            return;
+        }
+        o += 8 + sz + (sz & 1);
+    }
+}
+
+/* Mouse position to a cell, held inside the grid. */
+static void mouse_cell(int mx, int my, int *r, int *c)
+{
+    int x = (mx - ox) / cw, y = (my - oy) / ch;
+    if (mx < ox) x = 0;
+    if (my < oy) y = 0;
+    if (x >= cols) x = cols - 1;
+    if (y >= rows) y = rows - 1;
+    *r = y;
+    *c = x;
 }
 
 /* ---- Project/Call...: a host to call, in a new CTerm window ----------- */
@@ -3042,6 +3285,22 @@ static BOOL window_events(void)
             }
             break;
         }
+        case IDCMP_MOUSEBUTTONS:
+            if (copy.Code == SELECTDOWN && copy.MouseX >= ox &&
+                copy.MouseY >= oy && copy.MouseY < oy + rows * ch &&
+                copy.MouseX < ox + cols * cw) {
+                int r, c;
+                sel_clear();
+                mouse_cell(copy.MouseX, copy.MouseY, &r, &c);
+                sa_r = sb_r = r;
+                sa_c = sb_c = c;
+                sel_drag = TRUE;        /* a selection only once it moves */
+                ReportMouse(TRUE, win);
+            } else if (copy.Code == SELECTUP && sel_drag) {
+                sel_drag = FALSE;
+                ReportMouse(FALSE, win);
+            }
+            break;
         case IDCMP_GADGETDOWN:
             if (g == &agup || g == &agdn) {
                 arrowheld = g == &agup ? 1 : -1;
@@ -3051,6 +3310,25 @@ static BOOL window_events(void)
             break;
         case IDCMP_GADGETUP:
         case IDCMP_MOUSEMOVE:
+            if (copy.Class == IDCMP_MOUSEMOVE && sel_drag) {
+                int r, c, r0, c0, r1, c1, n0, n1, m0, m1;
+                mouse_cell(copy.MouseX, copy.MouseY, &r, &c);
+                if (sel_on && r == sb_r && c == sb_c)
+                    break;
+                if (!sel_on && r == sa_r && c == sa_c)
+                    break;              /* a click that has not moved */
+                if (sel_on) {
+                    sel_bounds(&r0, &c0, &r1, &c1);
+                } else
+                    r0 = r1 = sa_r;
+                sb_r = r;
+                sb_c = c;
+                sel_on = TRUE;
+                sel_bounds(&n0, &m0, &n1, &m1);
+                (void)c0; (void)c1; (void)m0; (void)m1;
+                sel_redraw(r0 < n0 ? r0 : n0, r1 > n1 ? r1 : n1);
+                break;
+            }
             if (g == &vgad || (vpi.Flags & KNOBHIT)) {
                 LONG max = vt_history(vt);
                 LONG top = ((ULONG)vpi.VertPot * max + 0x7FFF) / 0xFFFF;
@@ -3378,6 +3656,7 @@ int main(int argc, char **argv)
         }
         con_free();
     }
+    clip_close();
     close_display(FALSE);
     if (ownfont) CloseFont(ownfont);
     cache_free();
