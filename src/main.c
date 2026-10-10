@@ -176,7 +176,7 @@ static ULONG ticks(void)
 }
 #endif
 static ULONG pf_vt, pf_draw, pf_pkt, pf_wait, pf_all0, pf_writes, pf_draws;
-static ULONG pf_scroll, pf_text, pf_cur, pf_knob, pf_rows;
+static ULONG pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill;
 static struct timeval pf_tv0;
 #define PF_START(v) ULONG v = ticks()
 #define PF_ADD(acc, v) (acc += ticks() - (v))
@@ -197,9 +197,14 @@ static LONG pen_for(ULONG rgb)
 {
     int i, best = -1;
     LONG d, bd = 0x7FFFFFFF;
+    static int mru;                     /* where the last one was found */
+    if (mru < npc && pc_rgb[mru] == rgb)
+        return pc_pen[mru];
     for (i = 0; i < npc; i++)
-        if (pc_rgb[i] == rgb)
+        if (pc_rgb[i] == rgb) {
+            mru = i;
             return pc_pen[i];
+        }
     if (npc < NPEN) {
         LONG p = ObtainBestPen(scr->ViewPort.ColorMap,
                                ((rgb >> 16) & 255) * 0x01010101,
@@ -234,6 +239,8 @@ static BOOL painter;                    /* rows built in memory (RTG) */
 static LONG pbase = -1;                 /* the clear's pen; -1: no mask */
 static UBYTE pmask;
 
+static void rp_forget(void);
+
 static void planes_reset(void)
 {
     if (!painter && !usett && rp->BitMap) {
@@ -244,6 +251,7 @@ static void planes_reset(void)
         pmask = 0xFF;
     }
     SetWriteMask(rp, pmask);
+    rp_forget();                        /* every pen must pass mask_pen */
 }
 
 static void planes_full(void)
@@ -265,18 +273,64 @@ static void mask_pen(LONG p)
     }
 }
 
+/* What the RastPort is set to, so a run in the same pens and style as
+ * the last costs no graphics calls (each one is dozens of instructions
+ * on a 14 MHz Amiga). Forgotten at every draw: others may touch rp. */
+static LONG c_apen = -1, c_bpen = -1;
+static ULONG c_argb = ~0UL, c_brgb = ~0UL;
+static int c_drmd = -1, c_style = -1;
+static BOOL rgb_memo;                   /* cell_rgb's last answer holds */
+
+static void rp_forget(void)
+{
+    c_apen = c_bpen = -1;
+    c_argb = c_brgb = ~0UL;
+    c_drmd = c_style = -1;
+    rgb_memo = FALSE;
+}
+
 static void apen(ULONG rgb)
 {
-    LONG p = pen_for(rgb);
+    LONG p;
+    if (rgb == c_argb)
+        return;
+    c_argb = rgb;
+    p = pen_for(rgb);
     mask_pen(p);
-    SetAPen(rp, p);
+    if (p != c_apen) {
+        SetAPen(rp, p);
+        c_apen = p;
+    }
 }
 
 static void bpen(ULONG rgb)
 {
-    LONG p = pen_for(rgb);
+    LONG p;
+    if (rgb == c_brgb)
+        return;
+    c_brgb = rgb;
+    p = pen_for(rgb);
     mask_pen(p);
-    SetBPen(rp, p);
+    if (p != c_bpen) {
+        SetBPen(rp, p);
+        c_bpen = p;
+    }
+}
+
+static void drmd(int m)
+{
+    if (m != c_drmd) {
+        SetDrMd(rp, m);
+        c_drmd = m;
+    }
+}
+
+static void softstyle(int st)
+{
+    if (st != c_style) {
+        SetSoftStyle(rp, st, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
+        c_style = st;
+    }
 }
 
 static void release_pens(void)
@@ -298,7 +352,26 @@ static ULONG pen_rgb(int i)
     return index_rgb(i);
 }
 
+static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg);
+
+/* Runs next to each other mostly share colours: the last answer is kept
+ * (forgotten with the RastPort state, at every draw). */
 static void cell_rgb(const VtCell *c, ULONG *fg, ULONG *bg)
+{
+    static ULONG kf, kb, rf, rb;
+    static UWORD ka;
+    if (rgb_memo && c->fg == kf && c->bg == kb && c->attr == ka) {
+        *fg = rf;
+        *bg = rb;
+        return;
+    }
+    cell_rgb_(c, fg, bg);
+    kf = c->fg; kb = c->bg; ka = c->attr;
+    rf = *fg; rb = *bg;
+    rgb_memo = TRUE;
+}
+
+static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg)
 {
     ULONG f = c->fg == VT_DEFAULT ? deffg : VT_IS_INDEX(c->fg)
             ? pen_rgb(c->fg & 255) : c->fg & 0xFFFFFF;
@@ -568,7 +641,7 @@ static void tt_run(const ULONG *u, const int *cols, int n, int y,
                    ULONG fg, UWORD attr)
 {
     int i;
-    SetDrMd(rp, JAM1);
+    drmd(JAM1);
     apen(fg);
     TT_SetFont(rp, tt_for(attr));
     TT_SetAttrs(rp, TT_SoftStyle, attr & VT_UNDERLINE
@@ -589,7 +662,7 @@ static void tt_run(const ULONG *u, const int *cols, int n, int y,
             TT_Text(rp, (APTR)(u + i), 1);
         }
     }
-    SetDrMd(rp, JAM2);
+    drmd(JAM2);
 }
 
 /* ---- plain (planar) screens: letters written straight to the planes ---
@@ -736,7 +809,7 @@ static void draw_cells(int r, int x0, int x1)
     int w, x, y = oy + r * ch;
     const VtCell *line = vt_line(vt, r, back, &w);
 
-    SetDrMd(rp, JAM2);
+    drmd(JAM2);
     x = x0;
     while (x <= x1) {
         const VtCell *c = x < w && line ? &line[x] : &empty;
@@ -773,14 +846,33 @@ static void draw_cells(int r, int x0, int x1)
             } else if (!draw_shape(cp, ox + x * cw, y)) {
                 UBYTE ch1 = fallback(cp);
                 bpen(bg);
-                SetSoftStyle(rp, style, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
+                softstyle(style);
                 Move(rp, ox + x * cw, y + cbase);
                 Text(rp, (STRPTR)&ch1, 1);
             }
             x++;
             continue;
         }
-        /* a run of ordinary characters that look the same */
+        /* a run of ordinary characters that look the same - first the
+         * common case in a tight loop: Latin-1 letters in exactly the
+         * same colours and style as the run's first */
+        if (line) {
+            const VtCell *d = &line[x];
+            int lim = x1 < w - 1 ? x1 : w - 1;
+            ULONG cf = c->fg, cb = c->bg;
+            UWORD ca = c->attr;
+            if (lim - x >= (int)sizeof text)
+                lim = x + (int)sizeof text - 1;
+            while (x <= lim) {
+                ULONG dc = d->cp;
+                if (dc > 0xFF || d->fg != cf || d->bg != cb || d->attr != ca)
+                    break;
+                text[n++] = dc < 0x20 ? ' ' : (UBYTE)dc;
+                d++;
+                x++;
+            }
+        }
+        /* then the rest, one by one */
         while (x <= x1 && n < (int)sizeof text) {
             const VtCell *d = x < w && line ? &line[x] : &empty;
             ULONG f2, b2;
@@ -818,8 +910,7 @@ static void draw_cells(int r, int x0, int x1)
             bpen(bg);
             PF_START(tt);
             if (!(direct_on && direct_text(start, y, text, n, style))) {
-                SetSoftStyle(rp, style, FSF_BOLD | FSF_ITALIC |
-                                        FSF_UNDERLINED);
+                softstyle(style);
                 Move(rp, ox + start * cw, y + cbase);
                 Text(rp, (STRPTR)text, n);
             }
@@ -828,7 +919,7 @@ static void draw_cells(int r, int x0, int x1)
         if (c->attr & VT_STRIKE)
             hline(ox + start * cw, ox + x * cw - 1, y + ch / 2, 1);
     }
-    SetSoftStyle(rp, 0, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
+    softstyle(0);
 }
 
 /* The text area's edges: the margin left of column 0 and whatever is
@@ -874,6 +965,8 @@ static void draw_span(int r, int a, int b)
         return;
     if (last >= a)
         draw_cells(r, a, last);
+    {
+    PF_START(tf);
     apen(defbg);
     if (a == 0)
         RectFill(rp, win->BorderLeft, y, ox - 1, y + ch - 1);
@@ -881,6 +974,8 @@ static void draw_span(int r, int a, int b)
         int x1 = b == cols - 1 ? area_right() : ox + (b + 1) * cw - 1;
         if (ox + (last + 1) * cw <= x1)
             RectFill(rp, ox + (last + 1) * cw, y, x1, y + ch - 1);
+    }
+    PF_ADD(pf_fill, tf);
     }
     if (r < (int)sizeof shown_blank) {
         if (last >= a)
@@ -944,7 +1039,7 @@ static void draw_cursor(BOOL on)
             tt_run(&u, &col, 1, oy + y * ch, bg, c.attr);
         } else if (c.cp > ' ' && c.cp <= 0xFF) {
             t = (UBYTE)c.cp;
-            SetDrMd(rp, JAM1);
+            drmd(JAM1);
             apen(bg);
             Move(rp, ox + x * cw, oy + y * ch + cbase);
             Text(rp, (STRPTR)&t, 1);
@@ -1408,6 +1503,7 @@ static void redraw_all(void)
     int r;
     VtChanges chg;
     forget_shown();
+    rp_forget();
     planes_full();
     apen(defbg);
     RectFill(rp, win->BorderLeft, win->BorderTop,
@@ -1430,6 +1526,7 @@ static void refresh(void)
     int r;
     if (!vt_take_changes(vt, &chg))
         return;
+    rp_forget();
     draw_cursor(FALSE);
     flood = chg.all || chg.scroll_n != 0;
     if (painter) {
@@ -2958,10 +3055,10 @@ int main(int argc, char **argv)
         if (f) {
             struct timeval t1;
             term_now(&t1);
-            FPrintf(f, (STRPTR)"real s %ld; ticks: all %ld wait %ld packets %ld vt %ld draw %ld (scroll %ld text %ld cursor %ld knob %ld rows %ld) draws %ld writes %ld\n",
+            FPrintf(f, (STRPTR)"real s %ld; ticks: all %ld wait %ld packets %ld vt %ld draw %ld (scroll %ld text %ld cursor %ld knob %ld rows %ld fill %ld) draws %ld writes %ld\n",
                     (LONG)(t1.tv_secs - pf_tv0.tv_secs),
                     (ticks() - pf_all0), pf_wait, pf_pkt,
-                    pf_vt, pf_draw, pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_draws, pf_writes);
+                    pf_vt, pf_draw, pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill, pf_draws, pf_writes);
             Close(f);
         }
     }
