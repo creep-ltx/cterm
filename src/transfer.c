@@ -95,6 +95,18 @@ static void refuse(void)
     send_data(can, sizeof can);
 }
 
+/* A transfer is running in some tab. The engines are not resumable: one
+ * started while another runs would run inside it (x_get serves the other
+ * tabs) and freeze it until it ended - so one at a time, in all tabs. */
+static BOOL xfer_running(void)
+{
+    int i;
+    for (i = 0; i < ntabs; i++)
+        if (tabs[i]->t_xfer)
+            return TRUE;
+    return FALSE;
+}
+
 /* One transfer: its tab, what the panel shows, its telnet parser. */
 struct XCtx {
     struct Tab *tab;
@@ -540,7 +552,13 @@ void transfer_menu(int what)
         return;
     }
     if (what == M_HSEND) {
-        /* Hydra starts from the host; these wait for its next session */
+        /* Hydra starts from the host; these wait for its next session
+         * (not while one runs: it is sending from this very list) */
+        if (xfer_running()) {
+            say("\r\n\x1b[2m[one transfer at a time: wait for the other one]\x1b[0m\r\n");
+            refresh();
+            return;
+        }
         if (!hq && !(hq = AllocVec(NUP * 256, MEMF_ANY)))
             return;
         nhq = ask_uploads(hq, paths, "CTerm: files to send with Hydra");
@@ -555,8 +573,9 @@ void transfer_menu(int what)
         refresh();
         return;
     }
-    if (T->t_xfer) {
-        DisplayBeep(scr);               /* one at a time in a tab */
+    if (xfer_running()) {
+        say("\r\n\x1b[2m[one transfer at a time: wait for the other one]\x1b[0m\r\n");
+        refresh();
         return;
     }
     struct XMod xm;
@@ -620,6 +639,11 @@ BOOL transfer_take(UBYTE *buf, LONG n)
     }
     if (!kind || !win || T->t_xfer)
         return FALSE;
+    if (xfer_running()) {               /* another tab's: say no, cleanly */
+        refuse();
+        say("\r\n\x1b[2m[a transfer was refused: another one is running]\x1b[0m\r\n");
+        return TRUE;
+    }
     if (at > 0) {
         if (sshmode) {
             log_bytes(buf, at);

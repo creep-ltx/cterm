@@ -251,7 +251,8 @@ static UBYTE pmask;
 
 static void planes_reset(void)
 {
-    if (!painter && !usett && rp->BitMap) {
+    /* only real planes: a graphics card's pixels are not planes */
+    if (planar && !painter && !usett && rp->BitMap) {
         pbase = pen_for(defbg);
         pmask = 0;
     } else {
@@ -1579,6 +1580,8 @@ void draw_tabbar(void)
 {
     int h = tabbar_h(), x0 = win->BorderLeft, y0 = win->BorderTop;
     int x1 = win->Width - win->BorderRight - 1, wd = x1 - x0 + 1, i;
+    LONG keepbase = pbase;
+    UBYTE keepmask = pmask;
     if (!h)
         return;
     planes_full();
@@ -1610,7 +1613,12 @@ void draw_tabbar(void)
     }
     if (usett)
         tt_attach();                    /* the window's font for TrueType */
-    planes_reset();
+    /* the text's mask again, as it was: narrowing it afresh here would
+     * stop scrolls and clears from reaching planes the text uses (it is
+     * drawn during transfers, not only after a full clear) */
+    pbase = keepbase;
+    pmask = keepmask;
+    SetWriteMask(rp, pmask);
     rp_forget();
 }
 
