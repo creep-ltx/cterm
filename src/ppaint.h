@@ -19,7 +19,7 @@ struct PPRow {
     LONG k;                 /* the rest: the asm's own */
     ULONG e;
     LONG key, yy, doff, ll;
-    struct { UBYTE *dst; LONG pbit; ULONG a, x; } pt[9];
+    struct { UBYTE *dst; ULONG a, x; LONG pbit; } pt[9];
 };
 void pp_row(struct PPRow *f);
 void pp_row1(struct PPRow *f);          /* one plane */

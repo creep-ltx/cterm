@@ -41,7 +41,7 @@ PP_KEY	= 60		; pens of the A/X in PP_PT (-1: none)
 PP_YY	= 64		; the slab's byte offset in a glyph block
 PP_DOFF	= 68		; the slab's byte offset in a plane
 PP_LL	= 72		; lines left from the slab on
-PP_PT	= 76		; planes: dst.l, pbit.l, A.l, X.l ... then dst 0
+PP_PT	= 76		; planes: dst.l, A.l, X.l, pbit.l ... then dst 0
 
 	section	.text,code
 
@@ -84,15 +84,15 @@ _pp_row:
 	lea	PP_PT(a4),a2
 .u:	tst.l	(a2)
 	beq	.slabs
-	move.l	4(a2),d6		; the plane's bit
+	move.l	12(a2),d6		; the plane's bit
 	btst	d6,d3
 	sne	d7
 	extb.l	d7
-	move.l	d7,8(a2)		; A
+	move.l	d7,4(a2)		; A
 	btst	d6,d2
 	sne	d7
 	extb.l	d7
-	move.l	d7,12(a2)		; X
+	move.l	d7,8(a2)		; X
 	lea	16(a2),a2
 	bra.s	.u
 .mix:	moveq	#-1,d2
@@ -100,7 +100,7 @@ _pp_row:
 	lea	PP_PT(a4),a2
 .m:	tst.l	(a2)
 	beq	.slabs
-	move.l	4(a2),d6
+	move.l	12(a2),d6
 	moveq	#0,d2			; A
 	moveq	#0,d7			; X
 	moveq	#0,d1			; owner * 4
@@ -116,14 +116,14 @@ _pp_row:
 .m2:	addq.l	#4,d1
 	cmp.l	#20,d1
 	bne.s	.mo
-	move.l	d2,8(a2)
-	move.l	d7,12(a2)
+	move.l	d2,4(a2)
+	move.l	d7,8(a2)
 	lea	16(a2),a2
 	bra.s	.m
 	; ---- four lines at a time: the cached part ----
-.slabs:	moveq	#0,d5
+.slabs:	sub.l	a6,a6			; the slab's offset in a plane
+	moveq	#0,d5
 	move.l	d5,PP_YY(a4)
-	move.l	d5,PP_DOFF(a4)
 	move.l	PP_CH(a4),PP_LL(a4)
 .slab:	move.l	PP_YY(a4),d5
 	move.l	(a0),a1
@@ -173,16 +173,26 @@ _pp_row:
 	swap	d3
 	move.w	d3,d1
 	move.l	d5,d3
+	; per plane only its dst, A and X are read: the slab's line count
+	; (a1), its offset (a6) and whether it is an edge are known here
+	move.l	PP_LL(a4),d5
+	cmp.l	#4,d5
+	ble.s	.ll
+	moveq	#4,d5
+.ll:	move.l	d5,a1
 	lea	PP_PT(a4),a2
-.pl:	move.l	(a2),d4
-	beq.s	.pd
-	move.l	d4,a3
-	add.l	PP_DOFF(a4),a3
-	movem.l	8(a2),d6/d7		; A, X
-	lea	16(a2),a2
-	move.l	PP_LL(a4),d5		; lines left
 	cmp.l	#-1,PP_E(a4)
 	bne	.pe
+.pl:	movem.l	(a2),d4/d6/d7		; dst, A, X
+	tst.l	d4
+	beq.s	.pd
+	lea	16(a2),a2
+	move.l	d4,a3
+	add.l	a6,a3
+	move.l	a1,d5
+	ifd	NOWRITE
+	bra	.pl
+	endif
 	move.l	d0,d4
 	and.l	d6,d4
 	eor.l	d7,d4
@@ -212,7 +222,7 @@ _pp_row:
 .pd:	addq.l	#8,PP_YY(a4)
 	move.l	a5,d5
 	lsl.l	#2,d5
-	add.l	d5,PP_DOFF(a4)
+	add.l	d5,a6
 	subq.l	#4,PP_LL(a4)
 	bgt	.slab
 .next:	; the next group: four cells on, every plane's dst one long on
@@ -231,26 +241,33 @@ _pp_row:
 	rts
 ; an edge group's lines (outside the cached loop): the pixels outside
 ; the span are kept, ((v ^ dst) & E) ^ dst
-.pe:	move.l	d0,d4
+.pe:	movem.l	(a2),d4/d6/d7
+	tst.l	d4
+	beq	.pd
+	lea	16(a2),a2
+	move.l	d4,a3
+	add.l	a6,a3
+	move.l	a1,d5
+	move.l	d0,d4
 	bsr.s	.per
-	beq	.pl
+	beq.s	.pe
 	move.l	d1,d4
 	bsr.s	.per
-	beq	.pl
+	beq.s	.pe
 	move.l	d2,d4
 	bsr.s	.per
-	beq	.pl
+	beq.s	.pe
 	move.l	d3,d4
 	bsr.s	.per
-	bra	.pl
+	bra.s	.pe
 .per:	and.l	d6,d4
 	eor.l	d7,d4
-	move.l	(a3),a1
-	exg	a1,d6			; d6 = dst, a1 = A (kept)
+	move.l	d6,-(sp)
+	move.l	(a3),d6
 	eor.l	d6,d4
 	and.l	PP_E(a4),d4
 	eor.l	d6,d4
-	exg	a1,d6
+	move.l	(sp)+,d6
 	move.l	d4,(a3)
 	add.l	a5,a3
 	subq.l	#1,d5
@@ -297,7 +314,7 @@ ROW1	macro				; \1: 1 = phase 0
 	cmp.l	PP_KEY(a4),d2
 	beq.s	.sl0\@
 	move.l	d2,PP_KEY(a4)
-	move.l	PP_PT+4(a4),d4		; the plane's bit
+	move.l	PP_PT+12(a4),d4		; the plane's bit
 	move.w	d2,d3
 	lsr.w	#8,d3
 	btst	d4,d3
@@ -309,7 +326,7 @@ ROW1	macro				; \1: 1 = phase 0
 	bra.s	.sl0\@
 .mx\@:	moveq	#-1,d2
 	move.l	d2,PP_KEY(a4)
-	move.l	PP_PT+4(a4),d4
+	move.l	PP_PT+12(a4),d4
 	moveq	#0,d6
 	moveq	#0,d7
 	moveq	#0,d1
