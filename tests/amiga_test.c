@@ -140,6 +140,19 @@ int main(void)
               l[6].cp == 0xFC, "CP437 high bytes are the PC's characters");
         vt_free(pc);
     }
+    {   /* mouse, focus and sync modes */
+        Vt *m = vt_new(20, 5, 0);
+        int sgr;
+        feed(m, "\x1b[?1000h\x1b[?1006h");
+        CHECK(vt_mouse(m, &sgr) == 1000 && sgr == 1, "1000 + 1006 on");
+        feed(m, "\x1b[?1003h\x1b[?1004h\x1b[?2026h");
+        CHECK(vt_mouse(m, &sgr) == 1003 && vt_focus(m) && vt_sync(m),
+              "1003, focus, sync on");
+        feed(m, "\x1b[?1003l\x1b[?2026l\x1b" "c");
+        CHECK(vt_mouse(m, &sgr) == 0 && !vt_sync(m) && !vt_focus(m) && !sgr,
+              "off again, and RIS clears them");
+        vt_free(m);
+    }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     vt_free(v);
     return fails != 0;

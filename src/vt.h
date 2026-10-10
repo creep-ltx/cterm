@@ -80,6 +80,12 @@ int vt_app_keypad(const Vt *vt);
 int vt_bracketed_paste(const Vt *vt);
 int vt_alt_screen(const Vt *vt);
 int vt_reverse_video(const Vt *vt);
+/* What the program asked of the mouse: 0 none, 9 presses (X10), 1000
+ * presses and releases, 1002 + motion while pressed, 1003 + all motion;
+ * *sgr: the SGR form (1006). */
+int vt_mouse(const Vt *vt, int *sgr);
+int vt_focus(const Vt *vt);             /* 1004: focus in/out reports */
+int vt_sync(const Vt *vt);              /* 2026: hold drawing till done */
 const char *vt_title(Vt *vt, int *changed);
 int vt_take_bell(Vt *vt);
 

@@ -137,6 +137,9 @@ static void tab_close_current(void);
 static void tab_show(int i);
 static struct Tab *tab_new(void);
 static BOOL connect_out(void);
+static BOOL mouse_to_host(UWORD q);
+static void mouse_cell(int mx, int my, int *r, int *c);
+static void mouse_send(int b, int r, int c, BOOL release, UWORD q);
 
 /* ======================================================================
  * Colours
@@ -1688,6 +1691,16 @@ static void refresh(void)
 {
     VtChanges chg;
     int r;
+    static int syncwait;
+    /* the program is between "begin" and "end" of a frame (2026): show
+     * the finished one - but never hold the window more than ~8 frames */
+    if (vt_sync(vt) && syncwait < 8) {
+        syncwait++;
+        owed = TRUE;
+        con_arm_render(20000);
+        return;
+    }
+    syncwait = 0;
     if (!vt_take_changes(vt, &chg))
         return;
     rp_forget();
@@ -2273,8 +2286,15 @@ static void key(struct IntuiMessage *m)
         return;
     }
     switch (code) {
-    case 0x7A: scroll_view(back + 3); return;           /* the wheel */
-    case 0x7B: scroll_view(back - 3); return;
+    case 0x7A: case 0x7B:                                /* the wheel */
+        if (mouse_to_host(0) && !back) {
+            int r, c;
+            mouse_cell(win->MouseX, win->MouseY, &r, &c);
+            mouse_send(code == 0x7A ? 64 : 65, r, c, FALSE, q);
+            return;
+        }
+        scroll_view(back + (code == 0x7A ? 3 : -3));
+        return;
     case 0x4C: case 0x4D: case 0x4E: case 0x4F: {        /* arrows */
         static const char dirs[4] = { 'A', 'B', 'C', 'D' };
         char d = dirs[code - 0x4C];
@@ -4302,6 +4322,69 @@ static void settings_events(void)
         finish_settings(how);
 }
 
+/* ---- the mouse for the program in a host's tab (xterm's reports) ------
+ * The program asks (CSI ?1000h and friends); then clicks, the wheel and,
+ * when asked, motion go to it, and Shift+drag still marks text here. The
+ * right button stays the Amiga's menu button. */
+
+static int mbutton = -1;                /* held, as the program sees it */
+static int mlast_r = -1, mlast_c = -1;  /* the cell last reported */
+static BOOL mreporting;                 /* ReportMouse is on */
+
+/* The program wants the mouse (and the person is not Shift-marking). */
+static BOOL mouse_to_host(UWORD q)
+{
+    int sgr;
+    return !local && sock >= 0 && vt_mouse(vt, &sgr) &&
+           !(q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT));
+}
+
+/* b: 0 left, 1 middle, 2 right, 3 release (old form), +32 motion, 64/65
+ * the wheel; the cell is 0-based. */
+static void mouse_send(int b, int r, int c, BOOL release, UWORD q)
+{
+    char out[40];
+    int sgr, mode = vt_mouse(vt, &sgr);
+    if (mode == 9) {                    /* X10: presses only, no keys */
+        if (release || (b & 32))
+            return;
+    } else {
+        if (q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) b |= 4;
+        if (q & (IEQUALIFIER_LALT | IEQUALIFIER_RALT)) b |= 8;
+        if (q & IEQUALIFIER_CONTROL) b |= 16;
+    }
+    if (sgr) {
+        strcpy(out, "\x1b[<");
+        numstr_cat(out, b);
+        strcat(out, ";");
+        numstr_cat(out, c + 1);
+        strcat(out, ";");
+        numstr_cat(out, r + 1);
+        strcat(out, release ? "m" : "M");
+        send_data((UBYTE *)out, strlen(out));
+    } else {
+        UBYTE o[6];
+        if (c + 1 + 32 > 255 || r + 1 + 32 > 255)
+            return;                     /* the old form ends at 223 */
+        o[0] = 0x1b; o[1] = '['; o[2] = 'M';
+        o[3] = 32 + (release && !(b & 64) ? 3 | (b & ~3) : b);
+        o[4] = 32 + c + 1;
+        o[5] = 32 + r + 1;
+        send_data(o, 6);
+    }
+}
+
+/* Motion reports and selection drags need Intuition's mouse moves. */
+static void mouse_reporting(void)
+{
+    int sgr, mode = !local && sock >= 0 ? vt_mouse(vt, &sgr) : 0;
+    BOOL want = sel_drag || mode == 1003 || (mode == 1002 && mbutton >= 0);
+    if (want != mreporting && win) {
+        ReportMouse(want, win);
+        mreporting = want;
+    }
+}
+
 static BOOL window_events(void)
 {
     struct IntuiMessage *m;
@@ -4365,6 +4448,12 @@ static BOOL window_events(void)
             }
             break;
         }
+        case IDCMP_ACTIVEWINDOW:
+        case IDCMP_INACTIVEWINDOW:
+            if (!local && sock >= 0 && vt_focus(vt))
+                send_data((UBYTE *)(copy.Class == IDCMP_ACTIVEWINDOW
+                                        ? "\x1b[I" : "\x1b[O"), 3);
+            break;
         case IDCMP_MOUSEBUTTONS:
             if (copy.Code == SELECTDOWN && tabbar_h() &&
                 copy.MouseY >= win->BorderTop &&
@@ -4373,6 +4462,21 @@ static BOOL window_events(void)
                 i = (copy.MouseX - win->BorderLeft) * ntabs / wd;
                 if (i >= 0 && i < ntabs)
                     tab_show(i);
+                break;
+            }
+            if ((copy.Code == SELECTDOWN || copy.Code == MIDDLEDOWN ||
+                 ((copy.Code == SELECTUP || copy.Code == MIDDLEUP) &&
+                  mbutton >= 0)) &&
+                mouse_to_host(copy.Qualifier)) {
+                int r, c;
+                BOOL up = copy.Code == SELECTUP || copy.Code == MIDDLEUP;
+                int b = copy.Code == MIDDLEDOWN || copy.Code == MIDDLEUP;
+                mouse_cell(copy.MouseX, copy.MouseY, &r, &c);
+                mouse_send(b, r, c, up, copy.Qualifier);
+                mbutton = up ? -1 : b;
+                mlast_r = r;
+                mlast_c = c;
+                mouse_reporting();
                 break;
             }
             if (copy.Code == SELECTDOWN && copy.MouseX >= ox &&
@@ -4384,10 +4488,10 @@ static BOOL window_events(void)
                 sa_r = sb_r = r;
                 sa_c = sb_c = c;
                 sel_drag = TRUE;        /* a selection only once it moves */
-                ReportMouse(TRUE, win);
+                mouse_reporting();
             } else if (copy.Code == SELECTUP && sel_drag) {
                 sel_drag = FALSE;
-                ReportMouse(FALSE, win);
+                mouse_reporting();
             }
             break;
         case IDCMP_GADGETDOWN:
@@ -4399,6 +4503,19 @@ static BOOL window_events(void)
             break;
         case IDCMP_GADGETUP:
         case IDCMP_MOUSEMOVE:
+            if (copy.Class == IDCMP_MOUSEMOVE && !sel_drag &&
+                mouse_to_host(0)) {
+                int r, c, sgr, mode = vt_mouse(vt, &sgr);
+                mouse_cell(copy.MouseX, copy.MouseY, &r, &c);
+                if ((r != mlast_r || c != mlast_c) &&
+                    (mode == 1003 || (mode == 1002 && mbutton >= 0))) {
+                    mouse_send(32 + (mbutton >= 0 ? mbutton : 3), r, c,
+                               FALSE, copy.Qualifier);
+                    mlast_r = r;
+                    mlast_c = c;
+                }
+                break;
+            }
             if (copy.Class == IDCMP_MOUSEMOVE && sel_drag) {
                 int r, c, r0, c0, r1, c1, n0, n1, m0, m1;
                 mouse_cell(copy.MouseX, copy.MouseY, &r, &c);
@@ -4846,6 +4963,7 @@ static void run(void)
             draw_now();
         if (hostdata)
             refresh();
+        mouse_reporting();
         if (want_switch)
             switch_display();
         if (!win)

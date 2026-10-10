@@ -44,6 +44,8 @@ struct Vt {
     int top, bot;                   /* the scroll region, inclusive */
     int autowrap, origin, insert, lnm, cursor_on, app_cursor, app_keypad;
     int bracketed, reverse, utf8;
+    int mouse, mouse_sgr;               /* 9, 1000, 1002, 1003; SGR form */
+    int focus, sync;                    /* 1004 focus reports; 2026 */
     int amigamode;                  /* the Amiga console's ways (local) */
     int cp437;                      /* bytes 0x80-0xFF are the PC's */
     unsigned long rawev;            /* raw event classes asked for: CSI n{ */
@@ -622,6 +624,7 @@ static void full_reset(Vt *v)
     v->lnm = v->amigamode;                  /* the Amiga: LF is a new line */
     v->cursor_on = 1;
     v->app_cursor = v->app_keypad = v->bracketed = v->reverse = 0;
+    v->mouse = v->mouse_sgr = v->focus = v->sync = 0;
     v->g[0] = v->g[1] = 'B';
     v->gl = 0;
     reset_tabs(v);
@@ -718,7 +721,13 @@ static void set_mode(Vt *v, int on)
                 }
                 break;
             case 2004: v->bracketed = on; break;
-            default: break;             /* mouse, focus, sync: later */
+            case 9: case 1000: case 1002: case 1003:
+                v->mouse = on ? p : 0;  /* the last one asked wins */
+                break;
+            case 1006: v->mouse_sgr = on; break;
+            case 1004: v->focus = on; break;
+            case 2026: v->sync = on; v->any_dirty = 1; break;
+            default: break;
             }
         } else if (v->priv == 0) {
             if (p == 4) v->insert = on;
@@ -737,6 +746,10 @@ static int mode_state(Vt *v, int p)
     case 25: return v->cursor_on ? 1 : 2;
     case 1049: return v->alt ? 1 : 2;
     case 2004: return v->bracketed ? 1 : 2;
+    case 9: case 1000: case 1002: case 1003: return v->mouse == p ? 1 : 2;
+    case 1006: return v->mouse_sgr ? 1 : 2;
+    case 1004: return v->focus ? 1 : 2;
+    case 2026: return v->sync ? 1 : 2;
     default: return 0;                  /* not recognised */
     }
 }
@@ -1515,6 +1528,9 @@ int vt_app_keypad(const Vt *v) { return v->app_keypad; }
 int vt_bracketed_paste(const Vt *v) { return v->bracketed; }
 int vt_alt_screen(const Vt *v) { return v->alt; }
 int vt_reverse_video(const Vt *v) { return v->reverse; }
+int vt_mouse(const Vt *v, int *sgr) { *sgr = v->mouse_sgr; return v->mouse; }
+int vt_focus(const Vt *v) { return v->focus; }
+int vt_sync(const Vt *v) { return v->sync; }
 
 const VtCell *vt_line(const Vt *v, int r, int back, int *width)
 {
