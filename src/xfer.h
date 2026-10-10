@@ -25,16 +25,26 @@ struct XferIO {
      * files and bytes left, this one's included. May be NULL. */
     void (*batch)(void *u, long files, unsigned long bytes);
     /* Files. A download is made in the download drawer under the name it
-     * came with (the caller makes it unique); the handle is opaque. */
+     * came with (the caller makes it unique); the handle is opaque. size:
+     * what is coming (0: not known). have: NULL when the protocol cannot
+     * go on from a part, else where it goes on - the bytes a part of the
+     * same file from an earlier try already holds (0: from the start).
+     * Writes go after those. */
     void *(*wopen)(void *u, const char *name, unsigned long size,
-                   char *made, int madelen);
+                   char *made, int madelen, unsigned long *have);
     long (*wwrite)(void *u, void *f, const unsigned char *b, long n);
+    /* ok: the file is complete. Not ok: it is kept as a part that a
+     * later try may go on from (CTerm: "name.part"). */
     void (*wclose)(void *u, void *f, int ok);
     /* An upload: open by the path the person chose; its size, its name. */
     void *(*ropen)(void *u, const char *path, unsigned long *size);
     long (*rread)(void *u, void *f, unsigned char *b, long n);
     int (*rseek)(void *u, void *f, unsigned long pos);
     void (*rclose)(void *u, void *f);
+    /* At the end: bytes the protocol read from the host but did not use
+     * (what the host sent after the session, a BBS prompt): for the
+     * screen. May be called more than once, in order; may be NULL. */
+    void (*rest)(void *u, const unsigned char *b, long n);
 };
 
 /* The start of a Zmodem session in what the host sent: 1 the host sends

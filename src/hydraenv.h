@@ -84,7 +84,6 @@ int   fexist       (char *filename);
 int   carrier      (void);
 void  rem_chat     (byte *data, word len);
 char *h_revdate    (long revstamp);
-long  freespace    (char *drivepath);
 void  resultlog    (boolean xmit, char *fname, long bytes, long xfertime);
 void  sys_idle     (void);
 void  com_putblock (byte *s, word len);
@@ -103,9 +102,9 @@ long  dos_tell     (int handle);
 int   dos_read     (int handle, void *buf, word len);
 int   dos_write    (int handle, void *buf, word len);
 int   hy_stat      (char *pathname, long *size, long *ftime);
-void  hy_finfo     (const char *s, long *ftime, long *fsize, char *name,
-                    int max);
-char *xfer_init    (char *fname, long fsize, long ftime);
+void  hy_finfo     (const char *s, long *ftime, unsigned long *fsize,
+                    char *name, int max);
+char *xfer_init    (char *fname, unsigned long fsize, long ftime);
 boolean xfer_bad   (void);
 char *xfer_okay    (void);
 

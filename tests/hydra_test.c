@@ -3,6 +3,9 @@
  * against HydraCom 1.00 itself built for Linux (tests/hydra/hcref, see
  * tests/hydra/build.sh): downloads, uploads, and both at once, over a
  * socketpair, every file compared. Built 32-bit like HydraCom (-m32).
+ * Also: going on from a part, the BBS's prompt after the session, no
+ * memory for the session's buffers (malloc wrapped: -Wl,--wrap=malloc),
+ * names and sizes in FINFO.
  *
  * (Harness from tests/zmodem_test.c:
  * lsz sends to us, we send to lrz, over a socketpair, with small and big
@@ -39,7 +42,33 @@ struct Line {
     unsigned onoise;                    /* the same for what we send */
     unsigned seed;
     char down[256];
+    int together;                       /* reads wait for a quiet moment */
+    char part[610], whole[600];         /* the download open now */
+    long opens, closes, okcloses, written;
+    unsigned char rest[4096];           /* what came back after the end */
+    long nrest;
 };
+
+/* malloc and free, counted (and made to fail) for the session's own */
+void *__real_malloc(size_t n);
+void __real_free(void *p);
+static long live, mallocs, failat;
+void *__wrap_malloc(size_t n)
+{
+    void *p;
+    if (failat && ++mallocs == failat)
+        return NULL;
+    p = __real_malloc(n);
+    if (p)
+        live++;
+    return p;
+}
+void __wrap_free(void *p)
+{
+    if (p)
+        live--;
+    __real_free(p);
+}
 
 static long get(void *u, unsigned char *b, long max, long ms)
 {
@@ -51,6 +80,12 @@ static long get(void *u, unsigned char *b, long max, long ms)
     k = read(l->fd, b, max);
     if (k <= 0)
         return -1;
+    while (l->together && k < max && poll(&p, 1, 100) > 0) {
+        long j = read(l->fd, b + k, max - k);   /* the host's next bytes */
+        if (j <= 0)                             /* in the same read */
+            break;
+        k += j;
+    }
     if (l->noise) {                     /* a bad line: flip and drop */
         long i, j = 0;
         for (i = 0; i < k; i++) {
@@ -106,24 +141,54 @@ static void show(void *u, const char *name, unsigned long done,
         printf("     %s %s\n", name, what == 1 ? "done" : what == 2 ? "skipped" : "failed");
 }
 
+/* as CTerm's x_wopen: written as name.part, renamed when whole; a part
+ * shorter than the file is gone on from when the protocol can */
 static void *wopen(void *u, const char *name, unsigned long size, char *made,
-                   int madelen)
+                   int madelen, unsigned long *have)
 {
     struct Line *l = u;
-    char path[512];
-    (void)size;
-    snprintf(path, sizeof path, "%s/%s", l->down, name);
+    struct stat st;
+    snprintf(l->whole, sizeof l->whole, "%s/%s", l->down, name);
+    snprintf(l->part, sizeof l->part, "%s.part", l->whole);
     snprintf(made, madelen, "%s", name);
-    return fopen(path, "wb");
+    l->opens++;
+    if (have) {
+        *have = 0;
+        if (!stat(l->part, &st) && st.st_size > 0 &&
+            (unsigned long)st.st_size < size) {
+            *have = (unsigned long)st.st_size;
+            return fopen(l->part, "ab");
+        }
+    }
+    return fopen(l->part, "wb");
 }
 
 static long wwrite(void *u, void *f, const unsigned char *b, long n)
 {
-    (void)u;
+    struct Line *l = u;
+    l->written += n;
     return (long)fwrite(b, 1, n, f);
 }
 
-static void wclose(void *u, void *f, int ok) { (void)u; (void)ok; fclose(f); }
+static void wclose(void *u, void *f, int ok)
+{
+    struct Line *l = u;
+    fclose(f);
+    l->closes++;
+    if (ok) {
+        l->okcloses++;
+        rename(l->part, l->whole);
+    }
+}
+
+static void rest(void *u, const unsigned char *b, long n)
+{
+    struct Line *l = u;
+    if (l->nrest + n <= (long)sizeof l->rest) {
+        memcpy(l->rest + l->nrest, b, n);
+        l->nrest += n;
+    }
+}
 
 static void *ropen(void *u, const char *path, unsigned long *size)
 {
@@ -213,6 +278,7 @@ static XferIO io_for(struct Line *l)
     io.get = get; io.put = put; io.stop = stop; io.show = show;
     io.wopen = wopen; io.wwrite = wwrite; io.wclose = wclose;
     io.ropen = ropen; io.rread = rread; io.rseek = rseek; io.rclose = rclose;
+    io.rest = rest;
     return io;
 }
 
@@ -287,7 +353,8 @@ static void drawers(void)
         { "plain.lha", "plain.lha" }, { "dir/", "" },
     };
     char s[200], name[64];
-    long t, sz;
+    long t;
+    unsigned long sz;
     int i;
     for (i = 0; i < (int)(sizeof in / sizeof in[0]); i++) {
         strcpy(s, "0000000000000400000000000000000000000000");
@@ -295,6 +362,97 @@ static void drawers(void)
         hy_finfo(s, &t, &sz, name, sizeof name);
         CHECK(!strcmp(name, in[i][1]) && sz == 0x400, in[i][0]);
     }
+    /* sizes past 2 GB stay what they are (no negative long) */
+    hy_finfo("00000000c0000000000000000000000000000000big.iso", &t, &sz,
+             name, sizeof name);
+    CHECK(sz == 0xc0000000UL && !strcmp(name, "big.iso"), "FINFO size 3 GB");
+}
+
+/* HydraCom sends random.bin while a part of it (100000 bytes) is here
+ * from an earlier try: only the rest comes */
+static void resume(void)
+{
+    struct Line l;
+    XferIO io;
+    char *argv[6];
+    int st, got;
+    pid_t p;
+    memset(&l, 0, sizeof l);
+    strcpy(l.down, DIR "/down");
+    system("rm -rf " DIR "/down " DIR "/hcdown && mkdir -p " DIR "/down "
+           DIR "/hcdown && head -c 100000 " DIR "/src/random.bin > "
+           DIR "/down/random.bin.part");
+    argv[0] = HCREF;
+    argv[1] = "-d";
+    argv[2] = DIR "/hcdown/";
+    argv[3] = DIR "/src/random.bin";
+    argv[4] = NULL;
+    p = child(argv, NULL, &l.fd);
+    io = io_for(&l);
+    got = hy_session(&io, NULL, 0, NULL, 0, 1);
+    waitpid(p, &st, 0);
+    close(l.fd);
+    CHECK(got == 1, "resume: 1 file went");
+    CHECK(l.written == 300000 - 100000, "resume: only the 200000 missing bytes came");
+    CHECK(same(DIR "/src/random.bin", DIR "/down/random.bin"), "resume: random.bin came the same");
+    CHECK(access(DIR "/down/random.bin.part", F_OK) != 0, "resume: no part left");
+    CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "resume: HydraCom ended well");
+}
+
+/* The BBS's prompt right after the session comes back for the screen -
+ * and nothing of Hydra's own packets with it */
+static void prompt_after(void)
+{
+    struct Line l;
+    XferIO io;
+    char *argv[4];
+    int st, got, k;
+    long i, dle = 0;
+    pid_t p;
+    memset(&l, 0, sizeof l);
+    l.together = 1;
+    strcpy(l.down, DIR "/down");
+    system("rm -rf " DIR "/down " DIR "/hcdown && mkdir -p " DIR "/down " DIR "/hcdown");
+    argv[0] = "/bin/sh";
+    argv[1] = "-c";
+    argv[2] = HCREF " -d " DIR "/hcdown/ " DIR "/src/text.txt; printf 'BBS prompt> '";
+    argv[3] = NULL;
+    p = child(argv, NULL, &l.fd);
+    io = io_for(&l);
+    got = hy_session(&io, NULL, 0, NULL, 0, 1);
+    while ((k = (int)get(&l, l.rest + l.nrest, sizeof l.rest - l.nrest, 2000)) > 0)
+        l.nrest += k;
+    waitpid(p, &st, 0);
+    close(l.fd);
+    for (i = 0; i < l.nrest; i++)
+        dle += l.rest[i] == 0x18;
+    CHECK(got == 1, "prompt after Hydra: 1 file went");
+    CHECK(l.nrest >= 12 && !memcmp(l.rest + l.nrest - 12, "BBS prompt> ", 12),
+          "prompt after Hydra: the prompt reaches the screen");
+    CHECK(dle == 0, "prompt after Hydra: no packet bytes with it");
+}
+
+/* No memory for one of hydra_init's buffers: the session says so and
+ * gives back all it did get */
+static void nomem(void)
+{
+    struct Line l;
+    XferIO io;
+    int i, got, ok = 1;
+    memset(&l, 0, sizeof l);
+    io = io_for(&l);
+    for (i = 1; i <= 6; i++) {          /* ib, ob, then hydra_init's four */
+        mallocs = 0;
+        failat = i;
+        live = 0;
+        got = hy_session(&io, NULL, 0, NULL, 0, 1);
+        if (got != -1 || live != 0) {
+            printf("     malloc %d failing: %d, %ld left\n", i, got, live);
+            ok = 0;
+        }
+    }
+    failat = 0;
+    CHECK(ok, "no memory: -1, and nothing kept");
 }
 
 int main(void)
@@ -305,6 +463,7 @@ int main(void)
         return 2;
     }
     drawers();
+    nomem();
     system("rm -rf " DIR " && mkdir -p " DIR "/src");
     make("text.txt", 3000, 0);
     make("bytes.bin", 256 * 4, 1);
@@ -312,6 +471,8 @@ int main(void)
     session("download (the BBS sends 3)", 3, 0);
     session("upload (we send 3)", 0, 3);
     session("both ways at once", 3, 3);
+    resume();
+    prompt_after();
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     return fails != 0;
 }

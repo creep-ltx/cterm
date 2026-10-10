@@ -1,7 +1,7 @@
 /*
  * modstart - the way into a protocol file (see xfermod.h): a header CTerm
- * finds in the loaded segments (XFERMOD_HEAD, then the address of
- * xfermod_start - wherever the linker put it), and what the C library's
+ * finds in the loaded segments (XFERMOD_HEAD, XFERMOD_VERSION, then the
+ * address of xfermod_start - wherever the linker put it), and what the C library's
  * start-up would have given the protocols: memory (malloc/free) and the
  * time.
  */
@@ -44,9 +44,11 @@ struct XferMod *xfermod_start(struct XferEnv *e)
     return &m;
 }
 
-/* What CTerm looks for after LoadSeg: the mark, then the way in. */
-const struct { unsigned long mark; XferModStart start; }
-    xfermod_head __attribute__((used)) = { XFERMOD_HEAD, xfermod_start };
+/* What CTerm looks for after LoadSeg: the mark, the version, then the
+ * way in. */
+const struct { unsigned long mark, version; XferModStart start; }
+    xfermod_head __attribute__((used)) = { XFERMOD_HEAD, XFERMOD_VERSION,
+                                           xfermod_start };
 
 void *malloc(size_t n) { return env->alloc(n); }
 void free(void *p) { if (p) env->release(p); }

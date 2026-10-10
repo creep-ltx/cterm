@@ -52,20 +52,30 @@ static BOOL mod_load(struct XMod *x, const char *name)
         refresh();
         return FALSE;
     }
-    /* the header: XFERMOD_HEAD, then the way in (inside the file) */
+    /* the header: XFERMOD_HEAD, XFERMOD_VERSION, then the way in (inside
+     * the file). A file of another version is not run at all. */
     for (s = x->seg; s && !x->m; s = *(BPTR *)BADDR(s)) {
         /* in 2-byte steps: the 68k puts data on even addresses, not on
-         * multiples of 4 (the 68020 reads a long from any even one) */
+         * multiples of 4 (the 68020 reads a long from any even one).
+         * The segment's words are mem[-2] (its length, in bytes, these
+         * 8 included) to mem[n - 3]; the header is 6 words. */
         UWORD *mem = (UWORD *)BADDR(s);
         ULONG n = ((ULONG *)mem)[-1] / 2, i;   /* the length, in words */
-        for (i = 2; i + 4 < n; i++)
+        BOOL found = FALSE;
+        for (i = 2; i + 8 <= n; i++)
             if (*(ULONG *)(mem + i) == XFERMOD_HEAD) {
-                XferModStart start = (XferModStart)*(ULONG *)(mem + i + 2);
-                struct XferMod *m = start(&menv);
-                if (m && m->magic == XFERMOD_MAGIC)
-                    x->m = m;
+                found = TRUE;
+                if (*(ULONG *)(mem + i + 2) == XFERMOD_VERSION) {
+                    XferModStart start =
+                        (XferModStart)*(ULONG *)(mem + i + 4);
+                    struct XferMod *m = start(&menv);
+                    if (m && m->magic == XFERMOD_MAGIC)
+                        x->m = m;
+                }
                 break;
             }
+        if (found)
+            break;
     }
     if (!x->m) {
         UnLoadSeg(x->seg);
@@ -113,12 +123,25 @@ struct XCtx {
     struct Xfer x;
     int tel;                            /* telnet's state in its bytes */
     BOOL damaged;                       /* a requester was over the window */
+    BOOL exact;                         /* the person named the download:
+                                         * over a file there, if they said */
+    BOOL resumes;                       /* its protocol goes on from parts */
     char dir[256];                      /* where downloads go */
     char (*paths)[256];                 /* the files to send */
+    char wpath[400];                    /* the download: its name when */
+    char ppath[408];                    /* whole, and while it comes */
+    ULONG wlen;                         /* bytes in it */
+    UBYTE *rest;                        /* what the host sent after it */
+    LONG nrest;
 };
 
-static char (*hq)[256];                 /* Hydra's queue: files waiting */
+#define MAXREST 16384                   /* of that, at most: for the screen */
+
+/* Hydra's queue: files waiting for the next Hydra start in hqtab's host
+ * (the tab it was made in, not any tab's). */
+static char (*hq)[256];
 static int nhq;
+static struct Tab *hqtab;
 
 ULONG ticks50(void)                     /* 1/50 s */
 {
@@ -280,15 +303,58 @@ static BOOL exists(const char *path)
     return l != 0;
 }
 
+/* The bytes in a file, -1: none there. */
+static LONG fsize(const char *path)
+{
+    BPTR l = Lock((STRPTR)path, ACCESS_READ);
+    struct FileInfoBlock *fib;
+    LONG n = -1;
+    if (!l)
+        return -1;
+    if ((fib = AllocDosObject(DOS_FIB, NULL))) {
+        if (Examine(l, fib) && fib->fib_DirEntryType < 0)
+            n = fib->fib_Size;
+        FreeDosObject(DOS_FIB, fib);
+    }
+    UnLock(l);
+    return n;
+}
+
+/* Room for n more bytes in the download drawer? (Yes when it cannot
+ * tell: RAM: always says it is full, and grows.) */
+static BOOL room(struct XCtx *c, ULONG n)
+{
+    BPTR l;
+    struct InfoData *id;
+    BOOL ok = TRUE;
+    if (!n || !(l = Lock((STRPTR)c->dir, ACCESS_READ)))
+        return TRUE;
+    if ((id = AllocVec(sizeof *id, MEMF_ANY)) && Info(l, id) &&
+        id->id_BytesPerBlock > 0 && id->id_NumBlocksUsed < id->id_NumBlocks) {
+        ULONG bpb = (ULONG)id->id_BytesPerBlock,
+              need = n / bpb + 1,
+              free_ = (ULONG)(id->id_NumBlocks - id->id_NumBlocksUsed);
+        need += need / 64 + 2;          /* the file's own list blocks */
+        ok = need <= free_;
+    }
+    if (id)
+        FreeVec(id);
+    UnLock(l);
+    return ok;
+}
+
+/* A download: made as "name.part" in the drawer (renamed to name when it
+ * is whole: x_wclose), never over a file that is there - unless the person
+ * chose it (Xmodem) and said so. A protocol that can go on (have: Zmodem,
+ * Hydra) does, from a part of the same name an earlier try left. */
 static void *x_wopen(void *u, const char *name, unsigned long size,
-                     char *made, int madelen)
+                     char *made, int madelen, unsigned long *have)
 {
     struct XCtx *c = u;
-    static char path[400];
     char nm[112];
     int n = 0;
-    BPTR f;
-    (void)size;
+    LONG part;
+    BPTR f = 0;
     /* never a drawer from the name, whoever sent it: AddPart lets a full
      * path (SYS:x) or a leading / replace or climb out of c->dir */
     {
@@ -300,9 +366,9 @@ static void *x_wopen(void *u, const char *name, unsigned long size,
     strncpy(nm, name[0] ? name : "file", 100);  /* nameless: still one */
     nm[100] = 0;
     for (;;) {                          /* never over a file that is there */
-        strcpy(path, c->dir);
-        AddPart((STRPTR)path, (STRPTR)nm, sizeof path);
-        if (!exists(path))
+        strcpy(c->wpath, c->dir);
+        AddPart((STRPTR)c->wpath, (STRPTR)nm, sizeof c->wpath);
+        if (c->exact || !exists(c->wpath))
             break;
         if (++n > 99)
             return NULL;
@@ -311,36 +377,86 @@ static void *x_wopen(void *u, const char *name, unsigned long size,
         strcat(nm, ".");
         numstr_cat(nm, n);
     }
-    f = Open((STRPTR)path, MODE_NEWFILE);
     strncpy(made, nm, madelen - 1);
     made[madelen - 1] = 0;
+    strcpy(c->ppath, c->wpath);
+    strcat(c->ppath, ".part");
+    c->resumes = have != NULL;
+    c->wlen = 0;
+    if (have) {
+        /* a part from before, shorter than the file: on from its end */
+        *have = 0;
+        part = fsize(c->ppath);
+        if (part > 0 && (ULONG)part < size &&
+            (f = Open((STRPTR)c->ppath, MODE_OLDFILE))) {
+            if (Seek(f, part, OFFSET_BEGINNING) < 0) {
+                Close(f);
+                f = 0;
+            } else
+                c->wlen = *have = (ULONG)part;
+        }
+    }
+    if (size && !room(c, size - c->wlen)) {
+        T = c->tab;
+        say("\x1b[1;31m[no room for ");
+        say(nm);
+        say(" in ");
+        say(c->dir);
+        say("]\x1b[0m\r\n");
+        if (f)
+            Close(f);
+        return NULL;
+    }
+    if (!f)
+        f = Open((STRPTR)c->ppath, MODE_NEWFILE);
     return f ? (void *)f : NULL;
 }
 
 static long x_wwrite(void *u, void *f, const unsigned char *b, long n)
 {
-    (void)u;
-    return Write((BPTR)f, (APTR)b, n);
+    struct XCtx *c = u;
+    LONG k = Write((BPTR)f, (APTR)b, n);
+    if (k > 0)
+        c->wlen += (ULONG)k;
+    return k;
 }
 
+/* Whole: name.part becomes name (over the file the person chose to
+ * replace). Not: the part stays, for a later try to go on from - or goes,
+ * when nothing came. */
 static void x_wclose(void *u, void *f, int ok)
 {
-    (void)u; (void)ok;                  /* a part is kept: it may resume */
+    struct XCtx *c = u;
     Close((BPTR)f);
+    T = c->tab;
+    if (ok) {
+        if (c->exact)
+            DeleteFile((STRPTR)c->wpath);
+        if (!Rename((STRPTR)c->ppath, (STRPTR)c->wpath)) {
+            say("\x1b[1;31m[it is in ");
+            say(c->ppath);
+            say(": the name was taken]\x1b[0m\r\n");
+        }
+    } else if (c->wlen == 0)
+        DeleteFile((STRPTR)c->ppath);
+    else {
+        say("\x1b[2m[the part is kept as ");
+        say(FilePart((STRPTR)c->ppath));
+        say(c->resumes ? ": a new try goes on from it]\x1b[0m\r\n"
+                       : "]\x1b[0m\r\n");
+    }
 }
 
+/* An upload: only a file whose size is known (a wrong 0 would send it
+ * empty), not a drawer. */
 static void *x_ropen(void *u, const char *path, unsigned long *size)
 {
-    BPTR l = Lock((STRPTR)path, ACCESS_READ), f;
-    struct FileInfoBlock *fib;
+    LONG n = fsize(path);
+    BPTR f;
     (void)u;
-    if (!l)
+    if (n < 0)
         return NULL;
-    fib = AllocDosObject(DOS_FIB, NULL);
-    *size = fib && Examine(l, fib) ? (unsigned long)fib->fib_Size : 0;
-    if (fib)
-        FreeDosObject(DOS_FIB, fib);
-    UnLock(l);
+    *size = (unsigned long)n;
     f = Open((STRPTR)path, MODE_OLDFILE);
     return f ? (void *)f : NULL;
 }
@@ -361,6 +477,25 @@ static void x_rclose(void *u, void *f)
 {
     (void)u;
     Close((BPTR)f);
+}
+
+/* What the host sent after the transfer (its prompt): kept for the
+ * screen, shown when it has ended (finish). */
+static void x_rest(void *u, const unsigned char *b, long n)
+{
+    struct XCtx *c = u;
+    UBYTE *r;
+    if (n <= 0 || c->nrest + n > MAXREST)
+        return;
+    if (!(r = AllocVec(c->nrest + n, MEMF_ANY)))
+        return;
+    if (c->nrest)
+        CopyMem(c->rest, r, c->nrest);
+    CopyMem((APTR)b, r + c->nrest, n);
+    if (c->rest)
+        FreeVec(c->rest);
+    c->rest = r;
+    c->nrest += n;
 }
 
 /* ---- starting and ending one ---- */
@@ -395,14 +530,33 @@ static BOOL ask_name(struct XCtx *c, char *name, int max)
     if (!req)
         return FALSE;
     c->damaged = TRUE;
-    if (AslRequest(req, NULL) && req->fr_File[0]) {
+    while (!ok && AslRequest(req, NULL) && req->fr_File[0]) {
+        char path[400];
         strncpy(c->dir, (char *)req->fr_Drawer, sizeof c->dir - 1);
         c->dir[sizeof c->dir - 1] = 0;
         strncpy(c->x.where, c->dir, sizeof c->x.where - 1);
         strncpy(name, (char *)req->fr_File, max - 1);
         name[max - 1] = 0;
+        /* the name the person chose is the one it gets: over a file
+         * there only when they say so */
+        strcpy(path, c->dir);
+        AddPart((STRPTR)path, (STRPTR)name, sizeof path);
         ok = TRUE;
+        if (exists(path)) {
+            struct EasyStruct es = {
+                sizeof(struct EasyStruct), 0, (UBYTE *)"CTerm",
+                (UBYTE *)"%s is there already.\nReplace it?",
+                (UBYTE *)"Replace|Another name|Cancel" };
+            ULONG arg = (ULONG)name;
+            LONG a = EasyRequestArgs(win, &es, NULL, &arg);
+            if (a == 0) {
+                ok = FALSE;
+                break;
+            }
+            ok = a == 1;
+        }
     }
+    c->exact = ok;
     FreeAslRequest(req);
     return ok;
 }
@@ -466,7 +620,21 @@ void transfer_free(void)
         FreeVec(hq);
     hq = NULL;
     nhq = 0;
+    hqtab = NULL;
     xwin_shut();
+}
+
+/* The Hydra queue's files, when it was made in this tab (T) and that tab
+ * is still open: 0 for any other. */
+static int hq_mine(void)
+{
+    int i;
+    if (!nhq || hqtab != T)
+        return 0;
+    for (i = 0; i < ntabs; i++)
+        if (tabs[i] == hqtab)
+            return nhq;
+    return 0;
 }
 
 /* A transfer begins in this tab (T): its context. */
@@ -490,12 +658,14 @@ static struct XCtx *begin(XferIO *io, const char *proto, int dir)
     io->batch = x_batch;
     io->wopen = x_wopen; io->wwrite = x_wwrite; io->wclose = x_wclose;
     io->ropen = x_ropen; io->rread = x_rread; io->rseek = x_rseek;
-    io->rclose = x_rclose;
+    io->rclose = x_rclose; io->rest = x_rest;
     return c;
 }
 
 static void ctx_free(struct XCtx *c)
 {
+    if (c->rest)
+        FreeVec(c->rest);
     FreeVec(c->paths);
     FreeVec(c);
 }
@@ -524,6 +694,10 @@ static void finish(struct XCtx *c, int got)
         numstr_cat(s, (LONG)(c->x.bdone / 1024));
         strcat(s, " KB]\x1b[0m\r\n");
         say(s);
+    }
+    if (c->nrest) {                     /* the host's prompt, say */
+        log_bytes(c->rest, c->nrest);
+        vt_write(vt, c->rest, c->nrest);
     }
     xwin_update();
     if (win) {
@@ -562,7 +736,8 @@ void transfer_menu(int what)
         if (!hq && !(hq = AllocVec(NUP * 256, MEMF_ANY)))
             return;
         nhq = ask_uploads(hq, paths, "CTerm: files to send with Hydra");
-        say(nhq ? "\r\n\x1b[2m[Hydra: the files go at the host's next Hydra start]\x1b[0m\r\n"
+        hqtab = T;                      /* this tab's host's, no other's */
+        say(nhq ? "\r\n\x1b[2m[Hydra: the files go at this tab's next Hydra start]\x1b[0m\r\n"
                 : "\r\n\x1b[2m[Hydra: nothing waits to be sent]\x1b[0m\r\n");
         redraw_all();
         refresh();
@@ -615,6 +790,8 @@ void transfer_menu(int what)
             np = 1;                     /* Xmodem has no names: one file */
         send_totals(c, paths, np);
         shows(c);
+        /* 1: Xmodem in 1 KB blocks when the receiver asks with 'C' and
+         * takes them, else 128 (xymodem.c finds out) */
         got = xm.m->xy_send(&io, ymodem, 1, paths, np);
     }
     finish(c, got);
@@ -633,6 +810,7 @@ BOOL transfer_take(UBYTE *buf, LONG n)
     int kind = zm_detect(buf, n, &at), got;
     UBYTE *pre;
     LONG pn;
+    int nq;
     if (hy_detect(buf, n, &hat) && (!kind || hat < at)) {
         kind = 3;                       /* Hydra: its START packet */
         at = hat;
@@ -655,8 +833,9 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         refuse();                       /* the host would wait for nothing */
         return TRUE;
     }
+    nq = kind == 3 ? hq_mine() : 0;
     c = begin(&io, kind == 3 ? "Hydra" : "Zmodem",
-              kind == 3 ? (nhq ? 3 : 1) : kind);
+              kind == 3 ? (nq ? 3 : 1) : kind);
     if (!c) {
         mod_unload(&xm);
         refuse();
@@ -670,16 +849,17 @@ BOOL transfer_take(UBYTE *buf, LONG n)
     if (kind == 3) {
         const char *paths[NUP];
         int i;
-        for (i = 0; i < nhq; i++)
+        for (i = 0; i < nq; i++)
             paths[i] = hq[i];
         down_dir(c);
-        if (nhq)
-            send_totals(c, paths, nhq);
+        if (nq)
+            send_totals(c, paths, nq);
         c->x.nfiles = 0;                /* what comes is not known */
         c->x.bsize = 0;
         shows(c);
-        got = xm.m->hy_session(&io, paths, nhq, pre, pn, 1);
-        nhq = 0;                        /* sent, or given up */
+        got = xm.m->hy_session(&io, paths, nq, pre, pn, 1);
+        if (nq)
+            nhq = 0;                    /* sent, or given up */
     } else if (kind == 1) {
         down_dir(c);
         shows(c);

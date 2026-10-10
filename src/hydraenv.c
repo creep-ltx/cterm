@@ -36,6 +36,9 @@ static int gone;
 
 /* handles: 0 the file being received, 1 the one being sent */
 static void *fh[2];
+static void *rxshut;                    /* 0's, closed by hydra.c: whether
+                                         * it is whole, xfer_okay or
+                                         * xfer_bad say next */
 static unsigned long fpos[2], fsize[2];
 static char fname[2][256];
 static int nrecv, nsent;
@@ -204,11 +207,10 @@ char *h_revdate(long revstamp)
     return s;
 }
 
-/* "already have it?" (HydraCom's skip check): CTerm never overwrites,
- * it makes a new name instead, so no */
-int fexist(char *filename) { (void)filename; return 0; }
-
-long freespace(char *drivepath) { (void)drivepath; return 0x7fffffffL; }
+/* "a part of it here?" (HydraCom's resume): xfer_init found one, and
+ * dos_seek's end is where it ends. (Never a whole file: CTerm does not
+ * overwrite, it makes a new name instead.) */
+int fexist(char *filename) { (void)filename; return fh[0] && fpos[0] > 0; }
 int keyabort(void) { return hio->stop && hio->stop(hio->u); }
 int carrier(void) { return !gone; }
 
@@ -268,7 +270,7 @@ int com_getbyte(void)
 
 /* FINFO's text: time and size as 8 hex digits each, three more such
  * fields, then the name (up to a space or the end). */
-static long hex8(const char *s)
+static unsigned long hex8(const char *s)
 {
     unsigned long v = 0;
     int i;
@@ -276,17 +278,18 @@ static long hex8(const char *s)
         int c = tolower((unsigned char)s[i]);
         v = v * 16 + (unsigned long)(c >= 'a' ? c - 'a' + 10 : c - '0');
     }
-    return (long)v;
+    return v;
 }
 
-void hy_finfo(const char *s, long *ftime, long *fsize, char *name, int max)
+void hy_finfo(const char *s, long *ftime, unsigned long *fsize, char *name,
+              int max)
 {
     int i;
     *ftime = *fsize = 0;
     name[0] = 0;
     if (strlen(s) < 40)
         return;
-    *ftime = hex8(s);
+    *ftime = (long)hex8(s);
     *fsize = hex8(s + 8);
     s += 40;
     /* the name without any drawers: a host must not choose where a file
@@ -340,7 +343,7 @@ int dos_close(int handle)
     if (handle < 0 || handle > 1 || !fh[handle])
         return -1;
     if (handle == 0)
-        hio->wclose(hio->u, fh[0], 1);
+        rxshut = fh[0];                 /* closed by xfer_okay / xfer_bad */
     else {
         hio->rclose(hio->u, fh[1]);
         if (fpos[1] >= fsize[1]) {      /* all of it went */
@@ -356,7 +359,8 @@ long dos_seek(int handle, long offset, int fromwhere)
 {
     if (handle < 0 || handle > 1 || !fh[handle])
         return -1;
-    if (handle == 0)                    /* written as it comes: no resume */
+    if (handle == 0)                    /* written as it comes, after the
+                                         * part it goes on from */
         return (long)fpos[0];
     if (fromwhere == 2)
         offset += (long)fsize[1];
@@ -400,38 +404,75 @@ int dos_write(int handle, void *buf, word len)
 }
 
 /* A file coming: opened in the download drawer under its own name (the
- * caller makes it unique); hydra.c then "opens" RXMARK. */
-char *xfer_init(char *fn, long fsz, long ftime)
+ * caller makes it unique, or goes on with a part of it from an earlier
+ * try: then Hydra asks the sender for the rest); hydra.c then "opens"
+ * RXMARK. NULL: it cannot be had (no room, no file), the sender skips it. */
+char *xfer_init(char *fn, unsigned long fsz, long ftime)
 {
+    unsigned long have = 0;
     (void)ftime;
     if (fh[0])
         return NULL;
-    fh[0] = hio->wopen(hio->u, fn, (unsigned long)fsz, fname[0],
-                       sizeof fname[0]);
+    fh[0] = hio->wopen(hio->u, fn, fsz, fname[0], sizeof fname[0], &have);
     if (!fh[0]) {
-        hio->show(hio->u, fn, 0, (unsigned long)fsz, 3);
+        hio->show(hio->u, fn, 0, fsz, 3);
         return NULL;
     }
-    fpos[0] = 0;
-    fsize[0] = (unsigned long)fsz;
-    hio->show(hio->u, fname[0], 0, fsize[0], 0);
+    fpos[0] = have;
+    fsize[0] = fsz;
+    hio->show(hio->u, fname[0], have, fsize[0], 0);
     return (char *)RXMARK;
+}
+
+/* hydra.c closed the file it received (dos_close): it was whole or not */
+static void rx_shut(int ok)
+{
+    if (rxshut)
+        hio->wclose(hio->u, rxshut, ok);
+    rxshut = NULL;
 }
 
 boolean xfer_bad(void)
 {
+    rx_shut(0);
     hio->show(hio->u, fname[0], fpos[0], fsize[0], 3);
-    return false;                       /* the part is kept as it is */
+    return true;                        /* the part is kept, to go on from */
 }
 
 char *xfer_okay(void)
 {
+    rx_shut(1);
     hio->show(hio->u, fname[0], fpos[0], fsize[0], 1);
     nrecv++;
     return NULL;
 }
 
 /* ---- the session ---- */
+
+/* At the end: what came after the session (the BBS's prompt) goes back
+ * to the caller, for the screen - not what is left of Hydra's own last
+ * packets (the other side sends END more than once). */
+static void hy_rest(const unsigned char *b, long n)
+{
+    long i, from = 0, open = -1;
+    if (!hio->rest || n <= 0)
+        return;
+    for (i = 0; i + 1 < n; i++)
+        if (b[i] == H_DLE) {
+            if (b[i + 1] == HCHR_PKTEND) {
+                from = i + 2;           /* a packet ended: after it */
+                open = -1;
+            } else if (b[i + 1] >= HCHR_BINPKT && b[i + 1] <= HCHR_UUEPKT)
+                open = i;               /* one begins */
+            i++;
+        }
+    if (open >= 0)
+        n = open;                       /* one began and did not end */
+    else if (b[n - 1] == H_DLE)
+        n--;
+    if (n > from)
+        hio->rest(hio->u, b + from, n - from);
+}
 
 
 int hy_session(XferIO *io, const char *const *paths, int npaths,
@@ -444,7 +485,7 @@ int hy_session(XferIO *io, const char *const *paths, int npaths,
     prep = 0;
     ibn = ibp = obn = 0;
     gone = 0;
-    fh[0] = fh[1] = NULL;
+    fh[0] = fh[1] = rxshut = NULL;
     nrecv = nsent = 0;
     nooriginator = !originator;
     ib = malloc(IBSIZE);
@@ -458,6 +499,7 @@ int hy_session(XferIO *io, const char *const *paths, int npaths,
     hy_nomem = false;
     hydra_init(hydra_options);
     if (hy_nomem) {
+        hydra_deinit();                 /* what it did get */
         free(ib);
         free(ob);
         ib = ob = NULL;
@@ -474,6 +516,7 @@ int hy_session(XferIO *io, const char *const *paths, int npaths,
         rc = -1;
     hydra_deinit();
     com_flush();
+    rx_shut(0);                         /* (closed but not judged) */
     if (fh[0]) {                        /* left open by an abort */
         hio->wclose(hio->u, fh[0], 0);
         fh[0] = NULL;
@@ -481,6 +524,23 @@ int hy_session(XferIO *io, const char *const *paths, int npaths,
     if (fh[1]) {
         hio->rclose(hio->u, fh[1]);
         fh[1] = NULL;
+    }
+    if (rc == 0 && hio->rest && !gone) {
+        /* the other side's last END packets (it sends up to three) come
+         * after ours: wait for them (a quiet moment) and keep them off
+         * the screen, with what came before them */
+        long k, n = 0;
+        if (prep < pren) {
+            n = pren - prep > IBSIZE ? IBSIZE : pren - prep;
+            memmove(ib, pre + prep, n);
+        } else if (ibp < ibn) {
+            n = ibn - ibp;
+            memmove(ib, ib + ibp, n);
+        }
+        while (n < IBSIZE && (k = hio->get(hio->u, ib + n, IBSIZE - n,
+                                           300)) > 0)
+            n += k;
+        hy_rest(ib, n);
     }
     free(ib);
     free(ob);

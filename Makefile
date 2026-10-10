@@ -85,10 +85,10 @@ clean:
 
 # Zmodem against lrzsz on the PC (build lrzsz first: tests/zmodem_test.c)
 tests/zmodem_test: tests/zmodem_test.c src/zmodem.c src/xymodem.c src/xfer.h
-	gcc -O2 -Wall -o $@ tests/zmodem_test.c src/zmodem.c src/xymodem.c src/detect.c
+	gcc -O2 -Wall -o $@ tests/zmodem_test.c src/xymodem.c src/detect.c
 
 tests/hydra_test: tests/hydra_test.c src/hydra.c src/hydraenv.c src/detect.c src/hydraenv.h src/xfer.h
-	gcc -m32 -std=gnu89 -O2 -w -o $@ tests/hydra_test.c src/hydra.c src/hydraenv.c src/detect.c
+	gcc -m32 -std=gnu89 -O2 -w -Wl,--wrap=malloc,--wrap=free -o $@ tests/hydra_test.c src/hydra.c src/hydraenv.c src/detect.c
 
 # all the transfer protocols against their references (lrzsz, HydraCom)
 ztest: tests/zmodem_test tests/hydra_test

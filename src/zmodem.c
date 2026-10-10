@@ -525,6 +525,27 @@ static void send_cancel(struct Z *z)
     flush(z);
 }
 
+/* At the end: what was read and not used (the host's prompt after "OO")
+ * goes back to the caller, for the screen. */
+static void z_rest(struct Z *z)
+{
+    XferIO *io = z->io;
+    unsigned char b;
+    if (!io->rest)
+        return;
+    if (z->unget >= 0) {
+        b = (unsigned char)z->unget;
+        z->unget = -1;
+        io->rest(io->u, &b, 1);
+    }
+    if (z->prep < z->pren)
+        io->rest(io->u, z->pre + z->prep, z->pren - z->prep);
+    if (z->inp < z->inn)
+        io->rest(io->u, z->in + z->inp, z->inn - z->inp);
+    z->prep = z->pren;
+    z->inp = z->inn;
+}
+
 static void z_begin(struct Z *z, XferIO *io, const unsigned char *pre,
                     long n)
 {
@@ -648,18 +669,22 @@ static int zm_receive_(struct Z *z, XferIO *io, const unsigned char *pre,
                 if (fl || bl)
                     io->batch(io->u, (long)fl, bl);
             }
-            if (f)
+            if (f) {                    /* the last one never ended */
                 io->wclose(io->u, f, 0);
+                io->show(io->u, name, have, size, 3);
+            }
             have = 0;
-            f = io->wopen(io->u, name, size, name, sizeof name);
+            f = io->wopen(io->u, name, size, name, sizeof name, &have);
             if (!f) {
                 io->show(io->u, name, 0, size, 3);
                 pos_hdr(z, 0);
                 send_hex(z, ZSKIP);     /* and nothing more: see the notes */
                 break;
             }
-            io->show(io->u, name, 0, size, 0);
-            send_pos(z, ZRPOS, 0);
+            io->show(io->u, name, have, size, 0);
+            /* from the start, or where a part from an earlier try ends
+             * (crash recovery: the sender seeks there) */
+            send_pos(z, ZRPOS, have);
             tries = 0;
             break;
         }
@@ -707,17 +732,34 @@ static int zm_receive_(struct Z *z, XferIO *io, const unsigned char *pre,
             io->show(io->u, name, have, size, 1);
             send_zrinit(z);
             break;
-        case ZFIN:
+        case ZFIN: {
+            int c = -1;
+            if (f) {                    /* it ended inside a file: a part */
+                io->wclose(io->u, f, 0);
+                f = 0;
+                io->show(io->u, name, have, size, 3);
+            }
             pos_hdr(z, 0);
             send_hex(z, ZFIN);
-            /* "OO", after CR LF|0x80 and XON of its own header */
-            for (i = 0; i < 6; i++) {
-                int c = zgetc(z, 2000);
-                if (c < 0 || c == 'O')
-                    if (c < 0 || (c = zgetc(z, 500)) < 0 || c == 'O')
-                        break;
+            /* "OO", maybe after what is left of its header's CR LF|0x80
+             * and XON; anything else is the host's again (its prompt) */
+            for (i = 0; i < 4; i++) {
+                c = zgetc(z, 2000);
+                if (c < 0)
+                    break;
+                if (c == 'O') {
+                    if ((c = zgetc(z, 500)) == 'O')
+                        c = -1;
+                    break;
+                }
+                if ((c & 0x7f) != '\r' && (c & 0x7f) != '\n' && c != 0x11)
+                    break;
             }
+            if (c >= 0)
+                z->unget = c;
+            z_rest(z);
             return files;
+        }
         case ZCOMMAND:                  /* never: the host runs nothing here */
             pos_hdr(z, 0);
             send_hex(z, ZCOMPL);
@@ -858,6 +900,9 @@ static int zm_send_(struct Z *z, unsigned char *blk, XferIO *io,
             int end, c;
             if (got < 0)
                 goto fail_f;
+            if (got == 0 && pos < size)
+                size = pos;             /* it shrank while it went: it ends
+                                         * here (ZEOF says where) */
             if (pos + (unsigned long)got >= size)
                 end = ZCRCE;
             else if (rxbuf && pos + (unsigned long)got - acked >= rxbuf)
@@ -957,6 +1002,7 @@ static int zm_send_(struct Z *z, unsigned char *blk, XferIO *io,
     }
     ostr(z, "OO");
     flush(z);
+    z_rest(z);
     return files;
 fail:
     send_cancel(z);

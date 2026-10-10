@@ -110,7 +110,8 @@ static  byte                   *rxbufmax;       /* highwatermark of rxbuf    */
 static  char    txfname[256],   rxfname[256];   /* CTerm: was [13]           */
 static  char                   *rxpathname;     /* pointer to rx pathname    */
 static  long    txftime,        rxftime;        /* file timestamp (UNIX)     */
-static  long    txfsize,        rxfsize;        /* file length               */
+static  long    txfsize;                        /* file length               */
+static  dword   rxfsize;        /* CTerm: unsigned - FINFO's 8 hex digits    */
 static  int     txfd,           rxfd;           /* file handles              */
 static  word                    rxpktlen;       /* length of last packet     */
 static  word                    rxblklen;       /* len of last good data blk */
@@ -971,6 +972,9 @@ void hydra_deinit (void)
         free(rxbuf);
         free(crc16tab);
         free(crc32tab);
+        txbuf = rxbuf = NULL;           /* CTerm: also after a hydra_init */
+        crc16tab = NULL;                /* that got only some of them     */
+        crc32tab = NULL;
 }/*hydra_deinit()*/
 
 
@@ -1358,9 +1362,8 @@ int hydra (char *txpathname, char *txalias)
                                    batchesdone++;
                                 }
                                 else {
-                                   long diskfree;
-
-                                   rxfsize = rxftime = 0L;
+                                   rxfsize = 0;
+                                   rxftime = 0L;
                                    rxfname[0] = '\0';
                                    /* CTerm: was sscanf "%08lx%08lx%*08lx
                                       %*08lx%*08lx%s" - libnix on the Amiga
@@ -1375,9 +1378,11 @@ int hydra (char *txpathname, char *txalias)
                                    hydra_printf(rxfname);
                                    hydra_clreol();
 
+                                   /* CTerm: xfer_init (CTerm's wopen) also
+                                      says no when the drawer has no room
+                                      for it: HydraCom's freespace() check
+                                      is not here */
                                    rxpathname = xfer_init(rxfname,rxfsize,rxftime);
-
-                                   diskfree = freespace(rxpathname);
 
                                    if (!rxpathname) {   /* Already have file */
                                       if (single_done) {
@@ -1392,13 +1397,6 @@ int hydra (char *txpathname, char *txalias)
                                          message(1,"+HRECV: Already have %s",rxfname);
                                          rxpos = -1L;
                                       }
-                                   }
-                                   else if (rxfsize + 10240L > diskfree) {
-                                      hydra_gotoxy(29,2);
-                                      hydra_printf("Not enough diskspace");
-                                      message(6,"!HRECV: %s not enough diskspace: %ld > %ld",
-                                              rxfname, rxfsize + 10240L, diskfree);
-                                      rxpos = -2L;
                                    }
                                    else {
                                       if (fexist(rxpathname)) { /* Resuming? */

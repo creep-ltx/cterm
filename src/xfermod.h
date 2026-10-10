@@ -6,17 +6,21 @@
  * reaches CTerm only through XferIO, and for memory and the clock through
  * XferEnv (a LoadSeg'd file has no C library start-up of its own).
  *
- * In the file: XFERMOD_HEAD followed by the address of xfermod_start();
- * CTerm finds that pair in the loaded segments, calls it with the
- * environment and gets the table back.
+ * In the file: XFERMOD_HEAD, XFERMOD_VERSION, then the address of
+ * xfermod_start(); CTerm finds that in the loaded segments and, only when
+ * the version is its own, calls it with the environment and gets the
+ * table back. A file of another version is refused before any of its
+ * code runs.
  */
 #ifndef XFERMOD_H
 #define XFERMOD_H
 
 #include "xfer.h"
 
-#define XFERMOD_MAGIC   0x43544d31UL    /* "CTM1": this interface */
+#define XFERMOD_MAGIC   0x43544d32UL    /* "CTM2": this interface */
 #define XFERMOD_HEAD    0x43544d48UL    /* "CTMH": the header's mark */
+#define XFERMOD_VERSION 2UL             /* after the mark: XferIO's shape
+                                         * (2: wopen's have, rest) */
 
 struct XferEnv {
     void *(*alloc)(unsigned long n);    /* memory, freed with release */

@@ -85,6 +85,15 @@ static void purge(struct X *x)
         ;
 }
 
+/* At the end: what came and was not used (the host's prompt) goes back
+ * to the caller, for the screen. */
+static void rest(struct X *x)
+{
+    if (x->io->rest && x->inp < x->inn)
+        x->io->rest(x->io->u, x->in + x->inp, x->inn - x->inp);
+    x->inp = x->inn;
+}
+
 static void cancel(struct X *x)
 {
     static const unsigned char c[] = { CAN, CAN, CAN, CAN, CAN, CAN, CAN, CAN,
@@ -248,7 +257,7 @@ int xy_receive(XferIO *io, int ymodem, const char *xname)
             p = (const char *)x->blk + strlen((const char *)x->blk) + 1;
             if (p < (const char *)x->blk + len && *p)
                 left = (long)(size = num10(&p));
-            f = io->wopen(io->u, name, size, name, sizeof name);
+            f = io->wopen(io->u, name, size, name, sizeof name, NULL);
             if (!f) {
                 cancel(x);
                 io->show(io->u, name, 0, size, 3);
@@ -261,7 +270,7 @@ int xy_receive(XferIO *io, int ymodem, const char *xname)
         } else {
             strncpy(name, xname ? xname : "xmodem.bin", sizeof name - 1);
             name[sizeof name - 1] = 0;
-            f = io->wopen(io->u, name, 0, name, sizeof name);
+            f = io->wopen(io->u, name, 0, name, sizeof name, NULL);
             if (!f) {
                 cancel(x);
                 goto fail_;
@@ -279,6 +288,7 @@ int xy_receive(XferIO *io, int ymodem, const char *xname)
         if (!ymodem)
             break;
     }
+    rest(x);
     free(x);
     return files;
 fail:
@@ -307,9 +317,9 @@ static int tx_start(struct X *x, int *crc)
     }
 }
 
-/* A block, until the receiver takes it. */
+/* A block, until the receiver takes it (at most tries times). */
 static int tx_block(struct X *x, int crc, int num, const unsigned char *d,
-                    int len)
+                    int len, int tries_)
 {
     int tries, c, cans = 0;
     unsigned char *b = x->blk;
@@ -328,7 +338,7 @@ static int tx_block(struct X *x, int crc, int num, const unsigned char *d,
             sum = (unsigned char)(sum + d[i]);
         b[3 + len] = sum;
     }
-    for (tries = 0; tries < 10; tries++) {
+    for (tries = 0; tries < tries_; tries++) {
         x->io->put(x->io->u, b, 3 + len + (crc ? 2 : 1));
         for (;;) {
             c = getb(x, 10000);
@@ -373,7 +383,7 @@ int xy_send(XferIO *io, int ymodem, int onek, const char *const *paths,
     for (fi = 0; fi < npaths; fi++) {
         const char *p, *name = paths[fi];
         unsigned long size = 0, pos = 0;
-        int num = 1, bs = (ymodem || onek) ? 1024 : 128;
+        int num = 1, bs = 128;
         void *f;
         for (p = paths[fi]; *p; p++)
             if (*p == '/' || *p == ':')
@@ -396,11 +406,16 @@ int xy_send(XferIO *io, int ymodem, int onek, const char *const *paths,
             *q = 0;
             do { *--q = (char)('0' + v % 10); v /= 10; } while (v);
             strcpy((char *)data + k + 1, q);
-            if ((r = tx_block(x, crc, 0, data, 128)) < 0)
+            if ((r = tx_block(x, crc, 0, data, 128, 10)) < 0)
                 goto fail_f;
             if ((r = tx_start(x, &crc)) < 0)
                 goto fail_f;
         }
+        /* 1 KB blocks: Ymodem; Xmodem-1K only to a receiver that asked
+         * for CRCs ('C') - one that asked with NAK (checksums) is a classic
+         * Xmodem that takes 128 bytes only */
+        if (ymodem || (onek && crc))
+            bs = 1024;
         io->show(io->u, name, 0, size, 0);
         for (;;) {
             long got = io->rread(io->u, f, data, bs);
@@ -409,11 +424,23 @@ int xy_send(XferIO *io, int ymodem, int onek, const char *const *paths,
                 goto fail_f;
             if (got == 0)
                 break;
-            if (got <= 128 && bs == 1024 && ymodem)
+            if (got <= 128 && bs == 1024)
                 len = 128;              /* a short end in a short block */
             if (got < len)
                 memset(data + got, SUB, len - got);
-            if ((r = tx_block(x, crc, num & 255, data, len)) < 0)
+            if (!ymodem && num == 1 && len == 1024) {
+                /* Xmodem's first 1 KB block: a receiver that wants 128
+                 * bytes refuses it (NAK, or silence) - then 128 it is */
+                r = tx_block(x, crc, 1, data, len, 2);
+                if (r == BAD) {
+                    bs = 128;
+                    if (io->rseek(io->u, f, 0))
+                        goto fail_f;
+                    continue;
+                }
+            } else
+                r = tx_block(x, crc, num & 255, data, len, 10);
+            if (r < 0)
                 goto fail_f;
             num++;
             pos += (unsigned long)got;
@@ -434,9 +461,10 @@ int xy_send(XferIO *io, int ymodem, int onek, const char *const *paths,
     }
     if (ymodem) {                       /* the end of the batch */
         memset(data, 0, 128);
-        if (tx_start(x, &crc) < 0 || tx_block(x, crc, 0, data, 128) < 0)
+        if (tx_start(x, &crc) < 0 || tx_block(x, crc, 0, data, 128, 10) < 0)
             goto fail;
     }
+    rest(x);
     free(x);
     return files;
 fail:
