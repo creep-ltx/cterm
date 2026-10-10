@@ -151,6 +151,13 @@ In the order the user and I agreed (2026-10-10):
   received files go) and an upload drawer (where the file requester opens
   on Upload). Each phone book entry may have its own two drawers; an
   empty one means the global setting.
+- **Transfer progress without locking** (the user, 2026-10-10): each
+  transfer in its own process so the window and tabs stay usable; a panel
+  at the bottom of that tab (file name and drawer, a bar per file and one
+  for the batch, speed, time left, Stop); the tab's name shows the
+  percentage. Proposed to the user, awaiting the go.
+- Later idea: Hydra's chat with the other side during a transfer
+  (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
 - Also: an ssh password login tried against a real server, ARexx,
   dropping files on the window, emoji fallback, more stock-A1200 speed.
 - Keys configurable (the rule for all the user's programs).
