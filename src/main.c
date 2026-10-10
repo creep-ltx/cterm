@@ -1662,15 +1662,19 @@ static void update_knob(void)
     LONG total = vt_history(vt) + rows, top = vt_history(vt) - back;
     if (fullscreen && win) {
         int x0 = win->Width - POSBAR, y0 = oy, h = rows * ch, a, b;
-        apen(defbg);
-        RectFill(rp, x0 - 1, y0, win->Width - 1, y0 + h - 1);
+        if (backdrop)
+            backdrop_put(x0 - 1, y0, win->Width - x0 + 1, h);
+        else {
+            apen(defbg);
+            RectFill(rp, x0 - 1, y0, win->Width - 1, y0 + h - 1);
+        }
         if (vt_history(vt) > 0) {
             a = y0 + (LONG)h * top / total;
             b = y0 + (LONG)h * (top + rows) / total - 1;
             if (b < a + 3) b = a + 3;
             apen(mix(defbg, deffg, 15));
             RectFill(rp, x0, y0, win->Width - 3, y0 + h - 1);
-            apen(mix(defbg, deffg, 45));
+            apen(mix(defbg, deffg, 60));
             RectFill(rp, x0, a, win->Width - 3, b);
         }
         return;
@@ -4850,10 +4854,26 @@ static void mouse_send(int b, int r, int c, BOOL release, UWORD q)
 }
 
 /* Motion reports and selection drags need Intuition's mouse moves. */
+static BOOL bardrag;                    /* pulling full screen's place bar */
+
+/* Full screen's place bar, pulled to y: the knob's middle goes there. */
+static void bar_pull(int y)
+{
+    LONG hist = vt_history(vt), total = hist + rows, top;
+    int h = rows * ch, knob = (int)((LONG)h * rows / total);
+    if (hist <= 0)
+        return;
+    top = (LONG)(y - oy - knob / 2) * total / h;
+    if (top < 0) top = 0;
+    if (top > hist) top = hist;
+    scroll_view(hist - top);
+}
+
 static void mouse_reporting(void)
 {
     int sgr, mode = !local && sock >= 0 ? vt_mouse(vt, &sgr) : 0;
-    BOOL want = sel_drag || mode == 1003 || (mode == 1002 && mbutton >= 0);
+    BOOL want = sel_drag || bardrag || mode == 1003 ||
+                (mode == 1002 && mbutton >= 0);
     if (want != mreporting && win) {
         ReportMouse(want, win);
         mreporting = want;
@@ -4930,6 +4950,19 @@ static BOOL window_events(void)
                                         ? "\x1b[I" : "\x1b[O"), 3);
             break;
         case IDCMP_MOUSEBUTTONS:
+            if (copy.Code == SELECTDOWN && fullscreen &&
+                copy.MouseX >= win->Width - POSBAR - 4 && copy.MouseY >= oy &&
+                copy.MouseY < oy + rows * ch && vt_history(vt) > 0) {
+                bardrag = TRUE;         /* the thin bar, pulled */
+                bar_pull(copy.MouseY);
+                mouse_reporting();
+                break;
+            }
+            if (copy.Code == SELECTUP && bardrag) {
+                bardrag = FALSE;
+                mouse_reporting();
+                break;
+            }
             if (copy.Code == SELECTDOWN && tabbar_h() &&
                 copy.MouseY >= win->BorderTop &&
                 copy.MouseY < win->BorderTop + tabbar_h()) {
@@ -4991,6 +5024,10 @@ static BOOL window_events(void)
             break;
         case IDCMP_GADGETUP:
         case IDCMP_MOUSEMOVE:
+            if (copy.Class == IDCMP_MOUSEMOVE && bardrag) {
+                bar_pull(copy.MouseY);
+                break;
+            }
             if (copy.Class == IDCMP_MOUSEMOVE && !sel_drag &&
                 mouse_to_host(0)) {
                 int r, c, sgr, mode = vt_mouse(vt, &sgr);

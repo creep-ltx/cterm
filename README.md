@@ -84,7 +84,9 @@ as they came, colour codes and all, so a BBS screen plays back from it.
 Settings/Settings... (Right Amiga+S) opens one window for everything:
 
 - **Screen:** a Workbench window or CTerm's own screen (any screen mode
-  and number of colours), full screen, scroll bar.
+  and number of colours), full screen, scroll bar. In full screen a thin
+  bar on the right edge shows where you are in the history; pull it with
+  the mouse to scroll back.
 - **Text:** an Amiga font or TrueType, the TrueType size, line spacing,
   the characters (UTF-8, Latin-1, PC BBS), and whether PC BBS mode uses
   the PC's own font.
