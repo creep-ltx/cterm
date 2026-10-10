@@ -798,9 +798,34 @@ void transfer_menu(int what)
     mod_unload(&xm);
 }
 
+/* Each tab's last bytes, for a start split across two reads. */
+static struct { struct Tab *t; UBYTE b[SPLIT_TAIL + 1]; } tails[MAXTABS];
+
+static UBYTE *tail_of(struct Tab *t)
+{
+    int i, k, free_ = -1;
+    for (i = 0; i < MAXTABS; i++) {
+        if (tails[i].t == t)
+            return tails[i].b;
+        if (free_ < 0) {                /* empty, or its tab is closed */
+            for (k = 0; k < ntabs && tabs[k] != tails[i].t; k++)
+                ;
+            if (!tails[i].t || k == ntabs)
+                free_ = i;
+        }
+    }
+    if (free_ < 0)
+        free_ = 0;
+    tails[free_].t = t;
+    tails[free_].b[0] = 0;
+    return tails[free_].b;
+}
+
 /* What came from the host: does a transfer begin in it? If so, what came
  * before goes to the screen as usual (raw: telnet still on it for telnet
- * tabs), the transfer runs, and TRUE says the rest was taken. */
+ * tabs), the transfer runs, and TRUE says the rest was taken. A start
+ * split across this read and the one before is found too (its first
+ * bytes are on the screen already; the protocol does without them). */
 BOOL transfer_take(UBYTE *buf, LONG n)
 {
     XferIO io;
@@ -815,6 +840,10 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         kind = 3;                       /* Hydra: its START packet */
         at = hat;
     }
+    if (kind)
+        tail_of(T)[0] = 0;              /* a new start after this one */
+    else if ((kind = split_detect(tail_of(T), buf, n, NULL)))
+        at = 0;
     if (!kind || !win || T->t_xfer)
         return FALSE;
     if (xfer_running()) {               /* another tab's: say no, cleanly */

@@ -75,6 +75,14 @@ int xy_send(XferIO *io, int ymodem, int onek, const char *const *paths,
  * other side sends is received, both at once. Returns the files that went
  * either way, -1 when it was cancelled or failed. */
 int hy_detect(const unsigned char *b, long n, long *at);
+
+/* A start split across two reads (detect.c): tail is SPLIT_TAIL + 1
+ * bytes the caller keeps per connection, zeroed at first. Returns the
+ * kind (1, 2, 3) of a start that began in the read before and ends in b;
+ * *had: how many of its bytes that read had. */
+#define SPLIT_TAIL 10
+int split_detect(unsigned char *tail, const unsigned char *b, long n,
+                 int *had);
 int hy_session(XferIO *io, const char *const *paths, int npaths,
                const unsigned char *done, long n, int originator);
 
