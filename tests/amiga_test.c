@@ -211,6 +211,20 @@ int main(void)
         CHECK(vt_take_clip(o, &len) == NULL, "a query is not answered");
         vt_free(o);
     }
+    {   /* CHT stops at the last column; a huge OSC number is no title */
+        Vt *t = vt_new(20, 3, 0);
+        int x, y, vis, ch;
+        feed(t, "\x1b[999999I");
+        vt_cursor(t, &x, &y, &vis);
+        CHECK(x == 19, "CSI 999999 I: the last column");
+        feed(t, "\x1b[3Z");
+        vt_cursor(t, &x, &y, &vis);
+        CHECK(x == 0, "CSI 3 Z: back to the first");
+        feed(t, "\x1b]99999999999;x\x07");
+        vt_title(t, &ch);
+        CHECK(!ch, "OSC 99999999999 is not OSC 0");
+        vt_free(t);
+    }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     vt_free(v);
     return fails != 0;

@@ -888,11 +888,11 @@ static void csi(Vt *v, int final)
         move_to(v, n - 1, v->y - (v->origin ? v->top : 0)); break;
     case 'H': case 'f': move_to(v, P(1, 1) - 1, P(0, 1) - 1); break;
     case 'd': move_to(v, v->x, n - 1); break;
-    case 'I':
-        for (i = 0; i < n; i++) {
+    case 'I':                           /* stops at the last column, so
+                                           CSI 999999 I is not a long loop */
+        for (i = 0; i < n && v->x < v->cols - 1; i++) {
             do v->x++; while (v->x < v->cols - 1 && !v->tabs[v->x]);
         }
-        if (v->x >= v->cols) v->x = v->cols - 1;
         v->pending = 0;
         break;
     case 'Z':
@@ -1049,8 +1049,11 @@ static void osc_done(Vt *v)
 {
     int n = 0, i = 0;
     v->osc[v->osclen] = 0;
-    while (v->osc[i] >= '0' && v->osc[i] <= '9')
-        n = n * 10 + (v->osc[i++] - '0');
+    while (v->osc[i] >= '0' && v->osc[i] <= '9') {
+        if (n < 100000)                 /* capped, as CSI numbers are */
+            n = n * 10 + (v->osc[i] - '0');
+        i++;
+    }
     if (v->osc[i] == ';' && (n == 0 || n == 2)) {
         strncpy(v->title, v->osc + i + 1, sizeof v->title - 1);
         v->title[sizeof v->title - 1] = 0;
