@@ -111,9 +111,126 @@ int net_wait(LONG fd, int rd, int wr, LONG secs)
     }
 }
 
+/* A host name to an address, in a process of its own: gethostbyname
+ * waits for the name server as long as the TCP/IP stack likes, and the
+ * window must go on (Esc gives up). The process has its own
+ * bsdsocket.library base (a base is per task). Given up on, it goes on
+ * alone and frees what it was given; CTerm waits for any still running
+ * before it quits (their code is CTerm's). */
+struct Lookup {
+    char host[256];
+    ULONG addr;
+    BYTE done, found, abandoned, sig;
+    struct Task *parent;
+};
+static volatile int lookups_alive;
+
+static void lookup_entry(void)
+{
+    struct Process *me = (struct Process *)FindTask(NULL);
+    struct Lookup *l = (struct Lookup *)me->pr_ExitData;
+    struct Library *SocketBase = OpenLibrary("bsdsocket.library", 4);
+    ULONG addr = 0;
+    BOOL found = FALSE;
+    if (SocketBase) {
+        struct hostent *he = gethostbyname((STRPTR)l->host);
+        if (he && he->h_length == 4) {
+            memcpy(&addr, he->h_addr, 4);
+            found = TRUE;
+        }
+        CloseLibrary(SocketBase);
+    }
+    Forbid();
+    if (l->abandoned)
+        FreeVec(l);
+    else {
+        l->addr = addr;
+        l->found = found;
+        l->done = TRUE;
+        Signal(l->parent, 1UL << l->sig);
+    }
+    lookups_alive--;
+    /* still in Forbid: back to DOS, which ends the process - CTerm cannot
+     * be unloaded under the last instructions */
+}
+
+/* Wait for every lookup given up on (at quit: their code is ours). */
+void net_lookups_wait(void)
+{
+    while (lookups_alive > 0)
+        Delay(10);
+}
+
+/* 1: found (*addr), 0: no such host, -1: given up (Esc, the close gadget,
+ * Ctrl-C, NET_SECS), -2: could not start the lookup. */
+static int lookup(const char *host, ULONG *addr)
+{
+    struct Lookup *l = AllocVec(sizeof *l, MEMF_PUBLIC | MEMF_CLEAR);
+    struct timeval t0, now;
+    LONG idle = 0;
+    int r = -1;
+    if (!l)
+        return -2;
+    strncpy(l->host, host, sizeof l->host - 1);
+    l->parent = FindTask(NULL);
+    l->sig = AllocSignal(-1);
+    if (l->sig < 0) {
+        FreeVec(l);
+        return -2;
+    }
+    SetSignal(0, 1UL << l->sig);
+    Forbid();
+    lookups_alive++;
+    if (!CreateNewProcTags(NP_Entry, (ULONG)lookup_entry,
+                           NP_Name, (ULONG)"CTerm name lookup",
+                           NP_StackSize, 16384,
+                           NP_ExitData, (ULONG)l, TAG_END)) {
+        lookups_alive--;
+        Permit();
+        FreeSignal(l->sig);
+        FreeVec(l);
+        return -2;
+    }
+    Permit();
+    term_now(&t0);
+    for (;;) {
+        struct timeval tv;
+        ULONG lsig = 1UL << l->sig;
+        ULONG wsig = win ? 1UL << win->UserPort->mp_SigBit : 0;
+        ULONG sigs = lsig | wsig | shells_sigmask() | SIGBREAKF_CTRL_C;
+        tv.tv_sec = 1;                  /* look at the clock each second */
+        tv.tv_usec = 0;
+        WaitSelect(0, NULL, NULL, NULL, &tv, &sigs);
+        if (l->done) {
+            *addr = l->addr;
+            r = l->found ? 1 : 0;
+            break;
+        }
+        if (sigs & SIGBREAKF_CTRL_C)
+            break;
+        if (sigs & ~(lsig | wsig))
+            shells_handle(sigs);        /* the other tabs go on */
+        if ((sigs & wsig) && user_gives_up())
+            break;
+        if (!sigs)
+            idle++;
+        term_now(&now);
+        if ((now.tv_secs ? (LONG)(now.tv_secs - t0.tv_secs) : idle) >=
+            NET_SECS)
+            break;
+    }
+    Forbid();
+    if (l->done)
+        FreeVec(l);                     /* answered (perhaps just now) */
+    else
+        l->abandoned = TRUE;            /* it frees l itself */
+    Permit();
+    FreeSignal(l->sig);
+    return r;
+}
+
 LONG net_connect(const char *host, LONG p, ssh_say_fn sayf)
 {
-    struct hostent *he;
     struct sockaddr_in sa;
     LONG s, on = 1, off = 0;
     if (p <= 0 || p > 65535) {
@@ -125,13 +242,17 @@ LONG net_connect(const char *host, LONG p, ssh_say_fn sayf)
     sa.sin_port = htons(p);
     sa.sin_addr.s_addr = inet_addr((STRPTR)host);
     if (sa.sin_addr.s_addr == INADDR_NONE) {
-        /* the one wait left that cannot be cut short: the stack's own */
-        he = gethostbyname((STRPTR)host);
-        if (!he) {
-            sayf("\x1b[1;31m[no such host]\x1b[0m\r\n");
+        ULONG a;
+        int r;
+        sayf("\x1b[2m[looking up the name...]\x1b[0m\r\n");
+        r = lookup(host, &a);
+        if (r <= 0) {
+            sayf(r == 0 ? "\x1b[1;31m[no such host]\x1b[0m\r\n"
+                 : r == -1 ? "\x1b[1;31m[given up]\x1b[0m\r\n"
+                 : "\x1b[1;31m[could not look up the name]\x1b[0m\r\n");
             return -1;
         }
-        memcpy(&sa.sin_addr, he->h_addr, 4);
+        memcpy(&sa.sin_addr, &a, 4);
     }
     s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0)

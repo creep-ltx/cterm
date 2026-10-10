@@ -180,8 +180,9 @@ In the order the user and I agreed (2026-10-10):
     fast lane for CP437 and box lines (6af565f) was only measured on the PC
     (0.30 -> 0.11 s for 50 MB of CP437 art);
   - the vt.c fuzzer is `make fuzz` (tests/fuzz/fz.c, ASan/UBSan, 10 seeds);
-  - the name lookup (gethostbyname) still blocks the window until the
-    TCP/IP stack gives up; everything after it has Esc and 30 s.
+  - the name lookup runs in a process of its own (net.c lookup(), its own
+    bsdsocket base): the window goes on, Esc and 30 s give up; one given
+    up on frees itself, CTerm waits for it at quit (0.3b6, A1200).
 
 - **Memory, load on demand** (the user, 2026-10-10): done - the
   protocols are files (PROGDIR:Protocols/), ttengine.library (109 KB)

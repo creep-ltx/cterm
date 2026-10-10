@@ -19,6 +19,7 @@ typedef void (*ssh_say_fn)(const char *text);
 int net_wait(LONG fd, int rd, int wr, LONG secs);
 /* A socket connected to host:port, -1 if not (and why, said). */
 LONG net_connect(const char *host, LONG port, ssh_say_fn say);
+void net_lookups_wait(void);        /* at quit: lookups given up on */
 
 /* user@host[:port]: connect, check the host key against ENVARC:CTerm/known_hosts
  * (asking about a new or changed one), log in (key file, then password /

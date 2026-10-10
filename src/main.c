@@ -76,7 +76,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-static const char version[] = "$VER: CTerm 0.3b5 (10.10.2026)";
+static const char version[] = "$VER: CTerm 0.3b6 (10.10.2026)";
 
 struct Library *SocketBase;
 struct Library *KeymapBase;
@@ -1353,6 +1353,8 @@ static int cterm_main(int argc, char **argv)
     if (GadToolsBase) CloseLibrary(GadToolsBase);
     if (KeymapBase) CloseLibrary(KeymapBase);
     if (SocketBase) CloseLibrary(SocketBase);
+    net_lookups_wait();                 /* a name lookup given up on runs
+                                         * CTerm's code until it ends */
 #ifdef PROFILE
     {
         BPTR f = Open((STRPTR)"SYS:T/cterm.prof", MODE_NEWFILE);
