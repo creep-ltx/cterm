@@ -10,6 +10,7 @@
 #include "xfer.h"
 
 static int xstop;                       /* Esc or the close gadget */
+static int xdamaged;                    /* the window wants drawing again */
 static int xtel;                      /* telnet's parser, for the transfer */
 static ULONG t0, tlast;                 /* when it began, last shown (ticks) */
 static char xdir[256];
@@ -32,6 +33,12 @@ static void x_events(void)
         if ((m->Class == IDCMP_RAWKEY && m->Code == 0x45) ||
             m->Class == IDCMP_CLOSEWINDOW)
             xstop = 1;
+        if (m->Class == IDCMP_REFRESHWINDOW || m->Class == IDCMP_NEWSIZE)
+            xdamaged = 1;               /* drawn whole when it is over */
+        if (m->Class == IDCMP_REFRESHWINDOW) {
+            BeginRefresh(win);
+            EndRefresh(win, TRUE);
+        }
         ReplyMsg((struct Message *)m);
     }
 }
@@ -349,7 +356,7 @@ BOOL transfer_take(UBYTE *buf, LONG n)
     io.wopen = x_wopen; io.wwrite = x_wwrite; io.wclose = x_wclose;
     io.ropen = x_ropen; io.rread = x_rread; io.rseek = x_rseek;
     io.rclose = x_rclose;
-    xstop = 0;
+    xstop = xdamaged = 0;
     xfiles = xbytes = 0;
     t0 = tlast = ticks_now();
     refresh();
@@ -386,6 +393,10 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         strcat(s, " KB]\x1b[0m\r\n");
         say(s);
     }
+    /* a requester was over the window (an upload), or it was hidden: all
+     * of it again - SIMPLE_REFRESH keeps nothing */
+    if (kind == 2 || xdamaged)
+        redraw_all();
     title_update_now();
     refresh();
     return TRUE;
