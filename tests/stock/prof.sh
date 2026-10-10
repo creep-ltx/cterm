@@ -20,8 +20,8 @@ python3 - "$H/T/cterm.prof" <<'PY'
 import sys,re
 s=open(sys.argv[1]).read()
 d=dict((k,int(v)) for k,v in re.findall(r'(\w+) (-?\d+)',s))
-for k in ['wait','packets','vt','draw','scroll','text','fill','cursor','knob','rows','draws','writes']:
+for k in ['wait','packets','vt','draw','scroll','text','fill','cursor','knob','rows','nrows','nall','nscroll','calib1000','draws','writes']:
     v=d.get(k,0)
-    print(f"{k:8s} {v/709379:8.2f} s" if k not in ('draws','writes') else f"{k:8s} {v}")
+    print(f"{k:8s} {v/709379:8.2f} s" if k not in ('draws','writes','nrows','nall','nscroll') else f"{k:8s} {v}")
 PY
 (cd "$D" && touch src/main.c && make CTerm >/dev/null)

@@ -30,8 +30,6 @@
 #include <proto/dos.h>
 #include <proto/intuition.h>
 #include <proto/graphics.h>
-#include <proto/layers.h>
-#include <graphics/clip.h>
 #include <proto/keymap.h>
 #include <proto/gadtools.h>
 #include <proto/asl.h>
@@ -176,8 +174,9 @@ static ULONG ticks(void)
 }
 #endif
 static ULONG pf_vt, pf_draw, pf_pkt, pf_wait, pf_all0, pf_writes, pf_draws;
-static ULONG pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill;
+static ULONG pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill, pf_nrows, pf_nall, pf_nscroll;
 static struct timeval pf_tv0;
+static ULONG pf_calib;
 #define PF_START(v) ULONG v = ticks()
 #define PF_ADD(acc, v) (acc += ticks() - (v))
 #else
@@ -665,142 +664,11 @@ static void tt_run(const ULONG *u, const int *cols, int n, int y,
     drmd(JAM2);
 }
 
-/* ---- plain (planar) screens: letters written straight to the planes ---
- *
- * On a stock Amiga the ROM's Text() is the cost of a console. With an
- * 8-pixel font and the grid started on a byte (layout_and_resize moves
- * it there), a letter is one byte per pixel line per plane, so a run is
- * written by the CPU from a table of the font's glyphs: per plane, the
- * glyph, its complement, or a solid byte, as the two pens' bits say.
- * Only when the window is wholly visible (one clip rectangle); otherwise
- * Text() does it. */
+/* Plain (planar) screens: Text() draws the letters. A CPU writer into
+ * the planes was measured on a stock A1200 (FS-UAE, 2026-10-10) and lost:
+ * in C, 13000 instructions for a 76-letter row (~17 ms) against Text()'s
+ * ~3 ms; only assembly could win, and only on many-coloured rows. */
 static BOOL planar;                     /* a native screen, real planes */
-static BOOL direct_on = FALSE;          /* measured slower than Text() */
-static UBYTE *glyphs;                   /* 256 x ch bytes */
-static struct TextFont *glyphs_of;
-static int glyphs_h;
-
-static BOOL glyphs_make(void)
-{
-    struct TextFont *f = font;
-    int c, y, i, lo, hi;
-    if (glyphs && glyphs_of == f && glyphs_h == ch)
-        return TRUE;
-    if (glyphs)
-        FreeVec(glyphs);
-    glyphs = NULL;
-    glyphs_of = NULL;
-    if (!f || f->tf_XSize != 8 || (f->tf_Flags & FPF_PROPORTIONAL) ||
-        ch > 32 || cbase < f->tf_Baseline)
-        return FALSE;
-    glyphs = AllocVec(256 * ch, MEMF_ANY | MEMF_CLEAR);
-    if (!glyphs)
-        return FALSE;
-    lo = f->tf_LoChar;
-    hi = f->tf_HiChar;
-    for (c = 0; c < 256; c++) {
-        int idx = c >= lo && c <= hi ? c - lo : hi - lo + 1;
-        ULONG loc = ((ULONG *)f->tf_CharLoc)[idx];
-        int off = loc >> 16, wid = loc & 0xFFFF, kern = 0;
-        int top = cbase - f->tf_Baseline;
-        if (f->tf_CharKern)
-            kern = ((WORD *)f->tf_CharKern)[idx];
-        if (wid > 8)
-            wid = 8;
-        for (y = 0; y < f->tf_YSize && y + top < ch; y++) {
-            const UBYTE *d = (const UBYTE *)f->tf_CharData + y * f->tf_Modulo;
-            UBYTE b = 0;
-            for (i = 0; i < wid; i++) {
-                int bit = off + i;
-                if (d[bit >> 3] & (0x80 >> (bit & 7)))
-                    b |= 0x80 >> i;
-            }
-            if (kern > 0)
-                b >>= kern;
-            else if (kern < 0)
-                b <<= -kern;
-            glyphs[c * ch + y + top] = b;
-        }
-    }
-    glyphs_of = f;
-    glyphs_h = ch;
-    return TRUE;
-}
-
-/* n letters from column col of the row at window y py, in the pens set
- * in rp; FALSE: not possible here, use Text(). */
-#ifdef DTDEBUG
-static ULONG dt_n[6];
-#define DTC(i) (dt_n[i]++)
-#else
-#define DTC(i)
-#endif
-static BOOL direct_text(int col, int py, const UBYTE *t, int n, UWORD style)
-{
-    struct Layer *L = rp->Layer;
-    struct BitMap *bm = rp->BitMap;
-    struct ClipRect *cr;
-    LONG ax, ay, bpr;
-    UBYTE mask, fgp, bgp;
-    int k, y, i, ul;
-    if (!planar || usett || !glyphs || glyphs_of != font || !L ||
-        (style & FSF_ITALIC) || n <= 0) {
-        DTC(!planar ? 1 : !glyphs ? 2 : 3);
-        return FALSE;
-    }
-    LockLayer(0, L);
-    cr = L->ClipRect;
-    ax = L->bounds.MinX + ox + col * 8;
-    ay = L->bounds.MinY + py;
-    if ((ax & 7) || !cr || cr->Next || cr->obscured ||
-        cr->bounds.MinX > ax || cr->bounds.MaxX < ax + n * 8 - 1 ||
-        cr->bounds.MinY > ay || cr->bounds.MaxY < ay + ch - 1) {
-        DTC((ax & 7) ? 4 : 5);
-        UnlockLayer(L);
-        return FALSE;
-    }
-    DTC(0);
-    WaitBlit();                         /* a scroll may still be moving */
-    bpr = bm->BytesPerRow;
-    mask = pbase < 0 ? 0xFF : pmask;
-    fgp = rp->FgPen;
-    bgp = rp->BgPen;
-    ul = style & FSF_UNDERLINED ? cbase + 1 : -1;
-    if (ul >= ch)
-        ul = ch - 1;
-    for (k = 0; k < bm->Depth && k < 8; k++) {
-        UBYTE *p = bm->Planes[k];
-        int fb = (fgp >> k) & 1, bb = (bgp >> k) & 1;
-        if (!(mask & (1 << k)) || !p || p == (UBYTE *)-1)
-            continue;
-        p += ay * bpr + (ax >> 3);
-        if (fb == bb) {                 /* the plane is solid here */
-            UBYTE v = fb ? 0xFF : 0;
-            for (y = 0; y < ch; y++, p += bpr)
-                for (i = 0; i < n; i++)
-                    p[i] = v;
-            continue;
-        }
-        for (y = 0; y < ch; y++, p += bpr) {
-            const UBYTE *g = glyphs + y;
-            UBYTE inv = fb ? 0 : 0xFF;
-            if (y == ul) {
-                for (i = 0; i < n; i++)
-                    p[i] = 0xFF ^ inv;
-            } else if (style & FSF_BOLD) {
-                for (i = 0; i < n; i++) {
-                    UBYTE b = g[t[i] * ch];
-                    p[i] = (b | (b >> 1)) ^ inv;
-                }
-            } else {
-                for (i = 0; i < n; i++)
-                    p[i] = g[t[i] * ch] ^ inv;
-            }
-        }
-    }
-    UnlockLayer(L);
-    return TRUE;
-}
 
 static void draw_cells(int r, int x0, int x1)
 {
@@ -909,11 +777,9 @@ static void draw_cells(int r, int x0, int x1)
             apen(fg);
             bpen(bg);
             PF_START(tt);
-            if (!(direct_on && direct_text(start, y, text, n, style))) {
-                softstyle(style);
-                Move(rp, ox + start * cw, y + cbase);
-                Text(rp, (STRPTR)text, n);
-            }
+            softstyle(style);
+            Move(rp, ox + start * cw, y + cbase);
+            Text(rp, (STRPTR)text, n);
             PF_ADD(pf_text, tt);
         }
         if (c->attr & VT_STRIKE)
@@ -1349,8 +1215,6 @@ static void painter_setup(void)
     LONG need = (LONG)cols * cw * ch;
     painter = FALSE;
     planar = !CyberGfxBase || !GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX);
-    if (planar && !usett)
-        glyphs_make();
     if (planar || GetCyberMapAttr(bm, CYBRMATTR_DEPTH) < 15)
         return;
     if (!ccache && !cache_alloc())
@@ -1481,10 +1345,6 @@ static void layout_and_resize(void)
     int w, h;
     ox = win->BorderLeft + 2;
     oy = win->BorderTop + 1;
-    /* 8-pixel cells start on a byte of the screen: the planar writer
-     * then puts one byte per letter (direct_text) */
-    if (cw == 8 && !usett)
-        ox += (8 - ((win->LeftEdge + ox) & 7)) & 7;
     w = win->Width - ox - win->BorderRight - 2 -
         (fullscreen ? POSBAR + 2 : 0);
     h = win->Height - win->BorderTop - win->BorderBottom - 2;
@@ -1529,6 +1389,11 @@ static void refresh(void)
     rp_forget();
     draw_cursor(FALSE);
     flood = chg.all || chg.scroll_n != 0;
+#ifdef PROFILE
+    if (chg.all || back > 0) pf_nall++;
+    if (chg.scroll_n) pf_nscroll++;
+    for (r = 0; r < rows; r++) if (chg.dirty[r]) pf_nrows++;
+#endif
     if (painter) {
         /* nothing is ever scrolled on screen: the rows a scroll moved
          * are painted again (cheap), the rest only if they changed */
@@ -2243,7 +2108,7 @@ static BOOL open_display(void)
     ULONG idcmp = IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE | IDCMP_RAWKEY |
                   IDCMP_GADGETDOWN | IDCMP_GADGETUP | IDCMP_MOUSEMOVE |
                   IDCMP_INTUITICKS | IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW |
-                  IDCMP_INACTIVEWINDOW | IDCMP_CHANGEWINDOW;
+                  IDCMP_INACTIVEWINDOW;
     if (scrmode == SCR_OWN && !ownscr && !open_own_screen())
         scrmode = SCR_WB;
     if (scrmode == SCR_WB) {
@@ -2703,14 +2568,6 @@ static BOOL window_events(void)
                 send_naws();
             raw_report(12, 0, 0);
             break;
-        case IDCMP_CHANGEWINDOW: {
-            /* moved: the grid may no longer start on a byte */
-            int was = ox;
-            layout_and_resize();
-            if (ox != was)
-                redraw_all();
-            break;
-        }
         case IDCMP_REFRESHWINDOW:
             BeginRefresh(win);
             EndRefresh(win, TRUE);
@@ -2805,6 +2662,13 @@ static void run(void)
 {
     static UBYTE buf[16384];
 #ifdef PROFILE
+    {   /* what one clock read costs, to take it out of the buckets */
+        int k;
+        ULONG t0 = ticks();
+        for (k = 0; k < 1000; k++)
+            (void)ticks();
+        pf_calib = ticks() - t0;
+    }
     pf_all0 = ticks();
     term_now(&pf_tv0);
 #endif
@@ -3039,26 +2903,16 @@ int main(int argc, char **argv)
     if (GadToolsBase) CloseLibrary(GadToolsBase);
     if (KeymapBase) CloseLibrary(KeymapBase);
     if (SocketBase) CloseLibrary(SocketBase);
-#ifdef DTDEBUG
-    {
-        BPTR f = Open((STRPTR)"SYS:T/cterm.dbg", MODE_NEWFILE);
-        if (f) {
-            FPrintf(f, (STRPTR)"hit %ld noplanar %ld noglyph %ld other %ld phase %ld clip %ld ox %ld left %ld\n",
-                    dt_n[0], dt_n[1], dt_n[2], dt_n[3], dt_n[4], dt_n[5], (LONG)ox, (LONG)(win ? win->LeftEdge : -1));
-            Close(f);
-        }
-    }
-#endif
 #ifdef PROFILE
     {
         BPTR f = Open((STRPTR)"SYS:T/cterm.prof", MODE_NEWFILE);
         if (f) {
             struct timeval t1;
             term_now(&t1);
-            FPrintf(f, (STRPTR)"real s %ld; ticks: all %ld wait %ld packets %ld vt %ld draw %ld (scroll %ld text %ld cursor %ld knob %ld rows %ld fill %ld) draws %ld writes %ld\n",
+            FPrintf(f, (STRPTR)"real s %ld; ticks: all %ld wait %ld packets %ld vt %ld draw %ld (scroll %ld text %ld cursor %ld knob %ld rows %ld fill %ld) nrows %ld nall %ld nscroll %ld calib1000 %ld draws %ld writes %ld\n",
                     (LONG)(t1.tv_secs - pf_tv0.tv_secs),
                     (ticks() - pf_all0), pf_wait, pf_pkt,
-                    pf_vt, pf_draw, pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill, pf_draws, pf_writes);
+                    pf_vt, pf_draw, pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill, pf_nrows, pf_nall, pf_nscroll, pf_calib, pf_draws, pf_writes);
             Close(f);
         }
     }

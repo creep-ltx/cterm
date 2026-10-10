@@ -12,9 +12,6 @@ endif
 ifdef PROFILE_ECLOCK
 CFLAGS += -DPROFILE_ECLOCK
 endif
-ifdef DTDEBUG
-CFLAGS += -DDTDEBUG
-endif
 
 CTerm: src/main.c src/vt.c src/vt.h src/boxtable.h src/console.c src/console.h
 	$(CC) $(CFLAGS) src/main.c src/vt.c src/console.c -o CTerm

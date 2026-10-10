@@ -77,6 +77,8 @@ int main(int argc, char **argv)
             s[m++] = 'K';
             memcpy(s + m, longl + (i * 7) % 240, 60); m += 60;
             vt_write(vt, (const uint8_t *)s, m);
+        } else if (!strcmp(t, "byte")) {
+            vt_write(vt, (const uint8_t *)blk + i % 78, 1);
         } else if (!strcmp(t, "nl")) {
             vt_write(vt, (const uint8_t *)"\n\n\n\n\n\n\n\n\n\n", 10);
         } else if (!strcmp(t, "eol")) {

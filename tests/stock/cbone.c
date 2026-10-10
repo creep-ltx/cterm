@@ -66,6 +66,9 @@ int main(void)
                     memcpy(s + m, longl + (j * 7 + f) % 240, 60); m += 60;
                     Write(out, s, m);
                 }
+        } else if (!strcmp(t, "bytewise")) {
+            for (i = 1; i <= 2400; i++)
+                Write(out, blk + i % 78, 1);
         } else if (!strcmp(t, "cursor")) {
             for (i = 1; i <= 700; i++) {
                 int m = 0;
