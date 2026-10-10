@@ -443,6 +443,121 @@ static void paste_feed(struct Con *c)
         serve(c);
 }
 
+/* ---- Tab: the name at the cursor completed ------------------------
+ * CTerm edits the Shell's lines (DISK_INFO 'CTRM'), so the 3.2 console's
+ * completion is CTerm's to do. Against the reader's current directory:
+ * the reader waits in its READ, so its pr_CurrentDir holds still. */
+
+static UBYTE lower(UBYTE ch)
+{
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 0xC0 && ch <= 0xDE && ch != 0xD7)
+           ? ch + 32 : ch;
+}
+
+/* The directory of the process waiting to read (0 is the boot volume's
+ * root); FALSE: no process waits. */
+static BOOL reader_dir(struct Con *c, BPTR *dir)
+{
+    struct MsgPort *port;
+    struct Task *t;
+    if (c->nreads == 0 || !(port = c->reads[0]->dp_Port) ||
+        (port->mp_Flags & PF_ACTION) != PA_SIGNAL ||
+        !(t = port->mp_SigTask) || t->tc_Node.ln_Type != NT_PROCESS)
+        return FALSE;
+    *dir = ((struct Process *)t)->pr_CurrentDir;
+    return TRUE;
+}
+
+static void insert_text(struct Con *c, const UBYTE *s, int n)
+{
+    while (n-- > 0 && c->llen < LINEMAX - 1)
+        insert_char(c, *s++);
+}
+
+static void complete(struct Con *c)
+{
+    static UBYTE dir[LINEMAX], best[108];
+    struct FileInfoBlock *fib;
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR keepwin;
+    BPTR cd = 0, l, keepcd;
+    int i, start = 0, sep, plen, nmatch = 0, common = 0;
+    BOOL quoted = FALSE, isdir = FALSE;
+    begin_line(c);
+    /* the word at the cursor: after the last space outside quotes */
+    for (i = 0; i < c->lcur; i++)
+        if (c->line[i] == '"') {
+            quoted = !quoted;
+            start = i + 1;
+        } else if (c->line[i] == ' ' && !quoted)
+            start = i + 1;
+    for (sep = c->lcur; sep > start && c->line[sep - 1] != '/' &&
+                        c->line[sep - 1] != ':'; sep--)
+        ;
+    plen = c->lcur - sep;               /* the name's start, typed */
+    if (!reader_dir(c, &cd) || !(fib = AllocDosObject(DOS_FIB, NULL))) {
+        beep();
+        return;
+    }
+    CopyMem(c->line + start, dir, sep - start);
+    dir[sep - start] = 0;
+    keepwin = me->pr_WindowPtr;
+    me->pr_WindowPtr = (APTR)-1;        /* no "insert volume" requester */
+    keepcd = CurrentDir(cd);
+    l = Lock((STRPTR)dir, ACCESS_READ);
+    CurrentDir(keepcd);
+    if (l && Examine(l, fib) && fib->fib_DirEntryType > 0)
+        while (ExNext(l, fib)) {
+            UBYTE *nm = (UBYTE *)fib->fib_FileName;
+            for (i = 0; i < plen && nm[i] &&
+                        lower(nm[i]) == lower(c->line[sep + i]); i++)
+                ;
+            if (i < plen)
+                continue;
+            if (nmatch++ == 0) {
+                strcpy((char *)best, (char *)nm);
+                common = strlen((char *)nm);
+                isdir = fib->fib_DirEntryType > 0;
+            } else {
+                for (i = plen; i < common && lower(nm[i]) == lower(best[i]);
+                     i++)
+                    ;
+                common = i;
+            }
+        }
+    if (l)
+        UnLock(l);
+    me->pr_WindowPtr = keepwin;
+    FreeDosObject(DOS_FIB, fib);
+    if (nmatch == 0) {
+        beep();
+        return;
+    }
+    if (!quoted)                        /* a space in it: quote the word */
+        for (i = plen; i < common; i++)
+            if (best[i] == ' ') {
+                if (c->llen < LINEMAX - 1) {
+                    int keep = c->lcur;
+                    c->lcur = start;
+                    insert_char(c, '"');
+                    c->lcur = keep + 1;
+                    quoted = TRUE;
+                }
+                break;
+            }
+    insert_text(c, best + plen, common - plen);
+    if (nmatch > 1)
+        beep();                         /* more than one: as far as they agree */
+    else if (isdir)
+        insert_text(c, (const UBYTE *)"/", 1);
+    else {
+        if (quoted)
+            insert_text(c, (const UBYTE *)"\"", 1);
+        insert_text(c, (const UBYTE *)" ", 1);
+    }
+    redraw_line(c);
+}
+
 /* One key's bytes, cooked. */
 static void edit_key(struct Con *c, const UBYTE *b, LONG n)
 {
@@ -494,6 +609,8 @@ static void edit_key(struct Con *c, const UBYTE *b, LONG n)
                 c->llen--;
                 redraw_line(c);
             }
+        } else if (ch == '\t') {                    /* tab: complete */
+            complete(c);
         } else if (ch == 0x18) {                    /* ctrl-x: clear */
             begin_line(c);
             set_line(c, (const UBYTE *)"");
