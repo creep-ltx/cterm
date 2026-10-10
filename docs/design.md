@@ -113,11 +113,11 @@ CTerm's own console handler is new C code; it takes CCON's knowledge
    with a patch to libssh2's Amiga branch); known hosts, key and password
    logins, a pty that follows the window. Password logins not yet tried
    against a real server.
-6. **Comfort:**
-   - done: the window's place and size remembered; mouse selection, Copy,
-     Paste (clipboard.device, FTXT);
-   - to do: a settings window (fonts, colours, screen, line spacing);
-     perhaps tabs: the Shell and a remote session side by side.
+6. **Done 2026-10-10. Comfort:** the window's place and size remembered;
+   mouse selection, Copy, Paste; a settings window (screen and mode,
+   fonts, TrueType size, line spacing, characters, six themes and your
+   own colours; Save/Use/Cancel); the PC's VGA font in PC BBS mode;
+   tabs (Shells, telnet and ssh side by side in one window).
 
 Speed on a stock A1200 (FS-UAE, conbench): 99 s at first, 39.6 s on
 2026-10-10, CCON 26.0 s; on the PiStorm A1200 4.45 s against CCON's 4.26.
