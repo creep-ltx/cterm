@@ -285,6 +285,12 @@ extern Object *setobj, *sg[S_N];
 extern BOOL title_force;
 
 /* ---- the parts' calls ---- */
+BOOL asl_open(void);
+ULONG history_lines(void);
+BOOL diskfont_open(void);
+BOOL transfer_take(UBYTE *buf, LONG n);
+void transfer_free(void);
+void deep_call(void (*fn)(void));
 __attribute__((noinline)) __stdargs APTR RNewObject(struct IClass *c, CONST_STRPTR id, ULONG tag1, ...);
 __attribute__((noinline)) __stdargs ULONG RSetAttrs(APTR o, ULONG tag1, ...);
 void apply_theme(void);

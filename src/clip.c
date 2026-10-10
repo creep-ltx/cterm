@@ -205,7 +205,7 @@ void log_start(void)
     struct FileRequester *req;
     char path[256];
     BPTR fh;
-    if (!AslBase)
+    if (!asl_open())
         return;
     req = AllocAslRequestTags(ASL_FileRequest,
         ASLFR_Window, (ULONG)win, ASLFR_SleepWindow, TRUE,

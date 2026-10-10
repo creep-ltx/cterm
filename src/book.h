@@ -23,9 +23,12 @@ typedef struct {
     int letters, chars;
 } BookEntry;
 
-extern BookEntry book[BOOK_MAX];
+extern BookEntry *book;              /* BOOK_MAX of them, or NULL */
 extern int nbook;
 
+int book_need(void);                    /* room for one more entry */
+int book_room(void);                    /* the room there is */
+void book_free(void);
 void book_load(void);
 BOOL book_save(void);
 int book_find(const char *name);        /* -1: none */

@@ -20,16 +20,54 @@
 #include <dos/dos.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <exec/memory.h>
 #include "book.h"
 
 #define BOOK_DIR  "ENVARC:CTerm"
 #define BOOK_FILE "ENVARC:CTerm/phonebook"
 
-BookEntry book[BOOK_MAX];
+BookEntry *book;
+static int bookcap;                     /* entries there is room for */
 int nbook;
 
 static const char *const lettername[] = { "cterm", "amiga", "truetype", "pc" };
 static const char *const charname[] = { "utf8", "latin1", "pc" };
+
+/* Room for one more entry, eight at a time: a stock A1200 has no 40 KB
+ * to keep for 64 entries it may never have. */
+int book_need(void)
+{
+    BookEntry *b;
+    int cap;
+    if (nbook < bookcap)
+        return 1;
+    if (nbook >= BOOK_MAX)
+        return 0;
+    cap = bookcap + 8 > BOOK_MAX ? BOOK_MAX : bookcap + 8;
+    b = AllocVec(cap * sizeof *b, MEMF_ANY | MEMF_CLEAR);
+    if (!b)
+        return 0;
+    if (book) {
+        CopyMem(book, b, nbook * sizeof *b);
+        FreeVec(book);
+    }
+    book = b;
+    bookcap = cap;
+    return 1;
+}
+
+int book_room(void)
+{
+    return bookcap;
+}
+
+void book_free(void)
+{
+    if (book)
+        FreeVec(book);
+    book = NULL;
+    bookcap = nbook = 0;
+}
 
 void book_blank(BookEntry *e, const char *name)
 {
@@ -60,6 +98,7 @@ void book_load(void)
     nbook = 0;
     if (!f)
         return;
+
     while (FGets(f, (STRPTR)line, sizeof line)) {
         char *v, *nl = strchr(line, '\n');
         if (nl)
@@ -73,7 +112,7 @@ void book_load(void)
             continue;
         *v++ = 0;
         if (!e) {
-            if (nbook >= BOOK_MAX)
+            if (!book_need())
                 break;
             e = &book[nbook++];
             book_blank(e, "");

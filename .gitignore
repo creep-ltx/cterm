@@ -19,3 +19,6 @@ tests/ssh/sshtest
 src/*.o
 CTermSSH
 third_party/pcfont/
+third_party/src/
+tests/reaction/settab
+tests/zmodem_test

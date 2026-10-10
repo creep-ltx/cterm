@@ -19,7 +19,7 @@ BOOL load_font(void)
 {
     static struct TextAttr topaz8 = { (STRPTR)"topaz.font", 8, 0, 0 };
     struct TextFont *f = NULL;
-    if (fontname[0] && DiskfontBase) {
+    if (fontname[0] && diskfont_open()) {
         struct TextAttr ta;
         ta.ta_Name = (STRPTR)fontname;
         ta.ta_YSize = fontsize;
@@ -156,7 +156,7 @@ void ask_ttfont(void)
 {
     struct FileRequester *req;
     char path[160];
-    if (!AslBase || !TTEngineBase) {
+    if (!asl_open() || !TTEngineBase) {
         say("\r\n[TrueType needs ttengine.library in LIBS:]\r\n");
         return;
     }
@@ -256,7 +256,7 @@ void tab_letters(BOOL tab)
 void ask_font(void)
 {
     struct FontRequester *req;
-    if (!AslBase)
+    if (!asl_open())
         return;
     req = AllocAslRequestTags(ASL_FontRequest,
         ASLFO_Window, (ULONG)win, ASLFO_SleepWindow, TRUE,

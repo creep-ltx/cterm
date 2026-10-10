@@ -492,7 +492,7 @@ struct Tab *tab_new(void)
     t = AllocVec(sizeof *t, MEMF_ANY | MEMF_CLEAR);
     if (!t)
         return NULL;
-    lines = AvailMem(MEMF_ANY) / 4 / (80 * sizeof(VtCell));
+    lines = history_lines();
     t->t_vt = vt_new(cols > 0 ? cols : 80, rows > 0 ? rows : 25,
                    lines < SCROLLBACK ? (int)lines : SCROLLBACK);
     if (!t->t_vt) {
@@ -640,6 +640,8 @@ static void host_input(UBYTE *buf, LONG size)
                 /* drain it: libssh2 may hold decrypted data the socket
                  * no longer shows */
                 while ((k = ssh_read(T->ssh, buf, size)) > 0) {
+                    if (transfer_take(buf, k))
+                        break;          /* a file transfer took the rest */
                     log_bytes(buf, k);
                     vt_write(vt, buf, k);
                 }
@@ -653,6 +655,8 @@ static void host_input(UBYTE *buf, LONG size)
                 hung_up();
                 break;
             }
+            if (transfer_take(buf, k))
+                break;                  /* a file transfer took the rest */
             from_host(buf, k);
             if (++rounds > 16)
                 break;
@@ -822,6 +826,33 @@ static void run(void)
 
 static BOOL arg_pc, arg_latin1;
 static int arg_book = -1;
+/* asl.library and diskfont.library come from disk and take some 100 KB:
+ * opened the first time a requester or a disk font is wanted, so a stock
+ * A1200 keeps the memory until then. */
+/* How many 80-column lines of history a tab may keep: a quarter of free
+ * memory, an eighth on an Amiga with only chip memory (a stock A1200
+ * needs the rest to run things). */
+ULONG history_lines(void)
+{
+    ULONG avail = AvailMem(MEMF_ANY);
+    ULONG part = AvailMem(MEMF_FAST) ? avail / 4 : avail / 8;
+    return part / (80 * sizeof(VtCell));
+}
+
+BOOL asl_open(void)
+{
+    if (!AslBase)
+        AslBase = OpenLibrary((STRPTR)"asl.library", 38);
+    return AslBase != NULL;
+}
+
+BOOL diskfont_open(void)
+{
+    if (!DiskfontBase)
+        DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);
+    return DiskfontBase != NULL;
+}
+
 static int m_argc, m_rc;
 static char **m_argv;
 
@@ -830,10 +861,36 @@ static void __attribute__((noinline)) cterm_main_(void)
     m_rc = cterm_main(m_argc, m_argv);
 }
 
-/* OS 3.2's window classes and the rest want a deep stack, and a Shell's
- * or an icon's may be 4 KB (it crashed the emulator, 2026-10-10): below
- * 64 KB CTerm moves to a 128 KB one of its own. libnix's __stack does
- * not (Knowledge/amiga/kickstart-13-porting.md). */
+/* CTerm itself runs on a Shell's usual 4 KB; below 3 KB it moves to
+ * 8 KB of its own (libnix's __stack does not: Knowledge/amiga/
+ * kickstart-13-porting.md). What wants far more - OS 3.2's window classes
+ * (they crashed the emulator on 3 KB) - runs through deep_call, so a
+ * stock A1200 lends the memory only while it is used. */
+
+/* fn on a stack with 48 KB free at least: a 64 KB one of its own for
+ * the call when this one has less left. */
+void deep_call(void (*fn)(void))
+{
+    struct Task *me = FindTask(NULL);
+    static struct StackSwapStruct dss;
+    UBYTE here, *stk;
+    if ((UBYTE *)&here - (UBYTE *)me->tc_SPLower >= 49152 ||
+        !(stk = AllocVec(65536, MEMF_ANY))) {
+        fn();
+        return;
+    }
+    {
+        struct StackSwapStruct keep = dss;      /* calls may nest */
+        dss.stk_Lower = stk;
+        dss.stk_Upper = (ULONG)(stk + 65536);
+        dss.stk_Pointer = (APTR)(stk + 65536);
+        StackSwap(&dss);
+        fn();
+        StackSwap(&dss);
+        dss = keep;
+    }
+    FreeVec(stk);
+}
 int main(int argc, char **argv)
 {
     struct Task *me = FindTask(NULL);
@@ -842,11 +899,11 @@ int main(int argc, char **argv)
     UBYTE *stk;
     m_argc = argc;
     m_argv = argv;
-    if (have >= 65536 || !(stk = AllocVec(131072, MEMF_ANY)))
+    if (have >= 3000 || !(stk = AllocVec(8192, MEMF_ANY)))
         return cterm_main(argc, argv);
     sss.stk_Lower = stk;
-    sss.stk_Upper = (ULONG)(stk + 131072);
-    sss.stk_Pointer = (APTR)(stk + 131072);
+    sss.stk_Upper = (ULONG)(stk + 8192);
+    sss.stk_Pointer = (APTR)(stk + 8192);
     StackSwap(&sss);
     cterm_main_();
     StackSwap(&sss);
@@ -944,8 +1001,6 @@ static int cterm_main(int argc, char **argv)
         SocketBase = OpenLibrary("bsdsocket.library", 4);
     KeymapBase = OpenLibrary("keymap.library", 37);
     GadToolsBase = OpenLibrary("gadtools.library", 37);
-    AslBase = OpenLibrary("asl.library", 38);
-    DiskfontBase = OpenLibrary("diskfont.library", 36);
     TTEngineBase = OpenLibrary("ttengine.library", 6);
     CyberGfxBase = OpenLibrary("cybergraphics.library", 40);
     load_prefs();
@@ -967,7 +1022,7 @@ static int cterm_main(int argc, char **argv)
     {
         /* history takes at most a quarter of free memory (a line of 80
          * cells is 1280 bytes): a stock A1200 keeps room to run things */
-        ULONG lines = AvailMem(MEMF_ANY) / 4 / (80 * sizeof(VtCell));
+        ULONG lines = history_lines();
         vt = vt_new(80, 25, lines < SCROLLBACK ? (int)lines : SCROLLBACK);
     }
     if (vt) {
@@ -983,6 +1038,11 @@ static int cterm_main(int argc, char **argv)
         rc = RETURN_FAIL;
     } else if (!vt || !KeymapBase || !GadToolsBase ||
         !open_display()) {
+        /* say why: a silent 20 helps nobody (a stock A1200 hit it) */
+        PutStr(!vt ? "CTerm: not enough memory for the text\n"
+               : !KeymapBase || !GadToolsBase
+               ? "CTerm: keymap.library or gadtools.library is missing\n"
+               : "CTerm: could not open its window (memory, or the screen)\n");
         rc = RETURN_FAIL;
     } else {
         if (pcmode)
@@ -1029,6 +1089,8 @@ static int cterm_main(int argc, char **argv)
     backdrop_free();
     if (bgsrc) FreeVec(bgsrc);
     if (DataTypesBase) CloseLibrary(DataTypesBase);
+    book_free();
+    transfer_free();
     close_tt();
     if (TTEngineBase) CloseLibrary(TTEngineBase);
     if (CyberGfxBase) CloseLibrary(CyberGfxBase);

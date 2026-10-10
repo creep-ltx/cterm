@@ -172,15 +172,19 @@ BOOL open_display(void)
     if (scrmode == SCR_WB) {
         fullscreen = FALSE;
         scr = LockPubScreen(NULL);
-        if (!scr)
+        if (!scr) {
+            DBGS("open_display: no screen\n");
             return FALSE;
+        }
     } else {
         scr = ownscr;
         ShowTitle(ownscr, !fullscreen);
     }
     dri = GetScreenDrawInfo(scr);
-    if (!font && !load_font())          /* the bitmap font is always there */
+    if (!font && !load_font()) {        /* the bitmap font is always there */
+        DBGS("open_display: no font\n");
         return FALSE;
+    }
     if (usett && !ttface[0] && !load_tt())
         usett = FALSE;
     if (!usett) {
@@ -226,8 +230,10 @@ BOOL open_display(void)
             WA_MaxWidth, -1, WA_MaxHeight, -1, WA_IDCMP,
             idcmp | IDCMP_REFRESHWINDOW, TAG_END);
     }
-    if (!win)
+    if (!win) {
+        DBGS("open_display: no window\n");
         return FALSE;
+    }
     rp = win->RPort;
     SetFont(rp, font);
     tt_attach();

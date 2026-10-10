@@ -3,6 +3,10 @@
  */
 #include "cterm.h"
 
+static void open_settings_(void);
+static void close_settings_(void);
+static void settings_events_(void);
+
 static BOOL reaction_open(void);
 static void set_attr(int id, ULONG tag, ULONG val);
 static ULONG get_attr(int id, ULONG tag);
@@ -510,7 +514,7 @@ static Object *page_files(void)
     return r_wrap(p);
 }
 
-void close_settings(void)
+static void close_settings_(void)
 {
     struct Node *n;
     if (setobj) {
@@ -651,7 +655,7 @@ static Object *page_keys(void)
     return r_wrap(p);
 }
 
-void open_settings(void)
+static void open_settings_(void)
 {
     Object *pages, *root, *buttons;
     int i;
@@ -661,7 +665,7 @@ void open_settings(void)
         return;
     }
     if (!reaction_open()) {
-        say("\r\n[the settings window needs AmigaOS 3.2's window classes]\r\n");
+        say("\r\n[the settings window needs AmigaOS 3.2's window classes, and\r\n the memory to load them: the Settings menu works without]\r\n");
         return;
     }
     for (i = 0; i < NTHEMES; i++)
@@ -688,9 +692,10 @@ void open_settings(void)
     strcpy(snap.uldir, uldir);
     if (booksnap)
         FreeVec(booksnap);
-    booksnap = AllocVec(sizeof book, MEMF_ANY);
+    booksnap = book ? AllocVec(book_room() * sizeof *book, MEMF_ANY) : NULL;
+    nbooksnap = 0;
     if (booksnap)
-        memcpy(booksnap, book, sizeof book);
+        memcpy(booksnap, book, nbook * sizeof *book);
     nbooksnap = nbook;
     if (bcur >= nbook)
         bcur = nbook - 1;
@@ -791,7 +796,7 @@ static void finish_settings_(int how)
     close_settings();
     if (how == 3) {
         if (booksnap) {                 /* the book as it was */
-            memcpy(book, booksnap, sizeof book);
+            memcpy(book, booksnap, nbooksnap * sizeof *book);
             nbook = nbooksnap;
         }
         BOOL letters = snap.usett != usett || snap.ttsize != ttsize ||
@@ -1012,7 +1017,7 @@ static int settings_gadget(int id)
         break;
     case S_BNEW:
         book_read();
-        if (nbook < BOOK_MAX) {
+        if (book_need()) {
             book_blank(&book[nbook], "New place");
             bcur = nbook++;
             booklist_again();
@@ -1050,7 +1055,7 @@ static int settings_gadget(int id)
     return 0;
 }
 
-void settings_events(void)
+static void settings_events_(void)
 {
     ULONG res;
     UWORD code;
@@ -1070,3 +1075,9 @@ void settings_events(void)
     if (how)
         finish_settings(how);
 }
+
+/* The settings window's work on a deep stack: OS 3.2's classes want one,
+ * and CTerm's own stays small for a stock A1200 (see deep_call). */
+void open_settings(void) { deep_call(open_settings_); }
+void close_settings(void) { deep_call(close_settings_); }
+void settings_events(void) { deep_call(settings_events_); }

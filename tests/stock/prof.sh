@@ -15,7 +15,8 @@ fi
 cp "$D/CTerm" "$H/T/CTerm"
 printf 'FailAt 30\nStack 20000\nSYS:T/cbone %s %s\nEndCLI\n' "$1" "${2:-1}" > "$H/S/xcb"
 rm -f "$H/T/cterm.prof"
-(cd ~/FS-UAE && SDL_VIDEODRIVER=offscreen setsid fs-uae Configurations/A1200-Stock-net.fs-uae >/dev/null 2>&1 & echo $! > /tmp/cterm-bench-uae.pid)
+(cd ~/FS-UAE && SDL_VIDEODRIVER=offscreen setsid fs-uae Configurations/A1200-Stock-net.fs-uae >/dev/null 2>&1 &)
+sleep 2; pgrep -n -x fs-uae > /tmp/cterm-bench-uae.pid   # the newest: ours (none ran before)
 sleep 20
 until wasabi ping >/dev/null 2>&1; do sleep 2; done
 wasabi run --max-time 5 'Run >NIL: SYS:T/CTerm COLS 77 ROWS 30 FROM S:xcb' >/dev/null
