@@ -39,6 +39,9 @@ deploy: CTerm CTermSSH
 	wasabi mkdir Work:Utils/CTerm 2>/dev/null || true
 	wasabi put CTerm Work:Utils/CTerm/CTerm
 	wasabi put CTermSSH Work:Utils/CTerm/CTermSSH
+	wasabi mkdir Work:Utils/CTerm/Fonts 2>/dev/null || true
+	wasabi put fonts/PxPlus_IBM_VGA_8x16.ttf Work:Utils/CTerm/Fonts/PxPlus_IBM_VGA_8x16.ttf
+	wasabi put fonts/LICENSE.txt Work:Utils/CTerm/Fonts/LICENSE.txt
 
 # The core on the PC, against pyte (needs: python3 -m venv .venv &&
 # .venv/bin/pip install pyte).

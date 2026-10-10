@@ -189,6 +189,14 @@ static int linespace;                   /* extra pixels between lines */
  * its bold and italic files where there are any. */
 static BOOL usett;
 static char ttfile[160] = "SYS:Fonts/TrueType/DejaVuSansMono.ttf";
+/* The PC's own font for PC BBS mode: the IBM VGA 8x16 as pixel outlines
+ * (int10h.org's Ultimate Oldschool PC Font Pack, CC BY-SA 4.0), at its
+ * one true size and not smoothed. */
+static BOOL pcfont = TRUE;              /* the setting */
+static char pcttfile[160] = "PROGDIR:Fonts/PxPlus_IBM_VGA_8x16.ttf";
+static BOOL pcfont_on;                  /* it is the font now */
+static BOOL ttaa = TRUE;                /* smoothing; off for pixel fonts */
+static struct { BOOL usett; char ttfile[160]; int ttsize; } keepfont;
 static int ttsize = 14;
 static APTR ttface[4];                  /* regular, bold, italic, both */
 static BOOL ttruns;                     /* whole cells per glyph: runs */
@@ -1159,7 +1167,8 @@ static void cell_tt_glyph(ULONG cp, ULONG fg, ULONG bg, UWORD attr, int w)
     struct TextExtent te;
     int top, left;
     pm = TT_GetPixmap(tt_for(attr), (APTR)&u, 1, TT_Encoding,
-                      TT_Encoding_UTF32_BE, TT_Antialias, TT_Antialias_On,
+                      TT_Encoding_UTF32_BE, TT_Antialias,
+                      ttaa ? TT_Antialias_On : TT_Antialias_Off,
                       TAG_END);
     if (!pm)
         return;
@@ -2406,6 +2415,7 @@ static void load_prefs(void)
                 if (linespace < 0 || linespace > 8) linespace = 0;
             }
             else if (!stricmp(p, "pc")) pcmode = saved_pc = val[0] == '1';
+            else if (!stricmp(p, "pcfont")) pcfont = val[0] != '0';
             else if (!stricmp(p, "mode")) {     /* "hexid,w,h" */
                 const char *q = val;
                 ownmode = hexval(q);
@@ -2452,9 +2462,13 @@ static void save_prefs(void)
         return;                         /* the settings window decides */
     static char buf[1200];
     buf[0] = 0;
-    strcat(buf, "truetype="); strcat(buf, usett ? "1" : "0");
-    strcat(buf, "\nttfile="); strcat(buf, ttfile);
-    strcat(buf, "\nttsize="); numstr_cat(buf, ttsize);
+    strcat(buf, "truetype=");
+    strcat(buf, (pcfont_on ? keepfont.usett : usett) ? "1" : "0");
+    strcat(buf, "\nttfile=");
+    strcat(buf, pcfont_on ? keepfont.ttfile : ttfile);
+    strcat(buf, "\nttsize=");
+    numstr_cat(buf, pcfont_on ? keepfont.ttsize : ttsize);
+    if (!pcfont) strcat(buf, "\npcfont=0");
     if (fontname[0]) {
         strcat(buf, "\nfont=");
         strcat(buf, fontname);
@@ -2580,7 +2594,8 @@ static void tt_attach(void)
 {
     if (usett && win)
         TT_SetAttrs(rp, TT_Window, (ULONG)win, TT_Antialias,
-                    TT_Antialias_On, TT_Encoding, TT_Encoding_UTF32_BE,
+                    ttaa ? TT_Antialias_On : TT_Antialias_Off,
+                    TT_Encoding, TT_Encoding_UTF32_BE,
                     TAG_END);
 }
 
@@ -2775,6 +2790,45 @@ static void tt_size(int d)
     }
     font_changed();
     save_prefs();
+}
+
+/* PC BBS mode wears the PC's font (when it is there and wanted), and
+ * leaving it brings the person's own back. */
+static void pc_font(BOOL on)
+{
+    if (on == pcfont_on)
+        return;
+    if (on) {
+        if (!pcfont || !TTEngineBase || !file_exists(pcttfile))
+            return;
+        keepfont.usett = usett;
+        strcpy(keepfont.ttfile, ttfile);
+        keepfont.ttsize = ttsize;
+        usett = TRUE;
+        strcpy(ttfile, pcttfile);
+        ttsize = 16;
+        ttaa = FALSE;
+        pcfont_on = TRUE;
+        if (!load_tt()) {
+            pcfont_on = FALSE;
+            on = FALSE;                 /* fall through: put it back */
+        }
+    }
+    if (!on) {
+        usett = keepfont.usett;
+        strcpy(ttfile, keepfont.ttfile);
+        ttsize = keepfont.ttsize;
+        ttaa = TRUE;
+        pcfont_on = FALSE;
+        if (usett && !load_tt())
+            usett = FALSE;
+        if (!usett) {
+            close_tt();
+            load_font();
+        }
+    }
+    if (win)
+        font_changed();
 }
 
 /* The drawing tools themselves, in microseconds each: what a painter
@@ -3008,6 +3062,7 @@ static BOOL menu_pick(ULONG id)
     case M_UTF8:
         utf8 = saved_utf8 = !utf8;
         pcmode = FALSE;
+        pc_font(FALSE);
         vt_set_utf8(vt, utf8);
         painter_forget();
         redraw_all();
@@ -3018,6 +3073,7 @@ static BOOL menu_pick(ULONG id)
             vt_set_cp437(vt, 1);
         else
             vt_set_utf8(vt, utf8);
+        pc_font(pcmode);
         painter_forget();
         redraw_all();
         break;
@@ -3478,7 +3534,8 @@ static void call_dialog(void)
  * ==================================================================== */
 
 enum { S_WHERE = 1, S_MODE, S_MODETXT, S_FULL, S_BAR, S_LETTERS, S_FONT,
-       S_FONTTXT, S_TT, S_TTTXT, S_TTSIZE, S_SPACE, S_CHARS, S_THEME, S_PART,
+       S_FONTTXT, S_TT, S_TTTXT, S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT,
+       S_THEME, S_PART,
        S_R, S_G, S_B, S_RESET, S_SAVE, S_USE, S_CANCEL, S_N };
 
 static struct Gadget *setglist, *sg[S_N];
@@ -3491,7 +3548,7 @@ static BOOL pend_full, pend_bar;
 
 static struct {                         /* what Cancel goes back to */
     int theme, ttsize, fontsize, linespace;
-    BOOL ownfg, ownbg, usett, utf8, pc;
+    BOOL ownfg, ownbg, usett, utf8, pc, pcfont;
     ULONG myfg, mybg;
     char ttfile[160], fontname[48];
 } snap;
@@ -3587,6 +3644,7 @@ static void set_chars(int k)
 {
     pcmode = k == 2;
     utf8 = k == 0;
+    pc_font(pcmode);
     if (pcmode)
         vt_set_cp437(vt, 1);
     else
@@ -3689,6 +3747,8 @@ static void open_settings(void)
         themelabels[i] = (STRPTR)themes[i].name;
     themelabels[NTHEMES] = NULL;
 
+    pc_font(FALSE);                     /* the controls show the person's */
+    snap.pcfont = pcfont;
     snap.theme = theme;
     snap.ownfg = ownfg; snap.ownbg = ownbg;
     snap.myfg = myfg; snap.mybg = mybg;
@@ -3770,6 +3830,13 @@ static void open_settings(void)
     NG(S_CHARS, gx, gw, "Characters", PLACETEXT_LEFT);
     g = sg[S_CHARS] = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels,
         (ULONG)charlabels, GTCY_Active, chars_now(), TAG_END);
+    y += lh;
+    NG(S_PCFONT, gx, 26, "PC font", PLACETEXT_LEFT);
+    g = sg[S_PCFONT] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked,
+        pcfont, GTCB_Scaled, TRUE, TAG_END);
+    NG(0, gx + 34, gw - 34, NULL, 0);
+    g = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
+        (ULONG)"the IBM VGA font in PC BBS mode", TAG_END);
     y += lh + 8;
 
     NG(S_THEME, gx, gw, "Theme", PLACETEXT_LEFT);
@@ -3831,8 +3898,16 @@ static void open_settings(void)
     GT_RefreshWindow(setwin, NULL);
 }
 
+static void finish_settings_(int how);
+
 /* Use (1), Save (2) or Cancel (3). */
 static void finish_settings(int how)
+{
+    finish_settings_(how);
+    pc_font(pcmode);                    /* PC BBS mode wears the PC's */
+}
+
+static void finish_settings_(int how)
 {
     close_settings();
     if (how == 3) {
@@ -3842,6 +3917,7 @@ static void finish_settings(int how)
                        snap.fontsize != fontsize ||
                        snap.linespace != linespace;
         theme = snap.theme;
+        pcfont = snap.pcfont;
         ownfg = snap.ownfg; ownbg = snap.ownbg;
         myfg = snap.myfg; mybg = snap.mybg;
         if (snap.utf8 != utf8 || snap.pc != pcmode)
@@ -3944,7 +4020,11 @@ static void settings_events(void)
                 letters_changed();
             }
             break;
-        case S_CHARS: set_chars(code); break;
+        case S_CHARS:
+            set_chars(code);
+            pc_font(FALSE);             /* shown on closing */
+            break;
+        case S_PCFONT: pcfont = (g->Flags & GFLG_SELECTED) != 0; break;
         case S_THEME:
             theme = code;
             ownfg = ownbg = FALSE;
@@ -4432,6 +4512,8 @@ int main(int argc, char **argv)
         !open_display()) {
         rc = RETURN_FAIL;
     } else {
+        if (pcmode)
+            pc_font(TRUE);
         run();
     }
     if (win) {

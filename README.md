@@ -14,7 +14,7 @@ million colours, Latin-1, UTF-8 and the PC's character set.
 | `HOST name[:port]` | call a telnet host (port 23 if none is given) |
 | `SSH user@host[:port]` | call an ssh host (port 22) |
 | `KEY file` | with SSH: log in with this private key |
-| `PC` | a PC BBS: the PC character set (CP437), PC colours |
+| `PC` | a PC BBS: the PC character set (CP437), the PC's colours and its own font (IBM VGA 8x16, from `Fonts/` beside CTerm) |
 | `LATIN1` | Latin-1 instead of UTF-8 (Amiga BBSes) |
 | `COLS n` / `ROWS n` | the window's size in letters |
 | `FROM script` | the Shell runs this script first |
@@ -49,7 +49,8 @@ Settings/Settings... (Right Amiga+S) opens one window for everything:
 - **Screen:** a Workbench window or CTerm's own screen (any screen mode
   and number of colours), full screen, scroll bar.
 - **Text:** an Amiga font or TrueType, the TrueType size, line spacing,
-  and the characters (UTF-8, Latin-1, PC BBS).
+  the characters (UTF-8, Latin-1, PC BBS), and whether PC BBS mode uses
+  the PC's own font.
 - **Colours:** a theme (Nord, Black, Workbench, Amber, Green, Light), and
   your own text and background colour on top of it.
 
