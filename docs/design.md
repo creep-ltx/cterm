@@ -244,12 +244,16 @@ In the order the user and I agreed (2026-10-10):
   CSI in a UTF-8 Shell, the deep painter's row buffer after a 256-colour
   screen, flood pacing kept from an AGA screen, the full-screen window
   never repaired (grey after a window closed), ESC % @ forcing Latin-1.
-  Left open: the painter's edge longs touch up to 31 px outside the span
-  (another window's, unlocked) and with BytesPerRow = 2 mod 4 two bytes
-  past the row; the pen table never shrinks (~450 KB per tab at the cap)
-  and walks all history per new look when full; wide letters are drawn
-  half by the planar painter; a 2-byte UTF-8 letter ending in 9B (Û, ś,
-  ě) cannot come from an Amiga program in a UTF-8 Shell.
+  Then (0.3b5; the user: right on screen before speed): the painter
+  paints only cells whose whole longs lie in our own unobscured layer
+  and on this line of the bitmap; the edge cells go to Text(). Stock
+  conbench 30.6 s (same); a window dragged to x=13 is pixel-identical to
+  TEXTDRAW but for italic spill, nothing outside it touched. Wide letters
+  were not a painter bug: with a bitmap font Text() shows the same
+  one-cell stand-in. Left open: the pen table never shrinks (~450 KB per
+  tab at the cap) and walks all history per new look when full; a 2-byte
+  UTF-8 letter ending in 9B (Û, ś, ě) cannot come from an Amiga program
+  in a UTF-8 Shell.
 
 Speed on a stock A1200 (FS-UAE, conbench): 99 s at first, 39.6 s on
 2026-10-10, CCON 26.0 s; on the PiStorm A1200 4.45 s against CCON's 4.26.

@@ -1105,8 +1105,8 @@ static BOOL pp_cells(int r, int a, int b)
     UWORD pw = 0, st = 0;
     UBYTE used = 0;
     BOOL psel = FALSE;
-    LONG X, Y;
-    int n = b - a + 1, i, w, s0 = -1, s1 = -2;
+    LONG X, Y, L, R;
+    int n = b - a + 1, i, w, s0 = -1, s1 = -2, a0 = a, b0 = b;
     if (!ppon || !ly || !bm || n <= 0 || n > PP_MAXCOLS)
         return FALSE;
     X = ly->bounds.MinX + ox + a * 8;
@@ -1121,6 +1121,26 @@ static BOOL pp_cells(int r, int a, int b)
         UnlockLayerRom(ly);
         return FALSE;
     }
+    /* The asm writes whole longs: the first and last reach up to 31
+     * pixels past the span, read and written back. Those must be ours
+     * (this layer, locked) and on this line of the bitmap (a row of
+     * 2 mod 4 bytes: the last long's end is the next line's start) -
+     * else another window's drawing between the read and the write was
+     * undone. Cells whose long is not all ours go to Text(). */
+    L = cr->bounds.MinX;
+    R = cr->bounds.MaxX;
+    if (R > bm->BytesPerRow * 8 - 1)
+        R = bm->BytesPerRow * 8 - 1;
+    while (a <= b && ((ly->bounds.MinX + ox + a * 8) & ~31) < L)
+        a++;
+    while (b >= a && ((ly->bounds.MinX + ox + b * 8 + 7) | 31) > R)
+        b--;
+    if (a > b) {
+        UnlockLayerRom(ly);
+        return FALSE;
+    }
+    n = b - a + 1;
+    X = ly->bounds.MinX + ox + a * 8;
     if (pp_room() < n)
         pp_reset();
     line = vt_line(vt, r, back, &w);
@@ -1175,6 +1195,15 @@ static BOOL pp_cells(int r, int a, int b)
     pp_paint(bm->Planes, bm->Depth, pbase >= 0 ? pmask : 0xFF,
              bm->BytesPerRow, X, Y, n);
     UnlockLayerRom(ly);
+    if (a > a0 || b < b0) {             /* the edges' cells: Text() */
+        BOOL keep = ppon;
+        ppon = FALSE;
+        if (a > a0)
+            draw_cells(r, a0, a - 1);
+        if (b < b0)
+            draw_cells(r, b + 1, b0);
+        ppon = keep;
+    }
     return TRUE;
 }
 
