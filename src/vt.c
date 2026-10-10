@@ -210,6 +210,10 @@ static void dirty_all(Vt *v)
 /* How many cells a character takes: 0 (a combining mark), 1 or 2. */
 static int cp_width(uint32_t c)
 {
+    /* the common ones first: Latin-1, and box lines, blocks, arrows and
+     * symbols (U+2100-2E7F) - one or two compares, not twenty */
+    if (c < 0x300 || (c >= 0x2100 && c < 0x2E80))
+        return 1;
     if ((c >= 0x300 && c <= 0x36F) || (c >= 0x200B && c <= 0x200F) ||
         (c >= 0x20D0 && c <= 0x20FF) || (c >= 0xFE00 && c <= 0xFE0F) ||
         (c >= 0x1AB0 && c <= 0x1AFF) || (c >= 0x1DC0 && c <= 0x1DFF))
@@ -1350,8 +1354,11 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
         int c = buf[i];
         /* The fast lane: a run of plain ASCII text in the normal state
          * goes straight into the row - most output is just this, and
-         * put()'s general checks (width, line drawing, insert) cost. */
-        if (c >= 0x20 && c < 0x7F && v->state == S_GROUND && !v->uneed &&
+         * put()'s general checks (width, line drawing, insert) cost. A
+         * PC BBS's high bytes (code page 437) take it too: all are one
+         * cell wide. */
+        if (((c >= 0x20 && c < 0x7F) || (c >= 0x80 && v->cp437)) &&
+            v->state == S_GROUND && !v->uneed &&
             v->g[v->gl] != '0' && !v->insert) {
             /* whole runs at a time: on a 14 MHz Amiga every instruction
              * per letter shows */
@@ -1378,14 +1385,31 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
                 d = r + x;
                 lim = cols - x;
                 /* one pass: check a byte, store its cell */
-                while (lim > 0 && p < e && (uint8_t)(*p - 0x20) < 0x5F) {
-                    d->cp = *p++;
-                    d->fg = fg;
-                    d->bg = bg;
-                    d->attr = at;
-                    d++;
-                    lim--;
-                }
+                if (v->cp437)
+                    while (lim > 0 && p < e) {
+                        uint8_t b = *p;
+                        if (b >= 0x80)
+                            d->cp = cp437[b - 0x80];
+                        else if ((uint8_t)(b - 0x20) < 0x5F)
+                            d->cp = b;
+                        else
+                            break;
+                        p++;
+                        d->fg = fg;
+                        d->bg = bg;
+                        d->attr = at;
+                        d++;
+                        lim--;
+                    }
+                else
+                    while (lim > 0 && p < e && (uint8_t)(*p - 0x20) < 0x5F) {
+                        d->cp = *p++;
+                        d->fg = fg;
+                        d->bg = bg;
+                        d->attr = at;
+                        d++;
+                        lim--;
+                    }
                 x = (int)(d - r);
                 if (x > l)
                     RLEN(r) = x;
@@ -1398,12 +1422,13 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
                 } else
                     v->x = x;
                 i = (int)(p - buf);
-                if (i >= len || (uint8_t)(buf[i] - 0x20) >= 0x5F)
+                if (i >= len || ((uint8_t)(buf[i] - 0x20) >= 0x5F &&
+                                 !(buf[i] >= 0x80 && v->cp437)))
                     break;
             }
             i--;                        /* the for loop steps past it */
             v->any_dirty = 1;
-            v->last_cp = (uint32_t)buf[i];
+            v->last_cp = buf[i] >= 0x80 ? cp437[buf[i] - 0x80] : buf[i];
             continue;
         }
         /* a whole CSI with plain parameters inside this write: parsed

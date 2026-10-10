@@ -139,6 +139,13 @@ int main(void)
         CHECK(w >= 7 && l[0].cp == 0x2554 && l[1].cp == 0x2550 && l[2].cp == 0x2557 &&
               l[3].cp == 0x2591 && l[4].cp == 0x2588 && l[5].cp == 0xA2 &&
               l[6].cp == 0xFC, "CP437 high bytes are the PC's characters");
+        feed(pc, "\r\n\x1b[3b");                /* REP repeats the last one */
+        feed(pc, "\r\n\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4"
+                 "\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xC4\xBA");
+        l = vt_line(pc, 2, 0, &w);
+        CHECK(w >= 1 && l[0].cp == 0x2551, "a run of CP437 wraps at the edge");
+        l = vt_line(pc, 0, 0, &w);
+        CHECK(w >= 3 && l[0].cp == 0xFC && l[2].cp == 0xFC, "REP after CP437");
         vt_free(pc);
     }
     {   /* mouse, focus and sync modes */
