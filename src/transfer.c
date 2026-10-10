@@ -784,18 +784,131 @@ static void finish(struct XCtx *c, int got)
     }
     title_update_now();
     refresh();
+    rexx_xfer_done(c->tab, got);        /* an ARexx DOWNLOAD/UPLOAD waits */
     ctx_free(c);
+}
+
+/* Ymodem or Xmodem (or a Zmodem send, ARexx's), started from this side:
+ * the files asked for in requesters (paths NULL, xname NULL), or given
+ * (ARexx). The files done; -1 failed or could not start. */
+static int start_xfer(int what, const char *const *given, int ngiven,
+                      const char *xname)
+{
+    XferIO io;
+    struct XCtx *c;
+    const char *paths[NUP];
+    int got = -1, np, i;
+    BOOL zm = what == M_ZSEND;
+    BOOL ymodem = what == M_YRECV || what == M_YSEND;
+    BOOL rexx = given || xname;
+    struct XMod xm;
+    if (local || !linked) {
+        say("\r\n\x1b[2m[transfers are with a host: call one first]\x1b[0m\r\n");
+        refresh();
+        return -1;
+    }
+    if (xfer_running()) {
+        say("\r\n\x1b[2m[one transfer at a time: wait for the other one]\x1b[0m\r\n");
+        refresh();
+        return -1;
+    }
+    if (!mod_load(&xm, zm ? "Zmodem" : "XYmodem"))
+        return -1;
+    c = begin(&io, zm ? "Zmodem" : ymodem ? "Ymodem" : "Xmodem",
+              what == M_YRECV || what == M_XRECV ? 1 : 2);
+    if (!c) {
+        mod_unload(&xm);
+        return -1;
+    }
+    c->damaged = !rexx;
+    if (what == M_YRECV || what == M_XRECV) {
+        char name[108];
+        down_dir(c);
+        name[0] = 0;
+        if (!ymodem && xname) {
+            /* ARexx's name: in the download drawer, or a path of its own */
+            const char *fp = (const char *)FilePart((STRPTR)xname);
+            if (fp != xname) {
+                LONG k = fp - xname;
+                if (k > (LONG)sizeof c->dir - 1)
+                    k = sizeof c->dir - 1;
+                strncpy(c->dir, xname, k);
+                c->dir[k] = 0;
+                strncpy(c->x.where, c->dir, sizeof c->x.where - 1);
+            }
+            strncpy(name, fp, sizeof name - 1);
+            name[sizeof name - 1] = 0;
+            c->exact = TRUE;
+        } else if (!ymodem && !ask_name(c, name, sizeof name)) {
+            redraw_all();
+            refresh();
+            ctx_free(c);
+            mod_unload(&xm);
+            return -1;
+        }
+        shows(c);
+        got = xm.m->xy_receive(&io, ymodem, name);
+    } else {
+        if (given) {
+            for (np = i = 0; i < ngiven && np < NUP; i++) {
+                strncpy(c->paths[np], given[i], 255);
+                c->paths[np][255] = 0;
+                paths[np] = c->paths[np];
+                np++;
+            }
+        } else
+            np = ask_uploads(c->paths, paths,
+                             ymodem ? "CTerm: files to send (Ymodem)"
+                                    : "CTerm: a file to send (Xmodem)");
+        if (np == 0) {
+            redraw_all();
+            ctx_free(c);
+            mod_unload(&xm);
+            return -1;
+        }
+        if (!ymodem && !zm)
+            np = 1;                     /* Xmodem has no names: one file */
+        send_totals(c, paths, np);
+        shows(c);
+        /* 1: Xmodem in 1 KB blocks when the receiver asks with 'C' and
+         * takes them, else 128 (xymodem.c finds out) */
+        got = zm ? xm.m->zm_send(&io, paths, np, NULL, 0)
+                 : xm.m->xy_send(&io, ymodem, 1, paths, np);
+    }
+    finish(c, got);
+    mod_unload(&xm);
+    return got;
+}
+
+/* ARexx's DOWNLOAD and UPLOAD: as the menu's, with the files given. */
+int transfer_rexx(int what, const char *const *paths, int n,
+                  const char *xname)
+{
+    return start_xfer(what, paths, n, xname);
+}
+
+/* ARexx's UPLOAD with Hydra: the files wait for this tab's next Hydra
+ * session, as Send with Hydra... does. */
+BOOL transfer_hydra_queue(const char *const *paths, int n)
+{
+    int i;
+    if (xfer_running() || n <= 0 ||
+        (!hq && !(hq = AllocVec(NUP * 256, MEMF_ANY))))
+        return FALSE;
+    for (i = 0; i < n && i < NUP; i++) {
+        strncpy(hq[i], paths[i], 255);
+        hq[i][255] = 0;
+    }
+    nhq = i;
+    hqtab = T;
+    return TRUE;
 }
 
 /* Transfer/Receive and Send with Ymodem or Xmodem: the person starts them
  * (after starting the other side on the host). Send with Hydra queues. */
 void transfer_menu(int what)
 {
-    XferIO io;
-    struct XCtx *c;
     const char *paths[NUP];
-    int got = -1, np;
-    BOOL ymodem = what == M_YRECV || what == M_YSEND;
     if (what == M_XWIN) {
         xwin_open();
         return;
@@ -818,59 +931,7 @@ void transfer_menu(int what)
         refresh();
         return;
     }
-    if (local || !linked) {
-        say("\r\n\x1b[2m[transfers are with a host: call one first]\x1b[0m\r\n");
-        refresh();
-        return;
-    }
-    if (xfer_running()) {
-        say("\r\n\x1b[2m[one transfer at a time: wait for the other one]\x1b[0m\r\n");
-        refresh();
-        return;
-    }
-    struct XMod xm;
-    if (!mod_load(&xm, "XYmodem"))
-        return;
-    c = begin(&io, ymodem ? "Ymodem" : "Xmodem",
-              what == M_YRECV || what == M_XRECV ? 1 : 2);
-    if (!c) {
-        mod_unload(&xm);
-        return;
-    }
-    c->damaged = TRUE;
-    if (what == M_YRECV || what == M_XRECV) {
-        char name[108];
-        down_dir(c);
-        name[0] = 0;
-        if (!ymodem && !ask_name(c, name, sizeof name)) {
-            redraw_all();
-            refresh();
-            ctx_free(c);
-            mod_unload(&xm);
-            return;
-        }
-        shows(c);
-        got = xm.m->xy_receive(&io, ymodem, name);
-    } else {
-        np = ask_uploads(c->paths, paths,
-                         ymodem ? "CTerm: files to send (Ymodem)"
-                                : "CTerm: a file to send (Xmodem)");
-        if (np == 0) {
-            redraw_all();
-            ctx_free(c);
-            mod_unload(&xm);
-            return;
-        }
-        if (!ymodem)
-            np = 1;                     /* Xmodem has no names: one file */
-        send_totals(c, paths, np);
-        shows(c);
-        /* 1: Xmodem in 1 KB blocks when the receiver asks with 'C' and
-         * takes them, else 128 (xymodem.c finds out) */
-        got = xm.m->xy_send(&io, ymodem, 1, paths, np);
-    }
-    finish(c, got);
-    mod_unload(&xm);
+    start_xfer(what, NULL, 0, NULL);
 }
 
 /* Each tab's last bytes, for a start split across two reads. */
@@ -974,7 +1035,21 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         say("\r\n\x1b[2m[Zmodem: the host waits for files]\x1b[0m\r\n");
         refresh();
         c->damaged = TRUE;
-        np = ask_uploads(c->paths, paths, "CTerm: files to send (Zmodem)");
+        /* an ARexx UPLOAD queued for this tab: its files, no requester.
+         * A tab a script drives gets 2 s for its UPLOAD to come: the
+         * script typed the host's upload command, the host was quicker */
+        np = rexx_uploads(T, c->paths, paths, NUP);
+        if (!np && T->t_watch) {
+            int i;
+            for (i = 0; i < 20 && !np; i++) {
+                Delay(5);
+                rexx_serve();           /* read only: it is queued */
+                np = rexx_uploads(T, c->paths, paths, NUP);
+            }
+        }
+        if (!np)
+            np = ask_uploads(c->paths, paths,
+                             "CTerm: files to send (Zmodem)");
         if (np == 0) {
             refuse();                   /* none: the host stops waiting */
             got = 0;

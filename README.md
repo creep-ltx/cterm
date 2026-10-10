@@ -113,7 +113,9 @@ closes the book. Each place has
   the saved password by itself, once;
 - the letters (CTerm's setting, an Amiga font, TrueType, or the PC's VGA
   font) and the characters (UTF-8, Latin-1, PC BBS);
-- its own download and upload drawers (empty: the Files tab's).
+- its own download and upload drawers (empty: the Files tab's);
+- a script: an ARexx script run when the call is up, to log in by
+  itself (see ARexx below).
 
 A place opens in a new tab dressed the way the entry says (the Call
 window lists the places too) (ssh in a CTermSSH window). `CTerm BOOK "name"`
@@ -208,6 +210,55 @@ Project/Start log... (Right Amiga+L) saves everything that comes into
 the tab to a file, added to the end if the file is there; the title says
 "(logging)" until Project/Stop log or the tab closes. The bytes are kept
 as they came, colour codes and all, so a BBS screen plays back from it.
+
+## ARexx: scripts drive CTerm
+
+CTerm has an ARexx port, so a script (or another program) can call a
+board, wait for its questions, type the answers, fetch files and read
+the screen. The first CTerm's port is `CTERM`, a second one's
+`CTERM.2`, and so on (About in the Project menu says which).
+RexxMast must be running (it is on a standard Workbench).
+
+- **Project/Run ARexx script...** runs a script from `REXX:`.
+- **A phone book place's Script** (the phone book window, Script) runs
+  when the call to that place is up: the automatic BBS login. The
+  script is given the port's name, and its commands go to CTerm and to
+  that place's tab. `rexx/bbs-login.rexx` is one to start from.
+- From the Shell: `rx myscript.rexx`, with `ADDRESS CTERM` in it.
+
+The commands (any case; `OPTIONS RESULTS` in the script to get answers
+in RESULT; RC is 0 when all went well, 5 for a warning such as a time
+limit, 10 for an error, 20 for a failure):
+
+| Command | What it does |
+|---|---|
+| `CALL name` | calls a phone book place, `host:port`, or `SERIAL`, in a new tab; RC 0 when it is up. `NOSCRIPT`: without the place's script |
+| `HANGUP` | hangs up the tab's call (the tab stays) |
+| `SEND "text"` | types the text to the host, or to the Shell: `\r` is Return, `\n` a new line, `\e` Escape, `\t` Tab, `\xHH` any byte. `SEND RAW "text"`: as it is |
+| `WAITFOR "text" ["other"...] [TIMEOUT secs]` | waits until the host sends one of the texts (any case); RESULT is the one that came, RC 5 when the time ran out, 10 when the call ended. It sees what came since the last SEND, so a question that came a moment early still counts |
+| `GETLINE [row]` | the text of a row of the screen (the cursor's row if none) |
+| `GETSCREEN` | the whole screen, a line each row |
+| `CURSOR` | where the cursor is: "row column" |
+| `TAB NEW`, `TAB SELECT n`, `TAB CLOSE [n]`, `TAB COUNT`, `TAB CURRENT`, `TAB NAME [n]` | the tabs |
+| `DOWNLOAD [file] [PROTOCOL zmodem/ymodem/xmodem/hydra] [TIMEOUT secs]` | Zmodem and Hydra: waits for the host's transfer (start it with SEND first) and answers when it has ended; Ymodem and Xmodem start receiving now (Xmodem saves as `file`). RESULT: the files |
+| `UPLOAD file... [PROTOCOL ...]` | sends the files (Hydra: with the host's next Hydra session) |
+| `LOG file` / `LOG OFF` | logs the tab to a file, or stops |
+| `SCREEN TOFRONT` / `TOBACK` | CTerm's screen to the front or back |
+| `WINDOW TOFRONT` / `ACTIVATE` / `TOBACK` | the window (hiding it is not there yet) |
+| `PHONEBOOK` | the places' names, each in quotes |
+| `VERSION`, `HELP [command]`, `QUIT` | |
+
+Commands go to the tab the script last called, opened or chose
+(`TAB SELECT`), else to the tab you are looking at: a login script
+keeps working in its own tab even when you switch to another.
+
+In a script, put each command in quotes as a whole, with the text in
+double quotes inside: `'SEND "guest\r"'`. ARexx turns words outside
+quotes into capitals.
+
+`rexx/` (the `Rexx` drawer beside CTerm) has examples: `bbs-login.rexx`
+(a board's login, for the phone book's Script) and `info.rexx` (what
+CTerm says about itself).
 
 ## Settings
 

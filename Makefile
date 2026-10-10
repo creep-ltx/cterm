@@ -17,7 +17,7 @@ TP = third_party
 SSHINC = -I$(TP)/amiga -I$(TP)/AmiSSL/Developer/include -I$(TP)/libssh2-1.11.1/include
 SSHLIB = $(TP)/lib/libssh2.a -L$(TP)/AmiSSL/Developer/lib/AmigaOS3 -lamisslstubs -lm
 
-SRC = src/main.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c src/bookwin.c src/serial.c src/serwin.c
+SRC = src/main.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c src/bookwin.c src/serial.c src/serwin.c src/rexx.c
 HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h src/serial.h src/sermod.h
 
 # CTerm: everything but ssh (small enough for a stock A1200)
@@ -80,6 +80,9 @@ deploy: CTerm CTermSSH CTermTour protocols
 	wasabi put Protocols/XYmodem Work:Utils/CTerm/Protocols/XYmodem
 	wasabi put Protocols/Hydra Work:Utils/CTerm/Protocols/Hydra
 	wasabi put Protocols/Serial Work:Utils/CTerm/Protocols/Serial
+	wasabi mkdir Work:Utils/CTerm/Rexx 2>/dev/null || true
+	wasabi put rexx/bbs-login.rexx Work:Utils/CTerm/Rexx/bbs-login.rexx
+	wasabi put rexx/info.rexx Work:Utils/CTerm/Rexx/info.rexx
 	wasabi mkdir Work:Utils/CTerm/Fonts 2>/dev/null || true
 	wasabi put fonts/PxPlus_IBM_VGA_8x16.ttf Work:Utils/CTerm/Fonts/PxPlus_IBM_VGA_8x16.ttf
 	wasabi put fonts/LICENSE.txt Work:Utils/CTerm/Fonts/LICENSE.txt

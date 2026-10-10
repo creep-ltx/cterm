@@ -27,6 +27,7 @@ typedef struct {
     char phone[48];         /* a modem dials it; empty: a direct line */
     char init[64];          /* its own init, after the modem's */
     char dial[24];          /* its own dial prefix (empty: the modem's) */
+    char script[108];       /* an ARexx script run when the call is up */
 } BookEntry;
 
 extern BookEntry *book;              /* BOOK_MAX of them, or NULL */

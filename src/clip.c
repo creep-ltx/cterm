@@ -199,6 +199,20 @@ void log_stop(void)
         title_update_now();
 }
 
+/* The log into path (added to when it is there): ARexx's LOG. */
+BOOL log_to(const char *path)
+{
+    BPTR fh = Open((STRPTR)path, MODE_READWRITE);  /* made if missing */
+    if (!fh)
+        return FALSE;
+    Seek(fh, 0, OFFSET_END);
+    log_stop();
+    T->t_log = fh;
+    if (T == shown)
+        title_update_now();
+    return TRUE;
+}
+
 /* Start log...: a file for this tab, added to when it is there. */
 void log_start(void)
 {

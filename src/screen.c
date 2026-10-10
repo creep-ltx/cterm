@@ -24,6 +24,7 @@ static struct NewMenu newmenu[] = {
        (APTR)M_SENDUSER },
     {  NM_ITEM, (STRPTR)"Send password", (STRPTR)"P", 0, 0,
        (APTR)M_SENDPASS },
+    {  NM_ITEM, (STRPTR)"Run ARexx script...", 0, 0, 0, (APTR)M_REXX },
     {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
     {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
     {  NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
@@ -410,6 +411,7 @@ BOOL menu_pick(ULONG id)
         transfer_menu((int)id);
         break;
     case M_LOGSTOP: log_stop(); break;
+    case M_REXX: rexx_menu(); break;
     case M_ABOUT:
         say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
             "Amiga.\r\n"
@@ -419,6 +421,11 @@ BOOL menu_pick(ULONG id)
             "HydraCom's code by\r\n"
             "Arjen G. Lentz, LENTZ SOFTWARE-DEVELOPMENT - Hydra and HydraCom "
             "are free).\r\n");
+        if (rexx_port()[0]) {
+            say("ARexx port: ");
+            say(rexx_port());
+            say("\r\n");
+        }
 #ifdef PROFILE
         {   /* ms = ticks / TPMS */
             char l[200];

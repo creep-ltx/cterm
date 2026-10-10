@@ -2506,10 +2506,14 @@ void refresh(void)
 
 /* What came from the host, as it came (escape codes and all: a BBS
  * screen plays back from it), into the tab's log. */
+/* A host's bytes on their way to the screen: into the log, and to an
+ * ARexx WAITFOR. */
 void log_bytes(const UBYTE *b, LONG n)
 {
     if (T->t_log)
         FWrite(T->t_log, (APTR)b, 1, n);
+    if (T->t_watch)
+        rexx_feed(T, b, n);
 }
 
 /* ---- a transfer's panel: over the tab's last three rows ---------------

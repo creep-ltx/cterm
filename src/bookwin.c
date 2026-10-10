@@ -8,7 +8,7 @@
 
 enum { B_LIST = 1, B_NEW, B_COPY, B_DEL, B_NAME, B_HOST, B_PORT, B_KIND,
        B_USER, B_PASS, B_LET, B_CHR, B_DOWN, B_UP, B_CALL, B_CLOSE,
-       B_PHONE, B_LINE, B_N };
+       B_PHONE, B_LINE, B_SCRIPT, B_N };
 
 static Object *bwobj, *bg[B_N], *bwlayout;
 static struct Window *bwwin;
@@ -26,7 +26,7 @@ static STRPTR chrlabels[] = { (STRPTR)"UTF-8", (STRPTR)"Latin-1",
 /* the controls that mean nothing with no entry chosen */
 static const int entry_ids[] = { B_NAME, B_HOST, B_PORT, B_KIND, B_USER,
     B_PASS, B_LET, B_CHR, B_DOWN, B_UP, B_COPY, B_DEL, B_CALL, B_PHONE,
-    B_LINE };
+    B_LINE, B_SCRIPT };
 #define NENTRY ((int)(sizeof entry_ids / sizeof entry_ids[0]))
 
 ULONG bookwin_sigmask(void)
@@ -107,6 +107,12 @@ static void entry_read(void)
         strncpy(e->up, t, sizeof e->up - 1);
         e->up[sizeof e->up - 1] = 0;
     }
+    if ((t = (const char *)bget(B_SCRIPT, GETFILE_FullFile))) {
+        /* a drawer alone (no file chosen): no script */
+        strncpy(e->script, *FilePart((STRPTR)t) ? t : "",
+                sizeof e->script - 1);
+        e->script[sizeof e->script - 1] = 0;
+    }
     e->port = bget(B_PORT, INTEGER_Number);
     e->ssh = bget(B_KIND, CHOOSER_Selected) == 1;
     e->serial = bget(B_KIND, CHOOSER_Selected) == 2;
@@ -142,6 +148,7 @@ static void entry_show(void)
     bset(B_CHR, CHOOSER_Selected, e->chars);
     bset(B_DOWN, GETFILE_Drawer, (ULONG)e->down);
     bset(B_UP, GETFILE_Drawer, (ULONG)e->up);
+    bset(B_SCRIPT, GETFILE_FullFile, (ULONG)e->script);
     for (i = 0; i < NENTRY; i++)
         bset(entry_ids[i], GA_Disabled, e == &none);
     kind_fields(e, e == &none);
@@ -278,10 +285,20 @@ static void bookwin_open_(void)
         SetAttrs(h, LAYOUT_AddChild, (ULONG)bg[B_LINE],
                  CHILD_WeightedWidth, 0, TAG_END);
     add(g, h, "Phone");
-    add(g, string(B_USER, e->user, sizeof e->user - 1, FALSE), "User");
-    add(g, string(B_PASS, e->pass, sizeof e->pass - 1, TRUE), "Password");
+    /* the name and password side by side: room for the script below,
+     * the window still within a 256-line screen */
+    h = HLayoutObject, End;
+    add(h, string(B_USER, e->user, sizeof e->user - 1, FALSE), NULL);
+    add(h, string(B_PASS, e->pass, sizeof e->pass - 1, TRUE), "Password");
+    add(g, h, "User");
     add(g, chooser(B_LET, lettlabels, e->letters), "Letters");
     add(g, chooser(B_CHR, chrlabels, e->chars), "Characters");
+    /* an ARexx script run when the call is up: a BBS login */
+    add(g, bg[B_SCRIPT] = GetFileObject, GA_ID, B_SCRIPT, GA_RelVerify, TRUE,
+        GETFILE_FullFile, (ULONG)e->script, GETFILE_Pattern,
+        (ULONG)"#?.rexx", GETFILE_DoPatterns, TRUE, GETFILE_ReadOnly, TRUE,
+        GETFILE_TitleText, (ULONG)"Its login script (ARexx)", End,
+        "Script");
     right = VLayoutObject, End;
     if (right && g)                     /* room for a host name */
         SetAttrs(right, LAYOUT_AddChild, (ULONG)g, CHILD_WeightedHeight, 0,
@@ -443,6 +460,14 @@ static void bookwin_events_(void)
                     BookEntry *e = &book[bcur];
                     serwin_edit(&e->line, e->init, e->dial, bwwin);
                 }
+                break;
+            case B_SCRIPT:
+                if (!bget(B_SCRIPT, GETFILE_FullFile) ||
+                    !*(char *)bget(B_SCRIPT, GETFILE_FullFile))
+                    SetAttrs(bg[B_SCRIPT], GETFILE_Drawer, (ULONG)"REXX:",
+                             TAG_END);
+                DoMethod(bg[B_SCRIPT], GFILE_REQUEST, (ULONG)bwwin);
+                entry_read();
                 break;
             case B_DOWN: case B_UP:
                 DoMethod(bg[res & WMHI_GADGETMASK], GFILE_REQUEST,

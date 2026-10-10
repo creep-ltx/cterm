@@ -771,6 +771,7 @@ void connected(void)
 
 void hung_up(void)
 {
+    rexx_tab_over(T);                   /* a WAITFOR's text will not come */
     if (sshmode) {
         ssh_close(T->ssh);              /* it owns the socket */
         T->ssh = NULL;
@@ -940,6 +941,7 @@ void tab_from_book(const BookEntry *e)
     T->t_letters = e->letters;
     strcpy(T->t_down, e->down);
     strcpy(T->t_up, e->up);
+    strcpy(T->t_script, e->script);
 }
 
 /* Another CTerm (or CTermSSH) for a phone book entry: BOOK "name". */
@@ -985,7 +987,50 @@ void call_book(int i, BOOL newtab)
     refresh();
     if (!connect_out())
         say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+    else
+        rexx_after_call();              /* its login script */
     refresh();
+}
+
+/* ARexx's CALL: a phone book place, host[:port] or SERIAL, in a new tab
+ * (a place on ssh needs CTermSSH: not in CTerm's tabs). The RC: 0 up,
+ * 10 not; *made: the tab (NULL: none was made). */
+int call_rexx(const char *what, struct Tab **made)
+{
+    int i = book_find(what);
+    struct Tab *t;
+    BOOL ok;
+    *made = NULL;
+#ifdef NO_SSH
+    if (i >= 0 && book[i].ssh && !book[i].serial)
+        return 10;
+#endif
+    if (!what[0] || !(t = tab_new()))
+        return 10;
+    T = t;
+    *made = t;
+    rexx_watch(t);                      /* the board's first words count */
+    if (i >= 0)
+        tab_from_book(&book[i]);
+    else if (!stricmp((char *)what, "SERIAL"))
+        serial_tab_setup(NULL, NULL, NULL);
+    else {
+        local = FALSE;
+        strncpy(dialhost, what, sizeof dialhost - 1);
+        strcpy(dialtitle, "CTerm: ");
+        strncat(dialtitle, dialhost, sizeof dialtitle - 10);
+    }
+    tab_show(ntabs - 1);
+    say(T->t_serial && !T->t_st.phone[0] ? "\x1b[2m[opening "
+                                         : "\x1b[2m[calling ");
+    say(i >= 0 ? book[i].name : dialhost);
+    say("... Esc gives up]\x1b[0m\r\n");
+    refresh();
+    ok = connect_out();
+    if (!ok)
+        say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+    refresh();
+    return ok ? 0 : 10;
 }
 
 /* The phone book's login, typed to the host: the name or the password,

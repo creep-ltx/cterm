@@ -21,6 +21,7 @@ static BOOL redial_key(const char *b)
         if (connect_out()) {
             if (!T->t_serial)           /* a line says its own */
                 say("\x1b[2m[connected]\x1b[0m\r\n");
+            rexx_after_call();          /* its place's login script */
         }
         else
             say("\x1b[2m[Return calls again]\x1b[0m\r\n");

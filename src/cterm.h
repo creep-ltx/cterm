@@ -209,6 +209,12 @@ struct Tab {
     struct Xfer *t_xfer;                /* a transfer in it, or NULL */
     BOOL t_serial;                      /* a serial line, not TCP */
     SerTab t_st;                        /* its line, number, device */
+    void *t_watch;                      /* its host's text for ARexx's
+                                           WAITFOR (rexx.c), or NULL */
+    char t_script[108];                 /* its place's login script */
+    BOOL t_rxdone;                      /* a transfer ended since the last
+                                           ARexx SEND (DOWNLOAD sees it) */
+    LONG t_rxgot;                       /* ... its files, -1 failed */
 };
 
 /* The tab has its host or line: something to send to. */
@@ -227,7 +233,8 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
        M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
        M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS, M_YRECV, M_XRECV, M_YSEND,
-       M_XSEND, M_HSEND, M_XWIN, M_BOOK, M_SERIAL, M_ANSWER };
+       M_XSEND, M_HSEND, M_XWIN, M_BOOK, M_SERIAL, M_ANSWER, M_REXX,
+       M_ZSEND };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -455,5 +462,32 @@ struct Tab *tab_new(void);
 void tab_show(int i);
 void tab_new_shell(void);
 void tab_close_current(void);
+void tab_hangup(void);                  /* T's host or line hung up on */
+void quit_all(void);
+extern const char version[];
+BOOL log_to(const char *path);
+int call_rexx(const char *what, struct Tab **made);
+/* transfer.c, for ARexx: M_YRECV/M_XRECV (xname: Xmodem's file), or
+ * M_YSEND/M_XSEND/M_ZSEND with paths; the files done, -1 failed. */
+int transfer_rexx(int what, const char *const *paths, int n,
+                  const char *xname);
+BOOL transfer_hydra_queue(const char *const *paths, int n);
+/* rexx.c: the ARexx port */
+void rexx_open(void);
+void rexx_close(void);
+ULONG rexx_sigmask(void);
+void rexx_serve(void);                  /* read the port: safe anywhere */
+void rexx_run(void);                    /* the queued commands: run() only */
+const char *rexx_port(void);
+void rexx_feed(struct Tab *t, const UBYTE *b, LONG n);
+void rexx_watch(struct Tab *t);         /* its text kept for WAITFOR */
+void rexx_tab_gone(struct Tab *t);
+void rexx_tab_over(struct Tab *t);
+void rexx_xfer_done(struct Tab *t, int got);
+int rexx_uploads(struct Tab *t, char (*store)[256], const char **paths,
+                 int max);
+BOOL rexx_start(const char *path, struct Tab *t);
+void rexx_after_call(void);
+void rexx_menu(void);
 
 #endif

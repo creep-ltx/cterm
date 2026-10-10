@@ -26,6 +26,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 | Serial lines: the settings, the tabs (CTerm's side) | `src/serial.c`, `src/serial.h` | Yes |
 | The line's code, loaded on demand (`Protocols/Serial`): the device, dialling, the modem's words | `src/sermod.c`, `src/sermod.h` | Yes |
 | A serial line's settings window (phone book, Settings) | `src/serwin.c` | Yes |
+| The ARexx port: commands, WAITFOR, starting scripts | `src/rexx.c` | Yes |
 | Main loop, settings, menus | `src/main.c` | Yes |
 | PC relay: runs a program in a pty, connects to the Amiga | `pc/cterm-relay.py` | PC |
 
@@ -225,9 +226,95 @@ In the order the user and I agreed (2026-10-10):
     message, no crash), null modem both ways (echo). serwin.c (3 KB, the
     line's settings window) stays: it is opened from Settings and the
     phone book, not with a line.
+- **Done 2026-10-11 (0.3b10): an ARexx port** (`src/rexx.c`), for scripts
+  (BBS logins) and so a later detach/reattach can find a running CTerm.
+  - **The port:** "CTERM", then "CTERM.2", "CTERM.3"... (the first free
+    name, under Forbid with AddPort); CTermSSH gets one too. Made at the
+    start (a port and a name); rexxsyslib.library is opened at the first
+    ARexx message or script start. At the end: Forbid, RemPort, every
+    message on it answered RC 20, Permit; everything kept (a WAITFOR, a
+    queued command) answered RC 20; scripts CTerm started are waited for
+    up to 3 s (their message comes back to the port); one still running
+    then gets the port left in memory with PA_IGNORE and its signal freed
+    (its reply lands in memory nobody frees, never in freed memory).
+  - **Commands:** CALL, HANGUP, SEND, WAITFOR, GETLINE, GETSCREEN, CURSOR,
+    TAB NEW/SELECT/CLOSE/COUNT/CURRENT/NAME, DOWNLOAD, UPLOAD, LOG,
+    SCREEN, WINDOW, PHONEBOOK, VERSION, HELP, QUIT. ReadArgs templates,
+    except SEND and WAITFOR, which read their own words: ReadArgs takes
+    `*` in quotes as its escape ("Eval 6*7" arrived as "Eval 67").
+    Results in RESULT with OPTIONS RESULTS; RC 0/5/10/20.
+  - **Which tab:** "ARexx's tab" (rxtab): the one CALL opened, TAB
+    NEW/SELECT chose, or a started script's; else the shown one. A login
+    script keeps its tab when the person switches. Two scripts at once
+    share it (the last to choose wins) - noted, not solved.
+  - **Re-entrancy (the rule):** every wait inside CTerm's work (a call,
+    a dial, a transfer's loop_round, the Call window, a typed answer)
+    calls shells_handle, which now also *reads* the port (its signal is
+    in shells_sigmask). Reading answers only what is safe anywhere -
+    screen reads, VERSION, TAB COUNT/NAME/CURRENT, SCREEN, WINDOW, and
+    registering a WAITFOR or a Zmodem/Hydra DOWNLOAD. Everything that
+    changes tabs or connections or waits itself (CALL, SEND, HANGUP, TAB
+    NEW/SELECT/CLOSE, Ymodem/Xmodem, UPLOAD, LOG, QUIT) is queued and run
+    by rexx_run() from run(), between rounds, where no call or transfer
+    is half done; commands that come while one of those runs join the
+    queue. Without this, a SEND to a serial line arriving inside the
+    modem's dial wait would have restarted the dial's own timer.
+  - **WAITFOR without blocking:** the message is kept and answered later
+    by ReplyMsg alone (safe anywhere): when its text arrives (fed from
+    log_bytes - every host byte passes there - and from the Shell's
+    writes, term_take/term_write), when its TIMEOUT runs out (a 0.5 s
+    timer.device tick on the same port, only while a limit waits: RC 5),
+    when the call ends (RC 10: hung_up, a serial line's end, HANGUP, or
+    already ended at the WAITFOR) or the tab goes (RC 10). It looks in the
+    tab's text since the last SEND or match (2 KB, escape codes left
+    out, UTF-8 read as Latin-1, any case), so a prompt that came before
+    the WAITFOR counts but an old one before the SEND does not.
+  - **Transfers:** DOWNLOAD with Zmodem/Hydra registers and is answered
+    by finish() (rexx_xfer_done), or at once when one ended since the
+    last SEND. UPLOAD with Zmodem: the host is often quicker (its ZRINIT
+    came before the UPLOAD - seen in FS-UAE: the file requester opened);
+    so a tab a script drives gives an UPLOAD 2 s to arrive, and a queued
+    UPLOAD's files are taken instead of asking.
+  - **Scripts CTerm starts:** an RXCOMM message to REXX with the port as
+    host (rm_CommAddr) and the port's name as the argument; its end
+    comes back to the port, and an error is said in the tab ("[ARexx
+    script x.rexx: error 5, ARexx error 1]"). A name with a space
+    ("Ram Disk:x.rexx", which ASL gives for RAM:) cannot be the command's
+    first word, and in quotes ARexx runs the quoted text as the program
+    (error 41): such a name is called from a one-line program instead
+    (RXFF_STRING, `CALL 'name' 'CTERM'`), which keeps the ADDRESS.
+    No I/O handles are given (the script's SAY goes where RexxMast's
+    output goes).
+  - **Phone book:** "script=" per place; the window has a Script field
+    (User and Password now share a row: the window stays 542x198 on a
+    640x256 screen, measured in FS-UAE).
+  - **Not done:** WINDOW HIDE/SHOW (closing the window while everything
+    runs on: much of CTerm assumes the window is there - left for the
+    detach work); STEM/VAR results; a requester (ASL, EasyRequest) holds
+    the port unread while it is open.
+  - **Cost:** CTerm 220,024 -> 237,508 bytes (the port, the commands,
+    the book's field). Could be a loaded part like Protocols/Serial if it
+    matters: only the port and WAITFOR's feed need to stay.
+  - **Tested in FS-UAE** (verified 2026-10-11, tests/rexx/*.rexx with
+    rx through wasabi): VERSION/TAB/CURSOR/GETLINE/PHONEBOOK/HELP;
+    SEND "Eval 6*7\r" to the Shell, WAITFOR "42" (RC 0), GETSCREEN; a
+    2 s WAITFOR timed out (RC 5 after 2.4 s); unknown command and bad
+    row RC 10; TAB NEW/SELECT/CLOSE/COUNT/NAME, a WAITFOR in tab 2;
+    CALL the telnet board, Zmodem down 2 files md5-identical, UPLOAD 2
+    files md5-identical, LOG, HANGUP, SEND after it RC 10; Ymodem down
+    (2 files), Xmodem down, Ymodem up (md5-identical); CALL a dial-up
+    place through fakemodem.py, Zmodem down md5-identical, the board's
+    hang-up ending a WAITFOR (RC 10); info.rexx answered in 0.24 s while
+    a CALL redialled a BUSY number; a phone book Script (from the
+    window's requester, "Ram Disk:zlogin.rexx") ran after connect with
+    ADDRESS CTERM; Project/Run ARexx script...; two CTerms (CTERM,
+    CTERM.2, and CTermSSH as CTERM.2); QUIT with a WAITFOR pending (RC 10
+    to the script, no hang) and with a script CTerm started still
+    waiting (it ended cleanly, no crash).
+
 - Later idea: Hydra's chat with the other side during a transfer
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
-- Also: an ssh password login tried against a real server, ARexx,
+- Also: an ssh password login tried against a real server,
   dropping files on the window, emoji fallback, more stock-A1200 speed.
 - Keys configurable (the rule for all the user's programs).
 

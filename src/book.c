@@ -11,6 +11,7 @@
  *   chars=pc               (utf8, latin1, pc)
  *   down=Work:Downloads
  *   up=Work:Uploads
+ *   script=REXX:bbs-login.rexx   (ARexx, run when the call is up)
  *
  * and for kind=serial the line and the modem's number:
  *
@@ -152,6 +153,7 @@ void book_load(void)
         else if (!stricmp(line, "pass")) put(e->pass, sizeof e->pass, v);
         else if (!stricmp(line, "down")) put(e->down, sizeof e->down, v);
         else if (!stricmp(line, "up")) put(e->up, sizeof e->up, v);
+        else if (!stricmp(line, "script")) put(e->script, sizeof e->script, v);
         else if (!stricmp(line, "port")) e->port = atoi(v);
         else if (!stricmp(line, "kind")) {
             e->ssh = !stricmp(v, "ssh");
@@ -238,6 +240,7 @@ BOOL book_save(void)
         field(f, "chars", charname[e->chars % 3]);
         field(f, "down", e->down);
         field(f, "up", e->up);
+        field(f, "script", e->script);
     }
     Close(f);
     return TRUE;

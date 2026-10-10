@@ -19,6 +19,7 @@
  *   ssh.c      ssh (libssh2 on AmiSSL), in CTermSSH only
  *   clip.c     copy and paste, and the log
  *   setwin.c   the settings window (ReAction, in tabs)
+ *   rexx.c     the ARexx port: commands, WAITFOR, starting scripts
  *   book.c     the phone book's file
  *   bench.c    the speed test in the Project menu
  *   cterm.h    what they share
@@ -42,7 +43,6 @@ static void load_prefs(void);
 static void title_update(void);
 static int tab_index(struct Tab *t);
 static void tab_drop(struct Tab *t);
-static void quit_all(void);
 static void host_input(UBYTE *buf, LONG size);
 static void run(void);
 #ifdef MEMLOG
@@ -79,7 +79,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-static const char version[] = "$VER: CTerm 0.3b9 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b10 (11.10.2026)";
 
 struct Library *SocketBase;
 struct Library *KeymapBase;
@@ -152,6 +152,8 @@ void term_take(void *t, const UBYTE *b, LONG n)
 #ifdef NOPARSE
     return;                             /* to measure: the packets alone */
 #endif
+    if (tb->t_watch)
+        rexx_feed(tb, b, n);            /* an ARexx WAITFOR looks */
     if (!tb->t_pend)
         tb->t_pend = AllocVec(PENDMAX, MEMF_ANY);
     if (tb->t_pend && n <= PENDMAX - tb->t_plen) {
@@ -173,6 +175,8 @@ void term_write(void *t, const UBYTE *b, LONG n)
     term_sync(t);
     if (((struct Tab *)t)->t_log)
         FWrite(((struct Tab *)t)->t_log, (APTR)b, 1, n);
+    if (((struct Tab *)t)->t_watch)
+        rexx_feed(t, b, n);
     vt_write(((struct Tab *)t)->t_vt, b, n);
     PF_ADD(pf_vt, t0);
 #ifdef PROFILE
@@ -571,9 +575,11 @@ static char fromfile[256];              /* FROM: the Shell's first script */
 /* ---- tabs ---------------------------------------------------------- */
 
 /* Every tab's Shell: the signals to wait for, the packets to answer. */
+/* What a wait inside CTerm's work listens to besides its own: the
+ * Shells, and the ARexx port (read only there: rexx.c). */
 ULONG shells_sigmask(void)
 {
-    ULONG m = 0;
+    ULONG m = rexx_sigmask();
     int i;
     for (i = 0; i < ntabs; i++)
         if (tabs[i]->con)
@@ -592,6 +598,8 @@ void shells_handle(ULONG sigs)
         }
     T = keep;
     con_spent_poll();
+    if (sigs & rexx_sigmask())
+        rexx_serve();
 }
 
 /* Another screen, the window opened again - not while a program has a
@@ -702,6 +710,7 @@ static void tab_drop(struct Tab *t)
         T->con = NULL;
     }
     transfer_tab_gone(t);
+    rexx_tab_gone(t);                   /* its WAITFORs answered */
     vt_free(T->t_vt);
     if (T->t_pend) {
         FreeVec(T->t_pend);
@@ -751,8 +760,25 @@ void tab_close_current(void)
     T->ended = TRUE;
 }
 
+/* T's host or line hung up on (ARexx's HANGUP); the tab stays, and
+ * Return calls again. */
+void tab_hangup(void)
+{
+    if (sock >= 0) {
+        if (sshmode) {
+            ssh_close(T->ssh);
+            T->ssh = NULL;
+        } else
+            CloseSocket(sock);
+        sock = -1;
+    }
+    serial_close();
+    rexx_tab_over(T);
+    say("\r\n\x1b[0;2m[hung up - Return calls again]\x1b[0m\r\n");
+}
+
 /* Everyone out: the Shells are told the input ended, hosts hung up on. */
-static void quit_all(void)
+void quit_all(void)
 {
     int i;
     quitting = TRUE;
@@ -865,6 +891,8 @@ static void run(void)
         refresh();
         if (!connect_out())
             say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+        else
+            rexx_after_call();          /* its place's login script */
     } else {
         lfd = listen_on();
         if (lfd < 0)
@@ -879,6 +907,8 @@ static void run(void)
     for (;;) {
         int i;
         loop_round(-1, -1);
+        rexx_run();                     /* ARexx's queued commands: here,
+                                         * where nothing is half done */
         /* tabs whose Shell has ended go */
         for (i = 0; i < ntabs; i++)
             if (tabs[i]->ended && !(tabs[i]->con &&
@@ -938,8 +968,9 @@ BOOL loop_round(LONG xfd, LONG ms)
     ULONG winsig = 1UL << win->UserPort->mp_SigBit;
     ULONG setsig = setwin ? 1UL << setwin->UserPort->mp_SigBit : 0;
     ULONG sersig = serial_sigmask();
+    ULONG rxsig = rexx_sigmask();
     ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
-                 xwin_sigmask() | bookwin_sigmask() | sersig;
+                 xwin_sigmask() | bookwin_sigmask() | sersig | rxsig;
     BOOL hostdata = FALSE, ready = FALSE;
     ULONG consigs = 0;
     int i;
@@ -1017,6 +1048,9 @@ BOOL loop_round(LONG xfd, LONG ms)
         xwin_events();
     if (sigs & bookwin_sigmask())
         bookwin_events();
+    if (sigs & rxsig)
+        rexx_serve();                   /* before the hosts' bytes: an
+                                         * UPLOAD waiting is seen first */
     T = shown;
     if ((sigs & winsig) && !window_events() && !quitting)
         quit_all();
@@ -1342,8 +1376,11 @@ static int cterm_main(int argc, char **argv)
         if (pcmode)
             tab_letters(TRUE);
         ML("display");
+        rexx_open();
         run();
     }
+    rexx_close();                       /* before the tabs go: no command
+                                         * may come for them */
 #ifdef MEMLOG
     ML("quit");
     memlog_save();

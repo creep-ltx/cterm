@@ -310,11 +310,14 @@ BOOL serial_due(void)
  * modem's RING, CONNECT and NO CARRIER heeded. */
 void serial_input(UBYTE *buf, LONG size)
 {
+    BOOL had = T->t_st.ser != NULL;
     if (!sm)
         return;
     inside++;
     sm->input(&T->t_st, buf, size);
     inside--;
+    if (had && !T->t_st.ser)
+        rexx_tab_over(T);               /* the call is over */
     ser_unload();
 }
 
