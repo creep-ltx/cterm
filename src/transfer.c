@@ -315,7 +315,7 @@ void transfer_free(void)
     store = NULL;
 }
 
-static int ask_uploads(const char **paths)
+static int ask_uploads(const char **paths, const char *title)
 {
     struct FileRequester *req;
     int n = 0, i;
@@ -326,7 +326,7 @@ static int ask_uploads(const char **paths)
         return 0;                       /* kept for the next time */
     req = AllocAslRequestTags(ASL_FileRequest,
         ASLFR_Window, (ULONG)win, ASLFR_SleepWindow, TRUE,
-        ASLFR_TitleText, (ULONG)"CTerm: files to send (Zmodem)",
+        ASLFR_TitleText, (ULONG)title,
         dir[0] ? ASLFR_InitialDrawer : TAG_IGNORE, (ULONG)dir,
         ASLFR_DoMultiSelect, TRUE, ASLFR_RejectIcons, TRUE, TAG_END);
     if (!req)
@@ -417,7 +417,8 @@ void transfer_menu(int what)
         refresh();
         got = xy_receive(&io, ymodem, name);
     } else {
-        np = ask_uploads(paths);
+        np = ask_uploads(paths, ymodem ? "CTerm: files to send (Ymodem)"
+                                       : "CTerm: a file to send (Xmodem)");
         if (np == 0) {
             redraw_all();
             return;
@@ -470,7 +471,7 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         int np;
         say("\r\n\x1b[2m[Zmodem: the host waits for files]\x1b[0m\r\n");
         refresh();
-        np = ask_uploads(paths);
+        np = ask_uploads(paths, "CTerm: files to send (Zmodem)");
         if (np == 0) {
             static const UBYTE can[] = { 24, 24, 24, 24, 24, 24, 24, 24,
                                          8, 8, 8, 8, 8, 8, 8, 8 };
