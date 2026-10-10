@@ -16,6 +16,7 @@
 #include <dos/dos.h>
 #include <dos/rdargs.h>
 #include <dos/var.h>
+#include <dos/dostags.h>
 #include <intuition/intuition.h>
 #include <intuition/imageclass.h>
 #include <intuition/screens.h>
@@ -139,6 +140,8 @@ static Vt *vt;
 static BOOL local = TRUE;               /* the Amiga Shell, not the PC */
 static LONG want_cols = 80, want_rows = 25; /* the first window, in cells */
 static LONG wl = -1, wt, ww, wh;        /* the Workbench window, remembered */
+static char calls[300];                 /* places called, newest first:
+                                           "host[:port][!];..." (! = PC) */
 static BOOL remember = TRUE;            /* FALSE: a one-off start (COLS,
                                            HOST...) - its window is not kept */
 static BOOL quitting;
@@ -1598,6 +1601,7 @@ static int tstate, tcmd;
 static BOOL utf8 = TRUE;
 static BOOL saved_utf8 = TRUE;          /* the setting; utf8 may be LATIN1's */
 static char dialhost[128];              /* HOST: CTerm calls out */
+static char dialtitle[140];             /* "CTerm: host" */
 static UBYTE sbuf[64];                  /* a subnegotiation coming in */
 static int sblen;
 
@@ -1797,7 +1801,8 @@ static void hung_up(void)
     CloseSocket(sock);
     sock = -1;
     if (dialhost[0]) {
-        say("\r\n\x1b[0;2m[the connection closed]\x1b[0m\r\n");
+        say("\r\n\x1b[0;2m[the connection closed - Return calls again]"
+            "\x1b[0m\r\n");
         return;
     }
     say("\r\n\x1b[0;2m[the connection closed - waiting for it again]"
@@ -1808,6 +1813,26 @@ static void hung_up(void)
 /* ======================================================================
  * Keys
  * ==================================================================== */
+
+static BOOL dial(void);
+
+/* After a call ended: Return calls again; other keys do nothing. */
+static BOOL redial_key(const char *b)
+{
+    if (local || !dialhost[0] || sock >= 0)
+        return FALSE;
+    if (b[0] == '\r') {
+        say("\x1b[2m[calling ");
+        say(dialhost);
+        say("...]\x1b[0m\r\n");
+        refresh();
+        if (dial())
+            say("\x1b[2m[connected]\x1b[0m\r\n");
+        else
+            say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+    }
+    return TRUE;
+}
 
 static void send_str(const char *s)
 {
@@ -1913,12 +1938,14 @@ static void key(struct IntuiMessage *m)
             return;
         if (back)
             scroll_view(0);
-        send_typed((UBYTE *)buf, n);
+        if (!redial_key(buf))
+            send_typed((UBYTE *)buf, n);
         return;
     }
     if (back)
         scroll_view(0);
-    send_str(buf);
+    if (!redial_key(buf))
+        send_str(buf);
 }
 
 /* ======================================================================
@@ -1927,10 +1954,11 @@ static void key(struct IntuiMessage *m)
 
 enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
-       M_PC };
+       M_PC, M_CALL };
 
 static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Call...", (STRPTR)"K", 0, 0, (APTR)M_CALL },
     {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
     {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
     {  NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
@@ -1957,6 +1985,8 @@ static struct NewMenu newmenu[] = {
        (APTR)M_PC },
     { NM_END, 0, 0, 0, 0, 0 },
 };
+
+static void call_dialog(void);
 
 static void make_menus(void)
 {
@@ -2117,6 +2147,10 @@ static void load_prefs(void)
             else if (!stricmp(p, "full")) fullscreen = val[0] == '1';
             else if (!stricmp(p, "scrollbar")) scrollbar = val[0] == '1';
             else if (!stricmp(p, "utf8")) utf8 = saved_utf8 = val[0] == '1';
+            else if (!stricmp(p, "calls")) {
+                strncpy(calls, val, sizeof calls - 1);
+                calls[sizeof calls - 1] = 0;
+            }
             else if (!stricmp(p, "window")) {
                 /* four numbers: left,top,width,height (libnix's strtol
                  * gave no end pointer here, so read them by hand) */
@@ -2166,6 +2200,10 @@ static void save_prefs(void)
     strcat(buf, "\nfull="); strcat(buf, fullscreen ? "1" : "0");
     strcat(buf, "\nscrollbar="); strcat(buf, scrollbar ? "1" : "0");
     strcat(buf, "\nutf8="); strcat(buf, saved_utf8 ? "1" : "0");
+    if (calls[0]) {
+        strcat(buf, "\ncalls=");
+        strcat(buf, calls);
+    }
     if (wl >= 0) {
         strcat(buf, "\nwindow=");
         numstr_cat(buf, wl); strcat(buf, ",");
@@ -2306,6 +2344,10 @@ static BOOL open_display(void)
             h = want_rows * ch + 2 + scr->WBorTop + scr->Font->ta_YSize + 1 +
                 scr->WBorBottom + 2;
         int l = 0, t = top0;
+        if (dialhost[0]) {              /* a call: beside the Shell's window */
+            l = 32;
+            t = top0 + 24;
+        }
         if (remember && wl >= 0 && scr != ownscr) {
             l = wl; t = wt; w = ww; h = wh;     /* as it was left */
         }
@@ -2317,7 +2359,7 @@ static BOOL open_display(void)
         if (t < top0) t = top0;
         win = OpenWindowTags(NULL,
             WA_Left, l, WA_Top, t, WA_Width, w, WA_Height, h,
-            WA_Title, (ULONG)"CTerm",
+            WA_Title, (ULONG)(dialhost[0] ? dialtitle : "CTerm"),
             scr == ownscr ? WA_CustomScreen : WA_PubScreen, (ULONG)scr,
             WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
             WA_SizeGadget, TRUE, WA_SizeBRight, scrollbar,
@@ -2650,6 +2692,7 @@ static BOOL menu_pick(ULONG id)
     case M_BIGGER: tt_size(+2); break;
     case M_SMALLER: tt_size(-2); break;
     case M_SPEED: speed_test(); break;
+    case M_CALL: call_dialog(); break;
     case M_ABOUT:
         say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
             "Amiga.\r\n");
@@ -2719,6 +2762,232 @@ static void raw_report(int cls, int code, int qual)
     numstr_cat(r, qual); strcat(r, ";0;0;0;0|");
     p = (UBYTE *)r;
     con_reply(p, strlen(r));
+}
+
+/* ---- Project/Call...: a host to call, in a new CTerm window ----------- */
+
+#define NCALLS 8
+
+/* The recent calls as a list for the list view. */
+static struct List calllist;
+static struct Node callnode[NCALLS];
+static char callname[NCALLS][64];
+
+static int calls_split(void)
+{
+    const char *p = calls;
+    int n = 0;
+    calllist.lh_Head = (struct Node *)&calllist.lh_Tail;  /* NewList */
+    calllist.lh_Tail = NULL;
+    calllist.lh_TailPred = (struct Node *)&calllist.lh_Head;
+    while (*p && n < NCALLS) {
+        int k = 0;
+        while (*p && *p != ';' && k < 63)
+            callname[n][k++] = *p++;
+        callname[n][k] = 0;
+        while (*p && *p != ';')
+            p++;
+        if (*p == ';')
+            p++;
+        if (k) {
+            callnode[n].ln_Name = callname[n];
+            AddTail(&calllist, &callnode[n]);
+            n++;
+        }
+    }
+    return n;
+}
+
+/* host (with a ! when PC) to the front of the recent calls. */
+static void calls_add(const char *entry)
+{
+    char out[sizeof calls];
+    int i, n = calls_split();
+    strcpy(out, entry);
+    for (i = 0; i < n; i++) {
+        if (!stricmp(callname[i], entry))
+            continue;
+        if (strlen(out) + strlen(callname[i]) + 2 >= sizeof out)
+            break;
+        strcat(out, ";");
+        strcat(out, callname[i]);
+    }
+    strcpy(calls, out);
+}
+
+/* The program's own path, to start another CTerm with. */
+static void own_path(char *buf, int max)
+{
+    char name[108];
+    BPTR dir = GetProgramDir();
+    buf[0] = 0;
+    if (!GetProgramName((STRPTR)name, sizeof name) || !name[0])
+        strcpy(name, "CTerm");
+    if (dir && NameFromLock(dir, (STRPTR)buf, max)) {
+        if (!AddPart((STRPTR)buf, FilePart((STRPTR)name), max))
+            strcpy(buf, name);
+    } else
+        strncpy(buf, name, max - 1);
+}
+
+static void call_start(const char *host, BOOL pc)
+{
+    char cmd[400], path[256];
+    BPTR nil;
+    own_path(path, sizeof path);
+    strcpy(cmd, "Run >NIL: \"");
+    strcat(cmd, path);
+    strcat(cmd, "\" HOST \"");
+    strcat(cmd, host);
+    strcat(cmd, pc ? "\" PC" : "\"");
+    nil = Open((STRPTR)"NIL:", MODE_NEWFILE);
+    if (SystemTags((STRPTR)cmd, SYS_Input, nil, SYS_Output, NULL,
+                   TAG_END) != 0 && nil)
+        Close(nil);
+}
+
+static void call_dialog(void)
+{
+    enum { G_HOST, G_PC, G_LIST, G_CALL, G_CANCEL };
+    struct Gadget *glist = NULL, *g, *gad[5];
+    struct NewGadget ng;
+    struct Window *dw;
+    struct TextAttr *ta = scr->Font;
+    int th = ta->ta_YSize, n, W, H, x0, y, bw;
+    BOOL pc = pcmode, done = FALSE, go = FALSE;
+    char host[128];
+    ULONG dsig;
+
+    n = calls_split();
+    host[0] = 0;
+    if (n) {                            /* the last place, ready to call */
+        strcpy(host, callname[0]);
+        if (host[0] && host[strlen(host) - 1] == '!') {
+            host[strlen(host) - 1] = 0;
+            pc = TRUE;
+        }
+    }
+    x0 = scr->WBorLeft + 8 + TextLength(&scr->RastPort, (STRPTR)"Recent", 6) + 8;
+    W = x0 + 260 + scr->WBorRight + 8;
+    bw = 90;
+    memset(&ng, 0, sizeof ng);
+    ng.ng_TextAttr = ta;
+    ng.ng_VisualInfo = visual;
+    g = CreateContext(&glist);
+    y = scr->WBorTop + th + 1 + 6;
+
+    ng.ng_LeftEdge = x0; ng.ng_TopEdge = y; ng.ng_Width = 260;
+    ng.ng_Height = th + 6; ng.ng_GadgetText = (STRPTR)"Host";
+    ng.ng_Flags = PLACETEXT_LEFT; ng.ng_GadgetID = G_HOST;
+    g = gad[G_HOST] = CreateGadget(STRING_KIND, g, &ng, GTST_String,
+                                   (ULONG)host, GTST_MaxChars, 120, TAG_END);
+    y += th + 10;
+    ng.ng_TopEdge = y; ng.ng_Width = 26; ng.ng_Height = th + 4;
+    ng.ng_GadgetText = (STRPTR)"PC BBS (CP437)"; ng.ng_Flags = PLACETEXT_RIGHT;
+    ng.ng_GadgetID = G_PC;
+    g = gad[G_PC] = CreateGadget(CHECKBOX_KIND, g, &ng, GTCB_Checked, pc,
+                                 GTCB_Scaled, TRUE, TAG_END);
+    y += th + 10;
+    ng.ng_TopEdge = y; ng.ng_Width = 260; ng.ng_Height = (th + 2) * 5 + 4;
+    ng.ng_GadgetText = (STRPTR)"Recent"; ng.ng_Flags = PLACETEXT_LEFT;
+    ng.ng_GadgetID = G_LIST;
+    g = gad[G_LIST] = CreateGadget(LISTVIEW_KIND, g, &ng, GTLV_Labels,
+                                   (ULONG)&calllist, TAG_END);
+    y += ng.ng_Height + 8;
+    ng.ng_TopEdge = y; ng.ng_Width = bw; ng.ng_Height = th + 6;
+    ng.ng_GadgetText = (STRPTR)"Call"; ng.ng_Flags = PLACETEXT_IN;
+    ng.ng_GadgetID = G_CALL; ng.ng_LeftEdge = scr->WBorLeft + 8;
+    g = gad[G_CALL] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+    ng.ng_LeftEdge = W - scr->WBorRight - 8 - bw;
+    ng.ng_GadgetText = (STRPTR)"Cancel"; ng.ng_GadgetID = G_CANCEL;
+    g = gad[G_CANCEL] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+    H = y + th + 6 + 6 + scr->WBorBottom;
+    if (!g) {
+        FreeGadgets(glist);
+        return;
+    }
+    dw = OpenWindowTags(NULL,
+        WA_Left, win->LeftEdge + 40, WA_Top, win->TopEdge + 30,
+        WA_Width, W, WA_Height, H, WA_Title, (ULONG)"CTerm: Call",
+        scr == ownscr ? WA_CustomScreen : WA_PubScreen, (ULONG)scr,
+        WA_Gadgets, (ULONG)glist, WA_DragBar, TRUE, WA_DepthGadget, TRUE,
+        WA_CloseGadget, TRUE, WA_Activate, TRUE, WA_SmartRefresh, TRUE,
+        WA_IDCMP, STRINGIDCMP | CHECKBOXIDCMP | LISTVIEWIDCMP | BUTTONIDCMP |
+                  IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_VANILLAKEY,
+        TAG_END);
+    if (!dw) {
+        FreeGadgets(glist);
+        return;
+    }
+    GT_RefreshWindow(dw, NULL);
+    ActivateGadget(gad[G_HOST], dw, NULL);
+    dsig = 1UL << dw->UserPort->mp_SigBit;
+    while (!done) {
+        struct IntuiMessage *m;
+        ULONG sigs = Wait(dsig | (local ? con_sigmask() : 0));
+        if (local && (sigs & con_sigmask())) {
+            /* the Shell goes on meanwhile */
+            con_handle(sigs);
+            if (con_render_due() && owed)
+                term_flush();
+        }
+        while ((m = GT_GetIMsg(dw->UserPort))) {
+            ULONG cl = m->Class;
+            UWORD code = m->Code;
+            struct Gadget *src = (struct Gadget *)m->IAddress;
+            GT_ReplyIMsg(m);
+            switch (cl) {
+            case IDCMP_CLOSEWINDOW: done = TRUE; break;
+            case IDCMP_REFRESHWINDOW:
+                GT_BeginRefresh(dw);
+                GT_EndRefresh(dw, TRUE);
+                break;
+            case IDCMP_VANILLAKEY:
+                if (code == 27) done = TRUE;
+                break;
+            case IDCMP_GADGETUP:
+                switch (src->GadgetID) {
+                case G_HOST:            /* Return in the host field */
+                    if (code != 9) go = done = TRUE;
+                    break;
+                case G_PC: pc = (src->Flags & GFLG_SELECTED) != 0; break;
+                case G_LIST:
+                    if (code < n) {
+                        strcpy(host, callname[code]);
+                        pc = FALSE;
+                        if (host[0] && host[strlen(host) - 1] == '!') {
+                            host[strlen(host) - 1] = 0;
+                            pc = TRUE;
+                        }
+                        GT_SetGadgetAttrs(gad[G_HOST], dw, NULL,
+                                          GTST_String, (ULONG)host, TAG_END);
+                        GT_SetGadgetAttrs(gad[G_PC], dw, NULL,
+                                          GTCB_Checked, pc, TAG_END);
+                    }
+                    break;
+                case G_CALL: go = done = TRUE; break;
+                case G_CANCEL: done = TRUE; break;
+                }
+                break;
+            }
+        }
+    }
+    if (go) {
+        STRPTR s0 = ((struct StringInfo *)gad[G_HOST]->SpecialInfo)->Buffer;
+        strncpy(host, (char *)s0, sizeof host - 2);
+        host[sizeof host - 2] = 0;
+    }
+    CloseWindow(dw);
+    FreeGadgets(glist);
+    if (go && host[0]) {
+        char entry[130];
+        strcpy(entry, host);
+        if (pc)
+            strcat(entry, "!");
+        calls_add(entry);
+        save_prefs();
+        call_start(host, pc);
+    }
 }
 
 static BOOL window_events(void)
@@ -2819,13 +3088,17 @@ static void title_update(void)
     if (!changed || !win)
         return;
     strcpy(title, "CTerm");
+    if (dialhost[0]) {
+        strcat(title, ": ");
+        strcat(title, dialhost);
+    }
     if (t[0]) {
         UBYTE *d;
         int i = 8;
         strcat(title, " - ");
         d = (UBYTE *)title + strlen(title);
         /* the title is UTF-8: keep what Latin-1 can show */
-        while (*t && i++ < 140) {
+        while (*t && i++ < 140 && d < (UBYTE *)title + sizeof title - 2) {
             UBYTE c = (UBYTE)*t++;
             if (c < 0x80) *d++ = c;
             else if ((c & 0xE0) == 0xC0 && *t) {
@@ -2885,7 +3158,8 @@ static void run(void)
         say(dialhost);
         say("...]\x1b[0m\r\n");
         refresh();
-        dial();
+        if (!dial())
+            say("\x1b[2m[Return calls again]\x1b[0m\r\n");
     } else {
         lfd = listen_on();
         if (lfd < 0)
@@ -3038,6 +3312,8 @@ int main(int argc, char **argv)
         }
         if (args[6]) {                  /* call a host (a BBS...) */
             strncpy(dialhost, (char *)args[6], sizeof dialhost - 1);
+            strcpy(dialtitle, "CTerm: ");
+            strcat(dialtitle, dialhost);
             local = FALSE;
             if (!args[3]) want_cols = 80;
         }
