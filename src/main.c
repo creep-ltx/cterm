@@ -40,6 +40,10 @@
 #include <proto/ttengine.h>
 #include <cybergraphx/cybergraphics.h>
 #include <proto/cybergraphics.h>
+#include <datatypes/datatypes.h>
+#include <datatypes/pictureclass.h>
+#include <proto/datatypes.h>
+#include <proto/alib.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -380,6 +384,17 @@ static LONG pen_for(ULONG rgb)
  * full clear every plane outside the mask holds the background's bit
  * everywhere, so skipping it changes nothing (CCON's plane mask). */
 static BOOL painter;                    /* rows built in memory (RTG) */
+
+/* A picture behind the text (the painter only: it composes rows in
+ * memory): bgsrc the picture as read, backdrop the window's inner area
+ * with the picture mixed into the background (bgsee per cent of it). */
+static char bgfile[256];
+static int bgsee = 40;
+static ULONG *bgsrc;
+static LONG bgsw, bgsh;
+static ULONG *backdrop;
+static LONG bkw, bkh, bkx, bky;
+#define MASKKEY 0x01000000UL            /* a cell drawn as a mask: no RGB */
 static LONG pbase = -1;                 /* the clear's pen; -1: no mask */
 static UBYTE pmask;
 
@@ -1021,6 +1036,7 @@ static int area_right(void)
 }
 
 static void paint_row(int r);
+static void backdrop_put(LONG x, LONG y, LONG w, LONG h);
 static UBYTE shown_blank[1024];
 
 /* Columns a..b of row r, brought up to date: the text up to the last
@@ -1425,8 +1441,13 @@ static void paint_row(int r)
         if (blank) {
             if (r < (int)sizeof shown_blank && shown_blank[r])
                 return;
-            apen(defbg);
-            RectFill(rp, ox, oy + r * ch, ox + rw - 1, oy + r * ch + ch - 1);
+            if (backdrop)
+                backdrop_put(ox, oy + r * ch, rw, ch);
+            else {
+                apen(defbg);
+                RectFill(rp, ox, oy + r * ch, ox + rw - 1,
+                         oy + r * ch + ch - 1);
+            }
             if (r < (int)sizeof shown_blank)
                 shown_blank[r] = 1;
             return;
@@ -1467,17 +1488,51 @@ static void paint_row(int r)
             cp = tt_stand_in(cp);
         if (cp < ' ')
             cp = ' ';
+        n = wide ? 2 * cw : cw;
+        if (x * cw + n > rw)
+            n = rw - x * cw;
+        dst = rowbuf + x * cw;
+        if (backdrop && bg == defbg) {
+            /* over the picture: the cell as a mask (white on nothing),
+             * its letter's colour mixed onto the backdrop by it */
+            const ULONG *bk = backdrop + (oy + r * ch - bky) * bkw +
+                              (ox + x * cw - bkx);
+            e = cell_get(cp, 0xFFFFFF, MASKKEY,
+                         pcmode ? c->attr & ~VT_BOLD : c->attr, wide);
+            pe = NULL;
+            src = e->pix;
+            for (y = 0; y < ch; y++) {
+                int k;
+                for (k = 0; k < n; k++) {
+                    int a = src[k] & 255;
+                    ULONG b = bk[k];
+                    if (a == 0)
+                        dst[k] = b;
+                    else if (a == 255)
+                        dst[k] = fg;
+                    else {
+                        ULONG o = 0;
+                        int sh;
+                        for (sh = 0; sh <= 16; sh += 8) {
+                            int bb = (b >> sh) & 255, ff = (fg >> sh) & 255;
+                            o |= (ULONG)(bb + (ff - bb) * a / 255) << sh;
+                        }
+                        dst[k] = o;
+                    }
+                }
+                src += wide ? 2 * cw : cw;
+                dst += rw;
+                bk += bkw;
+            }
+            continue;
+        }
         if (pe && pe->cp == cp && !wide && !pe->wide && pe->fg == fg &&
             pe->bg == bg)
             e = pe;                     /* the same cell again (spaces) */
         else
             e = pe = cell_get(cp, fg, bg,
                               pcmode ? c->attr & ~VT_BOLD : c->attr, wide);
-        n = wide ? 2 * cw : cw;
-        if (x * cw + n > rw)
-            n = rw - x * cw;
         src = e->pix;
-        dst = rowbuf + x * cw;
         for (y = 0; y < ch; y++) {
             ULONG *s2 = src, *d2 = dst;
             int k = n;
@@ -1492,6 +1547,8 @@ static void paint_row(int r)
     if (r == cy && cshape && cx < cols)
         cursor_mark(cx, cy);            /* an underline or a bar on top */
 }
+
+static void backdrop_make(void);
 
 /* Use the painter on this screen? And the buffers it needs. */
 static void painter_setup(void)
@@ -1510,6 +1567,7 @@ static void painter_setup(void)
         rowbuf_n = rowbuf ? need : 0;
     }
     painter = rowbuf != NULL;
+    backdrop_make();                    /* the picture for this window */
 }
 
 /* After a font or colour change the pictures are out of date. */
@@ -1699,6 +1757,138 @@ static void draw_tabbar(void)
     rp_forget();
 }
 
+/* ---- a picture behind the text --------------------------------------- */
+
+struct Library *DataTypesBase;
+static ULONG *ld_buf;                   /* the loader's result */
+static LONG ld_w, ld_h;
+static const char *ld_path;
+
+/* Read a picture whole, as ARGB, through datatypes (picture.datatype V43:
+ * PDTM_READPIXELARRAY), on the stack it was given. */
+static void __attribute__((noinline)) load_pic_(void)
+{
+    Object *o;
+    struct BitMapHeader *bmh = NULL;
+    LONG y;
+    ld_buf = NULL;
+    if (!DataTypesBase)
+        DataTypesBase = OpenLibrary((STRPTR)"datatypes.library", 39);
+    if (!DataTypesBase)
+        return;
+    o = NewDTObject((APTR)ld_path, DTA_SourceType, DTST_FILE,
+                    DTA_GroupID, GID_PICTURE, PDTA_DestMode, PMODE_V43,
+                    PDTA_Remap, FALSE, TAG_DONE);
+    if (!o)
+        return;
+    DoDTMethod(o, NULL, NULL, DTM_PROCLAYOUT, NULL, 1);
+    GetDTAttrs(o, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE);
+    if (bmh && bmh->bmh_Width > 0 && bmh->bmh_Height > 0) {
+        ld_w = bmh->bmh_Width;
+        ld_h = bmh->bmh_Height;
+        ld_buf = AllocVec(ld_w * ld_h * 4, MEMF_ANY);
+        for (y = 0; ld_buf && y < ld_h; y++)
+            if (!DoMethod(o, PDTM_READPIXELARRAY, (ULONG)(ld_buf + y * ld_w),
+                          PBPAFMT_ARGB, ld_w * 4, 0, y, ld_w, 1)) {
+                FreeVec(ld_buf);
+                ld_buf = NULL;
+            }
+    }
+    DisposeDTObject(o);
+}
+
+/* The datatype classes run on the caller's stack and fail quietly on a
+ * small one (Knowledge/amiga/datatypes-and-media.md): a 64K stack of our
+ * own when ours is smaller. */
+static BOOL load_picture(const char *path)
+{
+    struct Task *me = FindTask(NULL);
+    LONG have = (char *)me->tc_SPUpper - (char *)me->tc_SPLower;
+    ld_path = path;
+    if (have >= 32768)
+        load_pic_();
+    else {
+        static struct StackSwapStruct sss;
+        UBYTE *stk = AllocVec(65536, MEMF_ANY);
+        if (!stk)
+            return FALSE;
+        sss.stk_Lower = stk;
+        sss.stk_Upper = (ULONG)(stk + 65536);
+        sss.stk_Pointer = (APTR)(stk + 65536);
+        StackSwap(&sss);
+        load_pic_();
+        StackSwap(&sss);
+        FreeVec(stk);
+    }
+    if (!ld_buf)
+        return FALSE;
+    if (bgsrc)
+        FreeVec(bgsrc);
+    bgsrc = ld_buf;
+    bgsw = ld_w;
+    bgsh = ld_h;
+    return TRUE;
+}
+
+static void backdrop_free(void)
+{
+    if (backdrop)
+        FreeVec(backdrop);
+    backdrop = NULL;
+}
+
+/* The window's inner area: the picture covering it (centred, cut, not
+ * stretched out of shape), mixed into the background colour. */
+static void backdrop_make(void)
+{
+    LONG x, y, sx0, sy0, scw, sch;
+    backdrop_free();
+    if (!painter || !bgsrc || !win || bgsee <= 0)
+        return;
+    bkx = win->BorderLeft;
+    bky = win->BorderTop;
+    bkw = win->Width - win->BorderLeft - win->BorderRight;
+    bkh = win->Height - win->BorderTop - win->BorderBottom;
+    if (bkw <= 0 || bkh <= 0)
+        return;
+    backdrop = AllocVec(bkw * bkh * 4, MEMF_ANY);
+    if (!backdrop)
+        return;
+    /* cover: the part of the picture with the window's shape */
+    if (bgsw * bkh > bgsh * bkw) {
+        sch = bgsh;
+        scw = bgsh * bkw / bkh;
+    } else {
+        scw = bgsw;
+        sch = bgsw * bkh / bkw;
+    }
+    sx0 = (bgsw - scw) / 2;
+    sy0 = (bgsh - sch) / 2;
+    for (y = 0; y < bkh; y++) {
+        const ULONG *srow = bgsrc + (sy0 + y * sch / bkh) * bgsw + sx0;
+        ULONG *d = backdrop + y * bkw;
+        for (x = 0; x < bkw; x++) {
+            ULONG p = srow[x * scw / bkw], o = 0;
+            int sh;
+            for (sh = 0; sh <= 16; sh += 8) {
+                int a = (defbg >> sh) & 255, b = (p >> sh) & 255;
+                o |= (ULONG)(a + (b - a) * bgsee / 100) << sh;
+            }
+            d[x] = o;
+        }
+    }
+}
+
+/* The backdrop's piece at window x,y, w x h, onto the window. */
+static void backdrop_put(LONG x, LONG y, LONG w, LONG h)
+{
+    if (!backdrop || x < bkx || y < bky || x + w > bkx + bkw ||
+        y + h > bky + bkh)
+        return;
+    WritePixelArray(backdrop, x - bkx, y - bky, bkw * 4, rp, x, y, w, h,
+                    RECTFMT_ARGB);
+}
+
 static void forget_shown(void);
 
 static void redraw_all(void)
@@ -1708,10 +1898,14 @@ static void redraw_all(void)
     forget_shown();
     rp_forget();
     planes_full();
-    apen(defbg);
-    RectFill(rp, win->BorderLeft, win->BorderTop,
-             win->Width - win->BorderRight - 1,
-             win->Height - win->BorderBottom - 1);
+    if (backdrop)
+        backdrop_put(bkx, bky, bkw, bkh);
+    else {
+        apen(defbg);
+        RectFill(rp, win->BorderLeft, win->BorderTop,
+                 win->Width - win->BorderRight - 1,
+                 win->Height - win->BorderBottom - 1);
+    }
     planes_reset();                     /* all background: no plane yet */
     draw_tabbar();
     vt_take_changes(vt, &chg);
@@ -2491,9 +2685,14 @@ static BOOL open_own_screen(void)
     UWORD pens[] = { (UWORD)~0 };
     if (wb) {
         id = GetVPModeID(&wb->ViewPort);
-        if (depth > 8 && ownmode == INVALID_ID)
-            depth = wb->RastPort.BitMap->Depth > 8
-                  ? wb->RastPort.BitMap->Depth : 8;
+        if (depth > 8 && ownmode == INVALID_ID) {
+            /* a graphics card's bitmap says 8 in Depth whatever it is */
+            struct BitMap *bm = wb->RastPort.BitMap;
+            int d = bm->Depth;
+            if (CyberGfxBase && GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX))
+                d = GetCyberMapAttr(bm, CYBRMATTR_DEPTH);
+            depth = d > 24 ? 24 : d > 8 ? d : 8;   /* 32 is 24 + alpha */
+        }
         UnlockPubScreen(NULL, wb);
     }
     if (ownmode != INVALID_ID)
@@ -2661,6 +2860,11 @@ static void load_prefs(void)
             else if (!stricmp(p, "pc")) pcmode = saved_pc = val[0] == '1';
             else if (!stricmp(p, "pcfont")) pcfont = val[0] != '0';
             else if (!stricmp(p, "altmeta")) altmeta = val[0] != '0';
+            else if (!stricmp(p, "bgpic")) {
+                strncpy(bgfile, val, sizeof bgfile - 1);
+                bgfile[sizeof bgfile - 1] = 0;
+            }
+            else if (!stricmp(p, "bgsee")) bgsee = atoi(val);
             else if (!stricmp(p, "mode")) {     /* "hexid,w,h" */
                 const char *q = val;
                 ownmode = hexval(q);
@@ -2715,6 +2919,10 @@ static void save_prefs(void)
     numstr_cat(buf, pcfont_on ? keepfont.ttsize : ttsize);
     if (!pcfont) strcat(buf, "\npcfont=0");
     if (!altmeta) strcat(buf, "\naltmeta=0");
+    if (bgfile[0]) {
+        strcat(buf, "\nbgpic="); strcat(buf, bgfile);
+        strcat(buf, "\nbgsee="); numstr_cat(buf, bgsee);
+    }
     if (fontname[0]) {
         strcat(buf, "\nfont=");
         strcat(buf, fontname);
@@ -3829,10 +4037,10 @@ static void call_dialog(void)
 enum { S_WHERE = 1, S_MODE, S_MODETXT, S_FULL, S_BAR, S_LETTERS, S_FONT,
        S_FONTTXT, S_TT, S_TTTXT, S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT, S_ALT,
        S_THEME, S_PART,
-       S_R, S_G, S_B, S_RESET, S_SAVE, S_USE, S_CANCEL, S_N };
+       S_R, S_G, S_B, S_RESET, S_PIC, S_PICTXT, S_NOPIC, S_SEE, S_SAVE, S_USE, S_CANCEL, S_N };
 
 static struct Gadget *setglist, *sg[S_N];
-static char modetxt[80], fonttxt[64], tttxt[64];
+static char modetxt[80], fonttxt[64], tttxt[64], pictxt[64];
 static int setpart;                     /* 0 the text, 1 the background */
 static int pend_mode, pend_depth;
 static ULONG pend_id;
@@ -3840,7 +4048,8 @@ static LONG pend_w, pend_h;
 static BOOL pend_full, pend_bar;
 
 static struct {                         /* what Cancel goes back to */
-    int theme, ttsize, fontsize, linespace;
+    int theme, ttsize, fontsize, linespace, bgsee;
+    char bgfile[256];
     BOOL ownfg, ownbg, usett, s_utf8, pc, pcfont, altmeta;
     ULONG myfg, mybg;
     char ttfile[160], fontname[48];
@@ -3909,6 +4118,65 @@ static void describe_fonts(void)
         tttxt[strlen(tttxt) - 4] = 0;
     if (!TTEngineBase)
         strcpy(tttxt, "(no ttengine.library)");
+}
+
+static void describe_pic(void)
+{
+    if (!painter)
+        strcpy(pictxt, "(needs 16 or more bits of colour)");
+    else if (!bgfile[0])
+        strcpy(pictxt, "(none)");
+    else {
+        strncpy(pictxt, (char *)FilePart((STRPTR)bgfile), 40);
+        pictxt[40] = 0;
+    }
+}
+
+/* The picture behind the text, again (a new one, or none). */
+static void picture_changed(void)
+{
+    if (bgfile[0] && !load_picture(bgfile))
+        bgfile[0] = 0;
+    if (!bgfile[0] && bgsrc) {
+        FreeVec(bgsrc);
+        bgsrc = NULL;
+    }
+    backdrop_make();
+    redraw_all();
+    describe_pic();
+    set_text(S_PICTXT, pictxt);
+}
+
+static void ask_picture(void)
+{
+    struct FileRequester *req;
+    char dir[256];
+    if (!AslBase)
+        return;
+    strcpy(dir, bgfile[0] ? bgfile : "SYS:Prefs/Presets/Backdrops");
+    *(char *)PathPart((STRPTR)dir) = 0;
+    req = AllocAslRequestTags(ASL_FileRequest,
+        ASLFR_Window, (ULONG)setwin, ASLFR_SleepWindow, TRUE,
+        ASLFR_TitleText, (ULONG)"CTerm: a picture behind the text",
+        ASLFR_InitialDrawer, (ULONG)dir,
+        ASLFR_InitialFile, (ULONG)(bgfile[0] ? (char *)FilePart((STRPTR)bgfile)
+                                             : ""),
+        ASLFR_RejectIcons, TRUE, TAG_END);
+    if (!req)
+        return;
+    if (AslRequest(req, NULL) && req->fr_File[0]) {
+        char path[256];
+        strncpy(path, (char *)req->fr_Drawer, sizeof path - 1);
+        path[sizeof path - 1] = 0;
+        AddPart((STRPTR)path, req->fr_File, sizeof path);
+        strcpy(bgfile, path);
+        picture_changed();
+        if (!bgfile[0]) {
+            strcpy(pictxt, "(could not read that picture)");
+            set_text(S_PICTXT, pictxt);
+        }
+    }
+    FreeAslRequest(req);
 }
 
 static void set_sliders(void)
@@ -4054,6 +4322,8 @@ static void open_settings(void)
     snap.fontsize = fontsize;
     snap.linespace = linespace;
     snap.s_utf8 = utf8; snap.pc = pcmode;
+    snap.bgsee = bgsee;
+    strcpy(snap.bgfile, bgfile);
     pend_mode = scrmode;
     pend_depth = owndepth;
     pend_id = ownmode;
@@ -4063,6 +4333,7 @@ static void open_settings(void)
     pend_bar = scrollbar;
     describe_mode();
     describe_fonts();
+    describe_pic();
 
     memset(&ng, 0, sizeof ng);
     ng.ng_TextAttr = ta;
@@ -4164,6 +4435,25 @@ static void open_settings(void)
     }
     NG(S_RESET, gx, gw, "Back to the theme's colours", PLACETEXT_IN);
     g = sg[S_RESET] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
+    y += lh + 8;
+    {
+        int nw = TextLength(srp, (STRPTR)"None", 4) + 20;
+        NG(S_PIC, gx, bw, "Picture...", PLACETEXT_IN);
+        g = sg[S_PIC] = CreateGadget(BUTTON_KIND, g, &ng,
+            GA_Disabled, !painter, TAG_END);
+        NG(S_PICTXT, gx + bw + 6, gw - bw - 12 - nw, NULL, 0);
+        g = sg[S_PICTXT] = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text,
+            (ULONG)pictxt, GTTX_Border, TRUE, TAG_END);
+        NG(S_NOPIC, gx + gw - nw, nw, "None", PLACETEXT_IN);
+        g = sg[S_NOPIC] = CreateGadget(BUTTON_KIND, g, &ng,
+            GA_Disabled, !painter, TAG_END);
+    }
+    y += lh;
+    NG(S_SEE, gx, gw - 48, "Picture shows", PLACETEXT_LEFT);
+    g = sg[S_SEE] = CreateGadget(SLIDER_KIND, g, &ng, GTSL_Min, 0,
+        GTSL_Max, 100, GTSL_Level, bgsee, GTSL_LevelFormat, (ULONG)"%3ld%%",
+        GTSL_MaxLevelLen, 4, GTSL_LevelPlace, PLACETEXT_RIGHT,
+        GA_RelVerify, TRUE, GA_Disabled, !painter, TAG_END);
     y += lh + 10;
     W = gx + gw + 10 + scr->WBorRight;
     {
@@ -4221,6 +4511,13 @@ static void finish_settings_(int how)
         altmeta = snap.altmeta;
         ownfg = snap.ownfg; ownbg = snap.ownbg;
         myfg = snap.myfg; mybg = snap.mybg;
+        if (snap.bgsee != bgsee || strcmp(snap.bgfile, bgfile)) {
+            BOOL other = strcmp(snap.bgfile, bgfile) != 0;
+            bgsee = snap.bgsee;
+            strcpy(bgfile, snap.bgfile);
+            if (other)
+                picture_changed();      /* colours_changed draws it */
+        }
         if (snap.s_utf8 != utf8 || snap.pc != pcmode)
             set_chars(snap.pc ? 2 : snap.s_utf8 ? 0 : 1);
         if (letters) {
@@ -4347,6 +4644,18 @@ static void settings_events(void)
             ownfg = ownbg = FALSE;
             colours_changed();
             set_sliders();
+            break;
+        case S_PIC: ask_picture(); break;
+        case S_NOPIC:
+            bgfile[0] = 0;
+            picture_changed();
+            break;
+        case S_SEE:
+            if (code != bgsee) {
+                bgsee = code;
+                backdrop_make();
+                redraw_all();
+            }
             break;
         case S_SAVE: how = 2; break;
         case S_USE: how = 1; break;
@@ -5093,6 +5402,8 @@ int main(int argc, char **argv)
     CyberGfxBase = OpenLibrary("cybergraphics.library", 40);
     load_prefs();
     apply_theme();
+    if (bgfile[0] && !load_picture(bgfile))
+        bgfile[0] = 0;
     if (arg_pc)
         pcmode = TRUE;
     if (arg_latin1)
@@ -5162,6 +5473,9 @@ int main(int argc, char **argv)
     if (ownfont) CloseFont(ownfont);
     cache_free();
     if (rowbuf) FreeVec(rowbuf);
+    backdrop_free();
+    if (bgsrc) FreeVec(bgsrc);
+    if (DataTypesBase) CloseLibrary(DataTypesBase);
     close_tt();
     if (TTEngineBase) CloseLibrary(TTEngineBase);
     if (CyberGfxBase) CloseLibrary(CyberGfxBase);

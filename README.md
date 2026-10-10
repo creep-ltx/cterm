@@ -78,6 +78,11 @@ Settings/Settings... (Right Amiga+S) opens one window for everything:
   the PC's own font.
 - **Colours:** a theme (Nord, Black, Workbench, Amber, Green, Light), and
   your own text and background colour on top of it.
+- **Picture:** a picture behind the text (any format the Amiga's
+  datatypes read: PNG, JPEG, IFF...), and how much of it shows through
+  the background, 0 to 100 %. It covers the window without stretching,
+  stays still while the text scrolls over it, and costs no speed. It
+  needs a screen of 16 bits of colour or more (a graphics card).
 
 Letters and colours change at once, so you see them; the screen changes
 on Use or Save. Save keeps them (ENVARC:CTerm.prefs), Use until the next
