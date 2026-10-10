@@ -119,6 +119,19 @@ CTerm's own console handler is new C code; it takes CCON's knowledge
    own colours; Save/Use/Cancel); the PC's VGA font in PC BBS mode;
    tabs (Shells, telnet and ssh side by side in one window).
 
+## Still to do
+
+In the order the user and I agreed (2026-10-10):
+- **The settings window in tabs** (the user's wish): one page each for
+  Screen, Text, Colours and picture, Keys, so it is not one long cluttered
+  window. On OS 3.2 the clicktab gadget (ReAction) gives real tabs; a row
+  of buttons switching pages works with GadTools alone.
+- Search the scrollback; double-click to select a word; a phone book of
+  hosts; OSC 52 copy; clickable links; logging; Zmodem.
+- Also: an ssh password login tried against a real server, ARexx,
+  dropping files on the window, emoji fallback, more stock-A1200 speed.
+- Keys configurable (the rule for all the user's programs).
+
 Speed on a stock A1200 (FS-UAE, conbench): 99 s at first, 39.6 s on
 2026-10-10, CCON 26.0 s; on the PiStorm A1200 4.45 s against CCON's 4.26.
 Notes and what is left: Knowledge/amiga/graphics-and-performance.md.
