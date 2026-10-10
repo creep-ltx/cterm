@@ -119,6 +119,10 @@ cannot read it.
   tab's name shows the per cent (v down, ^ up). Transfer/Show
   transfers... opens a window listing every transfer with its bars and a
   Stop for each; it never opens by itself.
+- The protocols are files of their own in `Protocols/` beside CTerm
+  (Zmodem 10 KB, XYmodem 6 KB, Hydra 31 KB): loaded when a transfer starts,
+  gone when it ends, so what is not used takes no memory. Keep the drawer
+  with CTerm.
 - Tested against lrzsz, the reference (`make ztest`): every file the same,
   also over a line that loses and garbles bytes (Zmodem).
 

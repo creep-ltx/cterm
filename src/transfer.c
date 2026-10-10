@@ -6,6 +6,10 @@
  * AmigaDOS files. Downloads go to the tab's phone book drawer, else the
  * Files tab's, else PROGDIR:Downloads; uploads are chosen in a requester.
  *
+ * The protocols themselves are files of their own (PROGDIR:Protocols/,
+ * xfermod.h), loaded for a transfer and unloaded after it: what is not
+ * used takes no memory.
+ *
  * While it waits for the host, a transfer runs CTerm's own round
  * (loop_round), so the window, the other tabs and their hosts go on. How
  * it goes shows in a panel over the tab's last rows, in the tab's name,
@@ -13,8 +17,83 @@
  */
 #include "cterm.h"
 #include "xfer.h"
+#include "xfermod.h"
 
 #define NUP 32
+
+/* ---- the protocol files ---- */
+
+static void *m_alloc(unsigned long n) { return AllocVec(n, MEMF_ANY); }
+static void m_release(void *p) { FreeVec(p); }
+static long m_now(void) { return (long)(ticks50() / 50); }
+static struct XferEnv menv = { m_alloc, m_release, m_now };
+
+/* A protocol file loaded: its segments and its table. Each transfer loads
+ * its own copy, so two never share the protocol's memory. */
+struct XMod {
+    BPTR seg;
+    struct XferMod *m;
+};
+
+static BOOL mod_load(struct XMod *x, const char *name)
+{
+    char path[64];
+    BPTR s;
+    strcpy(path, "PROGDIR:Protocols/");
+    strcat(path, name);
+    x->m = NULL;
+    x->seg = LoadSeg((STRPTR)path);
+    if (!x->seg) {
+        say("\r\n\x1b[1;31m[the ");
+        say(name);
+        say(" protocol is missing: ");
+        say(path);
+        say("]\x1b[0m\r\n");
+        refresh();
+        return FALSE;
+    }
+    /* the header: XFERMOD_HEAD, then the way in (inside the file) */
+    for (s = x->seg; s && !x->m; s = *(BPTR *)BADDR(s)) {
+        /* in 2-byte steps: the 68k puts data on even addresses, not on
+         * multiples of 4 (the 68020 reads a long from any even one) */
+        UWORD *mem = (UWORD *)BADDR(s);
+        ULONG n = ((ULONG *)mem)[-1] / 2, i;   /* the length, in words */
+        for (i = 2; i + 4 < n; i++)
+            if (*(ULONG *)(mem + i) == XFERMOD_HEAD) {
+                XferModStart start = (XferModStart)*(ULONG *)(mem + i + 2);
+                struct XferMod *m = start(&menv);
+                if (m && m->magic == XFERMOD_MAGIC)
+                    x->m = m;
+                break;
+            }
+    }
+    if (!x->m) {
+        UnLoadSeg(x->seg);
+        x->seg = 0;
+        say("\r\n\x1b[1;31m[");
+        say(path);
+        say(" is not a CTerm protocol of this version]\x1b[0m\r\n");
+        refresh();
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void mod_unload(struct XMod *x)
+{
+    if (x->seg)
+        UnLoadSeg(x->seg);
+    x->seg = 0;
+    x->m = NULL;
+}
+
+/* A transfer the host began that cannot happen here: it stops waiting. */
+static void refuse(void)
+{
+    static const UBYTE can[] = { 24, 24, 24, 24, 24, 24, 24, 24,
+                                 8, 8, 8, 8, 8, 8, 8, 8 };
+    send_data(can, sizeof can);
+}
 
 /* One transfer: its tab, what the panel shows, its telnet parser. */
 struct XCtx {
@@ -472,10 +551,15 @@ void transfer_menu(int what)
         DisplayBeep(scr);               /* one at a time in a tab */
         return;
     }
+    struct XMod xm;
+    if (!mod_load(&xm, "XYmodem"))
+        return;
     c = begin(&io, ymodem ? "Ymodem" : "Xmodem",
               what == M_YRECV || what == M_XRECV ? 1 : 2);
-    if (!c)
+    if (!c) {
+        mod_unload(&xm);
         return;
+    }
     c->damaged = TRUE;
     if (what == M_YRECV || what == M_XRECV) {
         char name[108];
@@ -485,10 +569,11 @@ void transfer_menu(int what)
             redraw_all();
             refresh();
             ctx_free(c);
+            mod_unload(&xm);
             return;
         }
         shows(c);
-        got = xy_receive(&io, ymodem, name);
+        got = xm.m->xy_receive(&io, ymodem, name);
     } else {
         np = ask_uploads(c->paths, paths,
                          ymodem ? "CTerm: files to send (Ymodem)"
@@ -496,15 +581,17 @@ void transfer_menu(int what)
         if (np == 0) {
             redraw_all();
             ctx_free(c);
+            mod_unload(&xm);
             return;
         }
         if (!ymodem)
             np = 1;                     /* Xmodem has no names: one file */
         send_totals(c, paths, np);
         shows(c);
-        got = xy_send(&io, ymodem, 1, paths, np);
+        got = xm.m->xy_send(&io, ymodem, 1, paths, np);
     }
     finish(c, got);
+    mod_unload(&xm);
 }
 
 /* What came from the host: does a transfer begin in it? If so, what came
@@ -512,14 +599,14 @@ void transfer_menu(int what)
  * tabs), the transfer runs, and TRUE says the rest was taken. */
 BOOL transfer_take(UBYTE *buf, LONG n)
 {
-    static int hydra_busy;              /* HydraCom's code runs one at once */
     XferIO io;
+    struct XMod xm;
     struct XCtx *c;
     long at, hat;
     int kind = zm_detect(buf, n, &at), got;
     UBYTE *pre;
     LONG pn;
-    if (hy_detect(buf, n, &hat) && (!kind || hat < at) && !hydra_busy) {
+    if (hy_detect(buf, n, &hat) && (!kind || hat < at)) {
         kind = 3;                       /* Hydra: its START packet */
         at = hat;
     }
@@ -532,10 +619,17 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         } else
             from_host(buf, at);
     }
+    if (!mod_load(&xm, kind == 3 ? "Hydra" : "Zmodem")) {
+        refuse();                       /* the host would wait for nothing */
+        return TRUE;
+    }
     c = begin(&io, kind == 3 ? "Hydra" : "Zmodem",
               kind == 3 ? (nhq ? 3 : 1) : kind);
-    if (!c)
-        return FALSE;
+    if (!c) {
+        mod_unload(&xm);
+        refuse();
+        return TRUE;
+    }
     /* the start header and what followed it, telnet taken off */
     pre = buf + at;                     /* decoded where it lies */
     pn = n - at;
@@ -552,14 +646,12 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         c->x.nfiles = 0;                /* what comes is not known */
         c->x.bsize = 0;
         shows(c);
-        hydra_busy = 1;
-        got = hy_session(&io, paths, nhq, pre, pn, 1);
-        hydra_busy = 0;
+        got = xm.m->hy_session(&io, paths, nhq, pre, pn, 1);
         nhq = 0;                        /* sent, or given up */
     } else if (kind == 1) {
         down_dir(c);
         shows(c);
-        got = zm_receive(&io, pre, pn);
+        got = xm.m->zm_receive(&io, pre, pn);
     } else {
         const char *paths[NUP];
         int np;
@@ -568,17 +660,16 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         c->damaged = TRUE;
         np = ask_uploads(c->paths, paths, "CTerm: files to send (Zmodem)");
         if (np == 0) {
-            static const UBYTE can[] = { 24, 24, 24, 24, 24, 24, 24, 24,
-                                         8, 8, 8, 8, 8, 8, 8, 8 };
-            send_data(can, sizeof can); /* none: the host stops waiting */
+            refuse();                   /* none: the host stops waiting */
             got = 0;
         } else {
             send_totals(c, paths, np);
             shows(c);
-            got = zm_send(&io, paths, np, pre, pn);
+            got = xm.m->zm_send(&io, paths, np, pre, pn);
         }
     }
     finish(c, got);
+    mod_unload(&xm);
     return TRUE;
 }
 

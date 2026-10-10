@@ -109,6 +109,13 @@ char *xfer_init    (char *fname, long fsize, long ftime);
 boolean xfer_bad   (void);
 char *xfer_okay    (void);
 
+/* the C library's formatting needs its start-up, which a protocol file
+ * (xfermod.h) has not: HydraCom's few formats done by hand */
+#define sprintf hy_sprintf
+#define sscanf  hy_sscanf
+int   hy_sprintf   (char *out, const char *fmt, ...);
+int   hy_sscanf    (const char *in, const char *fmt, ...);
+
 #define strupr hy_strupr
 #define strlwr hy_strlwr
 #define strnicmp hy_strnicmp

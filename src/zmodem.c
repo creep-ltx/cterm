@@ -548,19 +548,6 @@ static unsigned long num(const char **p, int base)
 
 /* ---- the start ---- */
 
-int zm_detect(const unsigned char *b, long n, long *at)
-{
-    long i;
-    for (i = 0; i + 6 <= n; i++)
-        if (b[i] == '*' && b[i + 1] == '*' && b[i + 2] == ZDLE &&
-            b[i + 3] == 'B' && b[i + 4] == '0' &&
-            (b[i + 5] == '0' || b[i + 5] == '1')) {
-            if (at)
-                *at = i;
-            return b[i + 5] == '0' ? 1 : 2;
-        }
-    return 0;
-}
 
 static int zm_receive_(struct Z *z, XferIO *io, const unsigned char *pre,
                        long n);

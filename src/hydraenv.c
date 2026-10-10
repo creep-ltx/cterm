@@ -70,6 +70,119 @@ int hy_strnicmp(const char *a, const char *b, int n)
     return 0;
 }
 
+/* ---- formatting: what HydraCom's sprintf and sscanf calls use ----
+ * %s, %c, %d, %ld, %u, %lu, %lx with a width and 0 padding; scanning
+ * "%08lx" (hex, at most the width) only. */
+
+int hy_sprintf(char *out, const char *fmt, ...)
+{
+    va_list ap;
+    char *o = out;
+    va_start(ap, fmt);
+    while (*fmt) {
+        int zero = 0, width = 0, lng = 0;
+        char num[24], *p;
+        unsigned long v;
+        int neg = 0, base = 10, len;
+        if (*fmt != '%') {
+            *o++ = *fmt++;
+            continue;
+        }
+        fmt++;
+        if (*fmt == '%') {
+            *o++ = *fmt++;
+            continue;
+        }
+        if (*fmt == '0') {
+            zero = 1;
+            fmt++;
+        }
+        while (*fmt >= '0' && *fmt <= '9')
+            width = width * 10 + (*fmt++ - '0');
+        if (*fmt == 'l') {
+            lng = 1;
+            fmt++;
+        }
+        switch (*fmt++) {
+        case 's':
+            p = va_arg(ap, char *);
+            len = (int)strlen(p);
+            while (len++ < width)
+                *o++ = ' ';
+            while (*p)
+                *o++ = *p++;
+            continue;
+        case 'c':
+            *o++ = (char)va_arg(ap, int);
+            continue;
+        case 'x': case 'X':
+            base = 16;
+            v = lng ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+            break;
+        case 'u':
+            v = lng ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
+            break;
+        default:                        /* d */
+            {
+                long sv = lng ? va_arg(ap, long) : va_arg(ap, int);
+                neg = sv < 0;
+                v = (unsigned long)(neg ? -sv : sv);
+            }
+        }
+        p = num + sizeof num - 1;
+        *p = 0;
+        do {
+            *--p = "0123456789abcdef"[v % (unsigned)base];
+            v /= (unsigned)base;
+        } while (v);
+        if (neg)
+            *--p = '-';
+        len = (int)strlen(p);
+        while (len++ < width)
+            *o++ = zero ? '0' : ' ';
+        while (*p)
+            *o++ = *p++;
+    }
+    *o = 0;
+    va_end(ap);
+    return (int)(o - out);
+}
+
+int hy_sscanf(const char *in, const char *fmt, ...)
+{
+    va_list ap;
+    int got = 0;
+    va_start(ap, fmt);
+    while (*fmt) {
+        int width = 0, skip = 0, k;
+        unsigned long v = 0;
+        if (*fmt++ != '%')
+            continue;
+        if (*fmt == '*') {
+            skip = 1;
+            fmt++;
+        }
+        while (*fmt >= '0' && *fmt <= '9')
+            width = width * 10 + (*fmt++ - '0');
+        while (*fmt == 'l')
+            fmt++;
+        fmt++;                          /* x */
+        for (k = 0; *in && (!width || k < width) && isxdigit((unsigned char)*in);
+             k++, in++) {
+            int c = tolower((unsigned char)*in);
+            v = v * 16 + (unsigned long)(c >= 'a' ? c - 'a' + 10 : c - '0');
+        }
+        if (!k)
+            break;
+        if (!skip) {
+            *va_arg(ap, long *) = (long)v;
+            got++;
+        }
+    }
+    va_end(ap);
+    return got;
+}
+
 /* ---- the screen: nothing; progress goes to show() from the files ---- */
 
 void message(int level, char *fmt, ...) { (void)level; (void)fmt; }
@@ -313,19 +426,6 @@ char *xfer_okay(void)
 
 /* ---- the session ---- */
 
-int hy_detect(const unsigned char *b, long n, long *at)
-{
-    /* HydraCom's autostart: the START packet as a sender sends it */
-    static const unsigned char start[] = "\030cA\\f5\\a3\030a";
-    long i;
-    for (i = 0; i + 11 <= n; i++)
-        if (!memcmp(b + i, start, 11)) {
-            if (at)
-                *at = i;
-            return 1;
-        }
-    return 0;
-}
 
 int hy_session(XferIO *io, const char *const *paths, int npaths,
                const unsigned char *done, long n, int originator)
