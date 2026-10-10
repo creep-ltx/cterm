@@ -37,6 +37,7 @@ typedef struct {
     int scroll_top, scroll_bottom;  /* a region scrolled up by scroll_n */
     int scroll_n;                   /* (negative: down); 0: none */
     const uint8_t *dirty;           /* per row: 1 = repaint it */
+    const uint16_t *x0, *x1;        /* ... from column x0 to x1 (incl.) */
     int all;                        /* everything: repaint the lot */
 } VtChanges;
 

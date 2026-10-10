@@ -30,6 +30,8 @@
 #include <proto/dos.h>
 #include <proto/intuition.h>
 #include <proto/graphics.h>
+#include <proto/layers.h>
+#include <graphics/clip.h>
 #include <proto/keymap.h>
 #include <proto/gadtools.h>
 #include <proto/asl.h>
@@ -147,6 +149,22 @@ static BOOL flood;                      /* the last draw was a scroll */
 #define MOVEC_D0(rc, out) \
     asm volatile(".short 0x4e7a, %c1\n\tmove.l %%d0,%0" \
                  : "=g"(out) : "i"(rc) : "d0")
+#ifdef PROFILE_ECLOCK
+/* make PROFILE=1 PROFILE_ECLOCK=1: the CIA E clock (709379 Hz on PAL),
+ * for a stock Amiga or an emulator; TPMS: ticks per millisecond */
+#include <proto/timer.h>
+extern struct Device *TimerBase;
+#define TPMS 709
+static ULONG ticks(void)
+{
+    struct EClockVal e;
+    if (!TimerBase)
+        return 0;
+    ReadEClock(&e);
+    return e.ev_lo;
+}
+#else
+#define TPMS 54000
 static ULONG ticks(void)
 {
     ULONG lo;
@@ -156,7 +174,10 @@ static ULONG ticks(void)
         UserState(ssp);
     return lo;
 }
+#endif
 static ULONG pf_vt, pf_draw, pf_pkt, pf_wait, pf_all0, pf_writes, pf_draws;
+static ULONG pf_scroll, pf_text, pf_cur, pf_knob, pf_rows;
+static struct timeval pf_tv0;
 #define PF_START(v) ULONG v = ticks()
 #define PF_ADD(acc, v) (acc += ticks() - (v))
 #else
@@ -204,6 +225,60 @@ static LONG pen_for(ULONG rgb)
     return best >= 0 ? pc_pen[best] : 1;
 }
 
+/* Plain (planar) screens: only the bitplanes some pen on show differs
+ * from the background pen in are drawn or scrolled - on a 16-colour
+ * Workbench with the default colours that is one plane of four. After a
+ * full clear every plane outside the mask holds the background's bit
+ * everywhere, so skipping it changes nothing (CCON's plane mask). */
+static BOOL painter;                    /* rows built in memory (RTG) */
+static LONG pbase = -1;                 /* the clear's pen; -1: no mask */
+static UBYTE pmask;
+
+static void planes_reset(void)
+{
+    if (!painter && !usett && rp->BitMap) {
+        pbase = pen_for(defbg);
+        pmask = 0;
+    } else {
+        pbase = -1;
+        pmask = 0xFF;
+    }
+    SetWriteMask(rp, pmask);
+}
+
+static void planes_full(void)
+{
+    pbase = -1;
+    pmask = 0xFF;
+    SetWriteMask(rp, 0xFF);
+}
+
+static void mask_pen(LONG p)
+{
+    UBYTE m;
+    if (pbase < 0)
+        return;
+    m = pmask | (UBYTE)(p ^ pbase);
+    if (m != pmask) {
+        pmask = m;
+        SetWriteMask(rp, pmask);
+    }
+}
+
+static void apen(ULONG rgb)
+{
+    LONG p = pen_for(rgb);
+    mask_pen(p);
+    SetAPen(rp, p);
+}
+
+static void bpen(ULONG rgb)
+{
+    LONG p = pen_for(rgb);
+    mask_pen(p);
+    SetBPen(rp, p);
+}
+
 static void release_pens(void)
 {
     while (npc > 0)
@@ -249,7 +324,6 @@ static void cell_rgb(const VtCell *c, ULONG *fg, ULONG *bg)
 
 /* Drawing either into the window, or into a cell picture in memory (the
  * painter's letter cache): the shapes below draw through these two. */
-static BOOL painter;                    /* rows built in memory (RTG) */
 static ULONG *cellbuf;                  /* non-NULL: painting a cell */
 static int cellw;                       /* its row length in pixels */
 static ULONG cellcol;
@@ -277,7 +351,7 @@ static void SETCOL(ULONG rgb)
     if (cellbuf)
         cellcol = rgb;
     else
-        SetAPen(rp, pen_for(rgb));
+        apen(rgb);
 }
 
 static void hline(int x0, int x1, int y, int th)
@@ -495,7 +569,7 @@ static void tt_run(const ULONG *u, const int *cols, int n, int y,
 {
     int i;
     SetDrMd(rp, JAM1);
-    SetAPen(rp, pen_for(fg));
+    apen(fg);
     TT_SetFont(rp, tt_for(attr));
     TT_SetAttrs(rp, TT_SoftStyle, attr & VT_UNDERLINE
                 ? TT_SoftStyle_Underlined : TT_SoftStyle_None, TAG_END);
@@ -516,6 +590,143 @@ static void tt_run(const ULONG *u, const int *cols, int n, int y,
         }
     }
     SetDrMd(rp, JAM2);
+}
+
+/* ---- plain (planar) screens: letters written straight to the planes ---
+ *
+ * On a stock Amiga the ROM's Text() is the cost of a console. With an
+ * 8-pixel font and the grid started on a byte (layout_and_resize moves
+ * it there), a letter is one byte per pixel line per plane, so a run is
+ * written by the CPU from a table of the font's glyphs: per plane, the
+ * glyph, its complement, or a solid byte, as the two pens' bits say.
+ * Only when the window is wholly visible (one clip rectangle); otherwise
+ * Text() does it. */
+static BOOL planar;                     /* a native screen, real planes */
+static BOOL direct_on = FALSE;          /* measured slower than Text() */
+static UBYTE *glyphs;                   /* 256 x ch bytes */
+static struct TextFont *glyphs_of;
+static int glyphs_h;
+
+static BOOL glyphs_make(void)
+{
+    struct TextFont *f = font;
+    int c, y, i, lo, hi;
+    if (glyphs && glyphs_of == f && glyphs_h == ch)
+        return TRUE;
+    if (glyphs)
+        FreeVec(glyphs);
+    glyphs = NULL;
+    glyphs_of = NULL;
+    if (!f || f->tf_XSize != 8 || (f->tf_Flags & FPF_PROPORTIONAL) ||
+        ch > 32 || cbase < f->tf_Baseline)
+        return FALSE;
+    glyphs = AllocVec(256 * ch, MEMF_ANY | MEMF_CLEAR);
+    if (!glyphs)
+        return FALSE;
+    lo = f->tf_LoChar;
+    hi = f->tf_HiChar;
+    for (c = 0; c < 256; c++) {
+        int idx = c >= lo && c <= hi ? c - lo : hi - lo + 1;
+        ULONG loc = ((ULONG *)f->tf_CharLoc)[idx];
+        int off = loc >> 16, wid = loc & 0xFFFF, kern = 0;
+        int top = cbase - f->tf_Baseline;
+        if (f->tf_CharKern)
+            kern = ((WORD *)f->tf_CharKern)[idx];
+        if (wid > 8)
+            wid = 8;
+        for (y = 0; y < f->tf_YSize && y + top < ch; y++) {
+            const UBYTE *d = (const UBYTE *)f->tf_CharData + y * f->tf_Modulo;
+            UBYTE b = 0;
+            for (i = 0; i < wid; i++) {
+                int bit = off + i;
+                if (d[bit >> 3] & (0x80 >> (bit & 7)))
+                    b |= 0x80 >> i;
+            }
+            if (kern > 0)
+                b >>= kern;
+            else if (kern < 0)
+                b <<= -kern;
+            glyphs[c * ch + y + top] = b;
+        }
+    }
+    glyphs_of = f;
+    glyphs_h = ch;
+    return TRUE;
+}
+
+/* n letters from column col of the row at window y py, in the pens set
+ * in rp; FALSE: not possible here, use Text(). */
+#ifdef DTDEBUG
+static ULONG dt_n[6];
+#define DTC(i) (dt_n[i]++)
+#else
+#define DTC(i)
+#endif
+static BOOL direct_text(int col, int py, const UBYTE *t, int n, UWORD style)
+{
+    struct Layer *L = rp->Layer;
+    struct BitMap *bm = rp->BitMap;
+    struct ClipRect *cr;
+    LONG ax, ay, bpr;
+    UBYTE mask, fgp, bgp;
+    int k, y, i, ul;
+    if (!planar || usett || !glyphs || glyphs_of != font || !L ||
+        (style & FSF_ITALIC) || n <= 0) {
+        DTC(!planar ? 1 : !glyphs ? 2 : 3);
+        return FALSE;
+    }
+    LockLayer(0, L);
+    cr = L->ClipRect;
+    ax = L->bounds.MinX + ox + col * 8;
+    ay = L->bounds.MinY + py;
+    if ((ax & 7) || !cr || cr->Next || cr->obscured ||
+        cr->bounds.MinX > ax || cr->bounds.MaxX < ax + n * 8 - 1 ||
+        cr->bounds.MinY > ay || cr->bounds.MaxY < ay + ch - 1) {
+        DTC((ax & 7) ? 4 : 5);
+        UnlockLayer(L);
+        return FALSE;
+    }
+    DTC(0);
+    WaitBlit();                         /* a scroll may still be moving */
+    bpr = bm->BytesPerRow;
+    mask = pbase < 0 ? 0xFF : pmask;
+    fgp = rp->FgPen;
+    bgp = rp->BgPen;
+    ul = style & FSF_UNDERLINED ? cbase + 1 : -1;
+    if (ul >= ch)
+        ul = ch - 1;
+    for (k = 0; k < bm->Depth && k < 8; k++) {
+        UBYTE *p = bm->Planes[k];
+        int fb = (fgp >> k) & 1, bb = (bgp >> k) & 1;
+        if (!(mask & (1 << k)) || !p || p == (UBYTE *)-1)
+            continue;
+        p += ay * bpr + (ax >> 3);
+        if (fb == bb) {                 /* the plane is solid here */
+            UBYTE v = fb ? 0xFF : 0;
+            for (y = 0; y < ch; y++, p += bpr)
+                for (i = 0; i < n; i++)
+                    p[i] = v;
+            continue;
+        }
+        for (y = 0; y < ch; y++, p += bpr) {
+            const UBYTE *g = glyphs + y;
+            UBYTE inv = fb ? 0 : 0xFF;
+            if (y == ul) {
+                for (i = 0; i < n; i++)
+                    p[i] = 0xFF ^ inv;
+            } else if (style & FSF_BOLD) {
+                for (i = 0; i < n; i++) {
+                    UBYTE b = g[t[i] * ch];
+                    p[i] = (b | (b >> 1)) ^ inv;
+                }
+            } else {
+                for (i = 0; i < n; i++)
+                    p[i] = g[t[i] * ch] ^ inv;
+            }
+        }
+    }
+    UnlockLayer(L);
+    return TRUE;
 }
 
 static void draw_cells(int r, int x0, int x1)
@@ -540,9 +751,9 @@ static void draw_cells(int r, int x0, int x1)
             cp = tt_stand_in(cp);
         if (is_special(cp)) {
             /* one special cell: its background, then the shape */
-            SetAPen(rp, pen_for(bg));
+            apen(bg);
             RectFill(rp, ox + x * cw, y, ox + x * cw + cw - 1, y + ch - 1);
-            SetAPen(rp, pen_for(fg));
+            apen(fg);
             if (cp >= 0x2500 && cp <= 0x257F) {
                 UBYTE a = boxarms[cp - 0x2500];
                 if (a)
@@ -561,7 +772,7 @@ static void draw_cells(int r, int x0, int x1)
                 draw_block(cp, ox + x * cw, y, fg, bg);
             } else if (!draw_shape(cp, ox + x * cw, y)) {
                 UBYTE ch1 = fallback(cp);
-                SetBPen(rp, pen_for(bg));
+                bpen(bg);
                 SetSoftStyle(rp, style, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
                 Move(rp, ox + x * cw, y + cbase);
                 Text(rp, (STRPTR)&ch1, 1);
@@ -591,7 +802,7 @@ static void draw_cells(int r, int x0, int x1)
             static ULONG u[512];
             static int ucol[512];
             int k, m = 0;
-            SetAPen(rp, pen_for(bg));
+            apen(bg);
             RectFill(rp, ox + start * cw, y, ox + x * cw - 1, y + ch - 1);
             for (k = start; k < x; k++) {
                 const VtCell *d = k < w && line ? &line[k] : &empty;
@@ -603,11 +814,16 @@ static void draw_cells(int r, int x0, int x1)
             if (m)
                 tt_run(u, ucol, m, y, fg, c->attr);
         } else {
-            SetAPen(rp, pen_for(fg));
-            SetBPen(rp, pen_for(bg));
-            SetSoftStyle(rp, style, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
-            Move(rp, ox + start * cw, y + cbase);
-            Text(rp, (STRPTR)text, n);
+            apen(fg);
+            bpen(bg);
+            PF_START(tt);
+            if (!(direct_on && direct_text(start, y, text, n, style))) {
+                SetSoftStyle(rp, style, FSF_BOLD | FSF_ITALIC |
+                                        FSF_UNDERLINED);
+                Move(rp, ox + start * cw, y + cbase);
+                Text(rp, (STRPTR)text, n);
+            }
+            PF_ADD(pf_text, tt);
         }
         if (c->attr & VT_STRIKE)
             hline(ox + start * cw, ox + x * cw - 1, y + ch / 2, 1);
@@ -624,6 +840,55 @@ static int area_right(void)
 }
 
 static void paint_row(int r);
+static UBYTE shown_blank[1024];
+
+/* Columns a..b of row r, brought up to date: the text up to the last
+ * cell in the span that shows anything, then one fill for the rest. A
+ * blank row already shown blank (after a scroll, say) is not touched. */
+static void draw_span(int r, int a, int b)
+{
+    int w, last, y = oy + r * ch;
+    const VtCell *line = vt_line(vt, r, back, &w);
+    if (b >= cols)
+        b = cols - 1;
+    if (a > b)
+        return;
+    last = b;
+    if (!vt_reverse_video(vt)) {
+        if (!line || w <= a)
+            last = a - 1;
+        else {
+            if (last > w - 1)
+                last = w - 1;
+            while (last >= a) {
+                const VtCell *c = &line[last];
+                if ((c->cp && c->cp != ' ') || c->bg != VT_DEFAULT ||
+                    (c->attr & (VT_INVERSE | VT_UNDERLINE | VT_STRIKE)))
+                    break;
+                last--;
+            }
+        }
+    }
+    if (last < a && a == 0 && b == cols - 1 &&
+        r < (int)sizeof shown_blank && shown_blank[r])
+        return;
+    if (last >= a)
+        draw_cells(r, a, last);
+    apen(defbg);
+    if (a == 0)
+        RectFill(rp, win->BorderLeft, y, ox - 1, y + ch - 1);
+    if (last < b || b == cols - 1) {
+        int x1 = b == cols - 1 ? area_right() : ox + (b + 1) * cw - 1;
+        if (ox + (last + 1) * cw <= x1)
+            RectFill(rp, ox + (last + 1) * cw, y, x1, y + ch - 1);
+    }
+    if (r < (int)sizeof shown_blank) {
+        if (last >= a)
+            shown_blank[r] = 0;
+        else if (a == 0 && b == cols - 1)
+            shown_blank[r] = 1;
+    }
+}
 
 static void draw_row(int r)
 {
@@ -633,12 +898,7 @@ static void draw_row(int r)
         paint_row(r);                   /* the cursor comes with the row */
         return;
     }
-    draw_cells(r, 0, cols - 1);
-    SetAPen(rp, pen_for(defbg));
-    RectFill(rp, win->BorderLeft, oy + r * ch, ox - 1, oy + r * ch + ch - 1);
-    if (ox + cols * cw <= area_right())
-        RectFill(rp, ox + cols * cw, oy + r * ch, area_right(),
-                 oy + r * ch + ch - 1);
+    draw_span(r, 0, cols - 1);
 }
 
 static void draw_cursor(BOOL on)
@@ -675,7 +935,7 @@ static void draw_cursor(BOOL on)
         else
             memset(&c, 0, sizeof c);
         cell_rgb(&c, &fg, &bg);
-        SetAPen(rp, pen_for(fg));
+        apen(fg);
         RectFill(rp, ox + x * cw, oy + y * ch, ox + x * cw + cw - 1,
                  oy + y * ch + ch - 1);
         if (usett && c.cp > ' ' && !is_special(c.cp)) {
@@ -685,7 +945,7 @@ static void draw_cursor(BOOL on)
         } else if (c.cp > ' ' && c.cp <= 0xFF) {
             t = (UBYTE)c.cp;
             SetDrMd(rp, JAM1);
-            SetAPen(rp, pen_for(bg));
+            apen(bg);
             Move(rp, ox + x * cw, oy + y * ch + cbase);
             Text(rp, (STRPTR)&t, 1);
         }
@@ -875,7 +1135,20 @@ static struct CEntry *cell_get(ULONG cp, ULONG fg, ULONG bg, UWORD attr,
 /* What each screen row shows now: a blank row painted blank need not be
  * painted again (CCON's blank-scroll skip: a flood of empty lines then
  * costs nothing on screen). Cleared whenever the window is redrawn. */
-static UBYTE shown_blank[1024];
+/* The rows a scroll moved on screen carry what they showed; the rows it
+ * brought in are blank. */
+static void shift_shown(int top, int bottom, int n)
+{
+    int r;
+    if (bottom >= (int)sizeof shown_blank)
+        bottom = sizeof shown_blank - 1;
+    if (n > 0)
+        for (r = top; r <= bottom; r++)
+            shown_blank[r] = r + n <= bottom ? shown_blank[r + n] : 1;
+    else if (n < 0)
+        for (r = bottom; r >= top; r--)
+            shown_blank[r] = r + n >= top ? shown_blank[r + n] : 1;
+}
 
 static void forget_shown(void)
 {
@@ -910,7 +1183,7 @@ static void paint_row(int r)
         if (blank) {
             if (r < (int)sizeof shown_blank && shown_blank[r])
                 return;
-            SetAPen(rp, pen_for(defbg));
+            apen(defbg);
             RectFill(rp, ox, oy + r * ch, ox + rw - 1, oy + r * ch + ch - 1);
             if (r < (int)sizeof shown_blank)
                 shown_blank[r] = 1;
@@ -980,8 +1253,10 @@ static void painter_setup(void)
     struct BitMap *bm = scr->RastPort.BitMap;
     LONG need = (LONG)cols * cw * ch;
     painter = FALSE;
-    if (!CyberGfxBase || !GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX) ||
-        GetCyberMapAttr(bm, CYBRMATTR_DEPTH) < 15)
+    planar = !CyberGfxBase || !GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX);
+    if (planar && !usett)
+        glyphs_make();
+    if (planar || GetCyberMapAttr(bm, CYBRMATTR_DEPTH) < 15)
         return;
     if (!ccache && !cache_alloc())
         return;
@@ -1084,15 +1359,15 @@ static void update_knob(void)
     LONG total = vt_history(vt) + rows, top = vt_history(vt) - back;
     if (fullscreen && win) {
         int x0 = win->Width - POSBAR, y0 = oy, h = rows * ch, a, b;
-        SetAPen(rp, pen_for(defbg));
+        apen(defbg);
         RectFill(rp, x0 - 1, y0, win->Width - 1, y0 + h - 1);
         if (vt_history(vt) > 0) {
             a = y0 + (LONG)h * top / total;
             b = y0 + (LONG)h * (top + rows) / total - 1;
             if (b < a + 3) b = a + 3;
-            SetAPen(rp, pen_for(mix(defbg, deffg, 15)));
+            apen(mix(defbg, deffg, 15));
             RectFill(rp, x0, y0, win->Width - 3, y0 + h - 1);
-            SetAPen(rp, pen_for(mix(defbg, deffg, 45)));
+            apen(mix(defbg, deffg, 45));
             RectFill(rp, x0, a, win->Width - 3, b);
         }
         return;
@@ -1111,7 +1386,11 @@ static void layout_and_resize(void)
     int w, h;
     ox = win->BorderLeft + 2;
     oy = win->BorderTop + 1;
-    w = win->Width - win->BorderLeft - win->BorderRight - 4 -
+    /* 8-pixel cells start on a byte of the screen: the planar writer
+     * then puts one byte per letter (direct_text) */
+    if (cw == 8 && !usett)
+        ox += (8 - ((win->LeftEdge + ox) & 7)) & 7;
+    w = win->Width - ox - win->BorderRight - 2 -
         (fullscreen ? POSBAR + 2 : 0);
     h = win->Height - win->BorderTop - win->BorderBottom - 2;
     cols = w / cw;
@@ -1129,10 +1408,12 @@ static void redraw_all(void)
     int r;
     VtChanges chg;
     forget_shown();
-    SetAPen(rp, pen_for(defbg));
+    planes_full();
+    apen(defbg);
     RectFill(rp, win->BorderLeft, win->BorderTop,
              win->Width - win->BorderRight - 1,
              win->Height - win->BorderBottom - 1);
+    planes_reset();                     /* all background: no plane yet */
     vt_take_changes(vt, &chg);
     curx = cury = -1;
     for (r = 0; r < rows; r++)
@@ -1163,17 +1444,30 @@ static void refresh(void)
             draw_row(r);
     } else {
         if (chg.scroll_n) {
-            SetBPen(rp, pen_for(defbg));
+            bpen(defbg);
+            PF_START(ts);
             ScrollRaster(rp, 0, chg.scroll_n * ch, win->BorderLeft,
                          oy + chg.scroll_top * ch, area_right(),
                          oy + (chg.scroll_bottom + 1) * ch - 1);
+            PF_ADD(pf_scroll, ts);
+            shift_shown(chg.scroll_top, chg.scroll_bottom, chg.scroll_n);
         }
+        PF_START(tr);
         for (r = 0; r < rows; r++)
             if (chg.dirty[r])
-                draw_row(r);
+                draw_span(r, chg.x0[r], chg.x1[r]);
+        PF_ADD(pf_rows, tr);
     }
-    draw_cursor(TRUE);
-    update_knob();
+    {
+        PF_START(tc);
+        draw_cursor(TRUE);
+        PF_ADD(pf_cur, tc);
+    }
+    {
+        PF_START(tk);
+        update_knob();
+        PF_ADD(pf_knob, tk);
+    }
 }
 
 /* ---- for console.c ------------------------------------------------- */
@@ -1192,12 +1486,24 @@ int term_rows(void) { return rows; }
 int term_cursor_x(void) { int x, y, v; vt_cursor(vt, &x, &y, &v); return x; }
 int term_cursor_y(void) { int x, y, v; vt_cursor(vt, &x, &y, &v); return y; }
 
+static LONG lastcost;                   /* us: the last draw, planar only */
+
 void term_flush(void)
 {
     PF_START(t0);
     owed = FALSE;
-    if (win)
-        refresh();
+    if (win) {
+        if (planar && !painter) {
+            /* a stock Amiga: how long a draw takes paces the next one */
+            struct timeval a, b;
+            term_now(&a);
+            refresh();
+            term_now(&b);
+            lastcost = (b.tv_secs - a.tv_secs) * 1000000 +
+                       (LONG)b.tv_micro - (LONG)a.tv_micro;
+        } else
+            refresh();
+    }
     PF_ADD(pf_draw, t0);
 #ifdef PROFILE
     pf_draws++;
@@ -1216,7 +1522,15 @@ void term_render_soon(void)
     /* jump scroll: while text pours in and every draw is a whole scrolled
      * window, draw every 60 ms instead of every frame - a third of the
      * work, still smooth to the eye; back to every frame once it calms */
-    con_arm_render(flood ? 60000 : 20000);
+    {
+        /* paced: where a draw costs more than the frame (a 14 MHz Amiga
+         * redrawing a flooded screen), wait half as long again as it
+         * took, so the text keeps coming in between (CCON's pacing) */
+        LONG us = flood ? 60000 : 20000, p = lastcost + lastcost / 2;
+        if (flood && p > us)
+            us = p > 160000 ? 160000 : p;
+        con_arm_render(us);
+    }
 }
 
 static void scroll_view(int to)
@@ -1832,7 +2146,7 @@ static BOOL open_display(void)
     ULONG idcmp = IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE | IDCMP_RAWKEY |
                   IDCMP_GADGETDOWN | IDCMP_GADGETUP | IDCMP_MOUSEMOVE |
                   IDCMP_INTUITICKS | IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW |
-                  IDCMP_INACTIVEWINDOW;
+                  IDCMP_INACTIVEWINDOW | IDCMP_CHANGEWINDOW;
     if (scrmode == SCR_OWN && !ownscr && !open_own_screen())
         scrmode = SCR_WB;
     if (scrmode == SCR_WB) {
@@ -2037,8 +2351,9 @@ static void bench_primitives(void)
         row[i] = 'A' + i % 26;
     say("\r\n\x1b[1m[the drawing tools, timed]\x1b[0m\r\n");
     refresh();
+    planes_full();                      /* every plane: the honest cost */
 
-    SetBPen(rp, pen_for(defbg));
+    bpen(defbg);
     term_now(&a);
     for (i = 0; i < 50; i++)
         ScrollRaster(rp, 0, ch, ox, oy, x1, y1);
@@ -2049,7 +2364,7 @@ static void bench_primitives(void)
         ScrollRaster(rp, 0, ch * (rows / 4), ox, oy, x1, y1);
     bench_line("ScrollRaster, a quarter", us_since(&a), 50);
 
-    SetAPen(rp, pen_for(defbg));
+    apen(defbg);
     term_now(&a);
     for (i = 0; i < 50; i++)
         RectFill(rp, ox, oy, x1, y1);
@@ -2061,8 +2376,8 @@ static void bench_primitives(void)
     bench_line("RectFill, one row", us_since(&a), 200);
 
     SetFont(rp, font);
-    SetAPen(rp, pen_for(deffg));
-    SetBPen(rp, pen_for(defbg));
+    apen(deffg);
+    bpen(defbg);
     SetDrMd(rp, JAM2);
     term_now(&a);
     for (i = 0; i < 200; i++) {
@@ -2204,19 +2519,19 @@ static BOOL menu_pick(ULONG id)
         say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
             "Amiga.\r\n");
 #ifdef PROFILE
-        {   /* ms = ticks / 54000 */
+        {   /* ms = ticks / TPMS */
             char l[200];
             ULONG all = ticks() - pf_all0;
             strcpy(l, "[profile ms: all ");
-            numstr_cat(l, all / 54000);
+            numstr_cat(l, all / TPMS);
             strcat(l, ", waiting ");
-            numstr_cat(l, pf_wait / 54000);
+            numstr_cat(l, pf_wait / TPMS);
             strcat(l, ", packets ");
-            numstr_cat(l, pf_pkt / 54000);
+            numstr_cat(l, pf_pkt / TPMS);
             strcat(l, " (emulator ");
-            numstr_cat(l, pf_vt / 54000);
+            numstr_cat(l, pf_vt / TPMS);
             strcat(l, ", drawing ");
-            numstr_cat(l, pf_draw / 54000);
+            numstr_cat(l, pf_draw / TPMS);
             strcat(l, " in ");
             numstr_cat(l, pf_draws);
             strcat(l, " draws); writes ");
@@ -2291,6 +2606,14 @@ static BOOL window_events(void)
                 send_naws();
             raw_report(12, 0, 0);
             break;
+        case IDCMP_CHANGEWINDOW: {
+            /* moved: the grid may no longer start on a byte */
+            int was = ox;
+            layout_and_resize();
+            if (ox != was)
+                redraw_all();
+            break;
+        }
         case IDCMP_REFRESHWINDOW:
             BeginRefresh(win);
             EndRefresh(win, TRUE);
@@ -2379,14 +2702,21 @@ static void title_update(void)
                     (UBYTE *)title);
 }
 
+static char fromfile[256];              /* FROM: the Shell's first script */
+
 static void run(void)
 {
     static UBYTE buf[16384];
+#ifdef PROFILE
+    pf_all0 = ticks();
+    term_now(&pf_tv0);
+#endif
     if (local) {
-        BPTR l = Lock((STRPTR)"S:Shell-Startup", ACCESS_READ);
+        const char *script = fromfile[0] ? fromfile : "S:Shell-Startup";
+        BPTR l = Lock((STRPTR)script, ACCESS_READ);
         if (l)
             UnLock(l);
-        if (!con_start(l ? "S:Shell-Startup" : NULL)) {
+        if (!con_start(l ? script : NULL)) {
             /* no Shell: say so and wait for the window to be closed -
              * never fall into the network loop, there is no network */
             say("CTerm could not start a Shell.\r\n");
@@ -2533,8 +2863,8 @@ int main(int argc, char **argv)
     (void)version;
     (void)argv;
     if (argc > 0) {
-        LONG args[5] = { 0, 0, 0, 0, 0 };
-        struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N",
+        LONG args[6] = { 0, 0, 0, 0, 0, 0 };
+        struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,FROM/K",
                                       args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
@@ -2545,6 +2875,10 @@ int main(int argc, char **argv)
         if (args[2]) local = FALSE;     /* wait for the PC's relay */
         if (args[3]) want_cols = *(LONG *)args[3];
         if (args[4]) want_rows = *(LONG *)args[4];
+        if (args[5]) {                  /* the Shell runs this script first */
+            strncpy(fromfile, (char *)args[5], sizeof fromfile - 1);
+            fromfile[sizeof fromfile - 1] = 0;
+        }
         FreeArgs(rda);
     }
     /* the network only when there is one to talk to: the local Shell
@@ -2562,7 +2896,12 @@ int main(int argc, char **argv)
     if (!hadprefs)
         usett = TTEngineBase && file_exists(ttfile);
     con_timer_init();
-    vt = vt_new(80, 25, SCROLLBACK);
+    {
+        /* history takes at most a quarter of free memory (a line of 80
+         * cells is 1280 bytes): a stock A1200 keeps room to run things */
+        ULONG lines = AvailMem(MEMF_ANY) / 4 / (80 * sizeof(VtCell));
+        vt = vt_new(80, 25, lines < SCROLLBACK ? (int)lines : SCROLLBACK);
+    }
     if (vt) {
         vt_set_utf8(vt, utf8);
         if (local)
@@ -2603,5 +2942,29 @@ int main(int argc, char **argv)
     if (GadToolsBase) CloseLibrary(GadToolsBase);
     if (KeymapBase) CloseLibrary(KeymapBase);
     if (SocketBase) CloseLibrary(SocketBase);
+#ifdef DTDEBUG
+    {
+        BPTR f = Open((STRPTR)"SYS:T/cterm.dbg", MODE_NEWFILE);
+        if (f) {
+            FPrintf(f, (STRPTR)"hit %ld noplanar %ld noglyph %ld other %ld phase %ld clip %ld ox %ld left %ld\n",
+                    dt_n[0], dt_n[1], dt_n[2], dt_n[3], dt_n[4], dt_n[5], (LONG)ox, (LONG)(win ? win->LeftEdge : -1));
+            Close(f);
+        }
+    }
+#endif
+#ifdef PROFILE
+    {
+        BPTR f = Open((STRPTR)"SYS:T/cterm.prof", MODE_NEWFILE);
+        if (f) {
+            struct timeval t1;
+            term_now(&t1);
+            FPrintf(f, (STRPTR)"real s %ld; ticks: all %ld wait %ld packets %ld vt %ld draw %ld (scroll %ld text %ld cursor %ld knob %ld rows %ld) draws %ld writes %ld\n",
+                    (LONG)(t1.tv_secs - pf_tv0.tv_secs),
+                    (ticks() - pf_all0), pf_wait, pf_pkt,
+                    pf_vt, pf_draw, pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_draws, pf_writes);
+            Close(f);
+        }
+    }
+#endif
     return rc;
 }

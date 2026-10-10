@@ -3,3 +3,6 @@ tests/vtdump
 CTerm
 *.o
 __pycache__/
+tests/shadow_test
+tests/amiga_test
+tests/vtdump

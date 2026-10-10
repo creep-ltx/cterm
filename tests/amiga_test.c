@@ -12,7 +12,7 @@ static char at(Vt *v, int r, int c)
 {
     int w;
     const VtCell *l = vt_line(v, r, 0, &w);
-    return l[c].cp ? (char)l[c].cp : ' ';
+    return c < w && l[c].cp ? (char)l[c].cp : ' ';
 }
 
 int main(void)
@@ -88,7 +88,7 @@ int main(void)
             int k;
             sprintf(want, "line %d", 246 + i);
             for (k = 0; want[k]; k++)
-                if (!l || l[k].cp != (uint32_t)want[k]) ok = 0;
+                if (!l || k >= w || l[k].cp != (uint32_t)want[k]) ok = 0;
         }
         CHECK(ok, "the oldest history lines are lines 246.. in order");
         vt_resize(h, 30, 3);
@@ -97,6 +97,37 @@ int main(void)
         vt_free(h);
     }
 
+    {   /* whole-screen scrolls both ways (the row ring), and a region */
+        Vt *s2 = vt_new(10, 5, 20);
+        int k;
+        feed(s2, "a\r\nb\r\nc\r\nd\r\ne");
+        feed(s2, "\x1b[2T");                       /* down 2 */
+        CHECK(at(s2, 0, 0) == ' ' && at(s2, 1, 0) == ' ' && at(s2, 2, 0) == 'a' &&
+              at(s2, 4, 0) == 'c', "CSI T scrolls the screen down");
+        feed(s2, "\x1b[3S");                       /* up 3 */
+        CHECK(at(s2, 0, 0) == 'b' && at(s2, 1, 0) == 'c' && at(s2, 2, 0) == ' ',
+              "CSI S scrolls the screen up");
+        feed(s2, "\x1b[H\x1bM\x1bM");             /* RI at the top, twice */
+        CHECK(at(s2, 2, 0) == 'b' && at(s2, 0, 0) == ' ', "RI at the top scrolls down");
+        feed(s2, "\x1b[2;4r\x1b[4;1Hx\n\x1b[r");    /* a region scrolls alone */
+        for (k = 0; k < 7; k++)
+            feed(s2, "\x1b[5;1Hl\n");
+        CHECK(at(s2, 0, 0) == 'l' && at(s2, 3, 0) == 'l' && at(s2, 4, 0) == ' ', "bottom line scrolls the ring");
+        vt_free(s2);
+    }
+    {   /* a run of new lines scrolls as many lines as one at a time */
+        Vt *s3 = vt_new(10, 5, 50);
+        int w;
+        const VtCell *l;
+        vt_set_amiga(s3, 1);
+        feed(s3, "a\n\n\n\n\n\n\n\n\n\n\n\n\nb");
+        l = vt_line(s3, 0, 9, &w);
+        CHECK(vt_history(s3) == 9 && l && w > 0 && l[0].cp == 'a' &&
+              at(s3, 4, 0) == 'b', "12 new lines: 9 history lines, 'a' first");
+        feed(s3, "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
+        CHECK(vt_history(s3) == 29, "20 more: 29 history lines");
+        vt_free(s3);
+    }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     vt_free(v);
     return fails != 0;

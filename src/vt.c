@@ -29,6 +29,9 @@ struct Vt {
      * (a whole-screen memmove per new line cost ~190 KB at 127x92) */
     VtCell **lines[2], **cur;       /* main, alternate; the one in use */
     int alt;
+    int base[2];                    /* a ring: screen row y is list entry
+                                       base+y (wrapped), so scrolling the
+                                       whole screen moves base, not rows */
 
     /* scrollback: a ring of lines, each as wide as the screen then was */
     VtCell **hist;
@@ -59,6 +62,7 @@ struct Vt {
     int uneed;
 
     uint8_t *dirty;
+    uint16_t *dx0, *dx1;            /* a dirty row's changed columns */
     int all_dirty, any_dirty;
     int s_top, s_bot, s_n;
 
@@ -74,8 +78,8 @@ static VtCell blank_of(const Vt *v)
 {
     VtCell c;
     c.cp = 0;
-    c.fg = v->pen.fg;
-    c.bg = v->pen.bg;          /* erased cells take the background (BCE) */
+    c.fg = VT_DEFAULT;         /* a blank shows no letter: only its */
+    c.bg = v->pen.bg;          /* background counts (BCE) */
     c.attr = 0;
     return c;
 }
@@ -86,9 +90,66 @@ static void fill(VtCell *p, int n, VtCell c)
         *p++ = c;
 }
 
+/* A row knows how far it is in use: cells from RLEN on are blank (all
+ * zero: a space in the default colours) whatever memory holds there.
+ * Clearing a row or scrolling in a new one is then one store, not a row
+ * of cells written - on a 14 MHz Amiga that is most of a new line's cost.
+ * The count and the row's capacity live in a cell just before it. */
+#define RLEN(r) ((r)[-1].cp)
+#define RCAP(r) ((r)[-1].fg)
+
+static VtCell *row_new(int cols)
+{
+    VtCell *b = calloc(cols + 1, sizeof(VtCell));
+    if (!b)
+        return NULL;
+    b[0].fg = cols;
+    return b + 1;
+}
+
+static void row_free(VtCell *r)
+{
+    if (r)
+        free(r - 1);
+}
+
+/* Cells up to x1 (exclusive) about to be read or written: make them real. */
+static void grow(VtCell *r, int x1)
+{
+    int l = (int)RLEN(r);
+    if (l < x1) {
+        memset(r + l, 0, (x1 - l) * sizeof(VtCell));
+        RLEN(r) = x1;
+    }
+}
+
+/* Cells x0..x1-1 become blank b; the default blank past the end shortens
+ * the row instead. */
+static void blank_range(VtCell *r, int x0, int x1, VtCell b)
+{
+    int l = (int)RLEN(r);
+    if (!b.fg && !b.bg) {
+        if (x1 >= l) {
+            if (x0 < l)
+                RLEN(r) = x0;
+            return;
+        }
+        memset(r + x0, 0, (x1 - x0) * sizeof(VtCell));
+        return;
+    }
+    grow(r, x1);
+    fill(r + x0, x1 - x0, b);
+}
+
+static int ri(const Vt *v, int y)
+{
+    int i = v->base[v->alt] + y;
+    return i >= v->rows ? i - v->rows : i;
+}
+
 static VtCell *row(Vt *v, int y)
 {
-    return v->cur[y];
+    return v->cur[ri(v, y)];
 }
 
 static void reply(Vt *v, const char *s)
@@ -100,12 +161,27 @@ static void reply(Vt *v, const char *s)
     }
 }
 
+/* Columns a..b of row y changed (clipped to the row). */
+static void dirty_span(Vt *v, int y, int a, int b)
+{
+    if (y < 0 || y >= v->rows)
+        return;
+    if (a < 0) a = 0;
+    if (b >= v->cols) b = v->cols - 1;
+    if (!v->dirty[y]) {
+        v->dirty[y] = 1;
+        v->dx0[y] = a;
+        v->dx1[y] = b;
+    } else {
+        if (a < v->dx0[y]) v->dx0[y] = a;
+        if (b > v->dx1[y]) v->dx1[y] = b;
+    }
+    v->any_dirty = 1;
+}
+
 static void dirty_row(Vt *v, int y)
 {
-    if (y >= 0 && y < v->rows) {
-        v->dirty[y] = 1;
-        v->any_dirty = 1;
-    }
+    dirty_span(v, y, 0, v->cols - 1);
 }
 
 static void dirty_all(Vt *v)
@@ -151,23 +227,25 @@ static int swap_into_history(Vt *v, VtCell **pline)
     VtCell *old, *fresh;
     if (v->hist_cap <= 0)
         return 0;
-    if (v->hist_len < v->hist_cap)
-        slot = (v->hist_head + v->hist_len) % v->hist_cap;
-    else
+    if (v->hist_len < v->hist_cap) {
+        slot = v->hist_head + v->hist_len;
+        if (slot >= v->hist_cap)
+            slot -= v->hist_cap;
+    } else
         slot = v->hist_head;
     old = v->hist[slot];
-    fresh = old && v->hist_w[slot] == v->cols ? old
-          : malloc(v->cols * sizeof(VtCell));
+    fresh = old && (int)RCAP(old) >= v->cols ? old : row_new(v->cols);
     if (!fresh)
         return 0;
     if (fresh != old)
-        free(old);
+        row_free(old);
     if (v->hist_len < v->hist_cap)
         v->hist_len++;
-    else
-        v->hist_head = (v->hist_head + 1) % v->hist_cap;
+    else if (++v->hist_head >= v->hist_cap)
+        v->hist_head = 0;
     v->hist[slot] = *pline;
-    v->hist_w[slot] = v->cols;
+    v->hist_w[slot] = RLEN(*pline);
+    RLEN(fresh) = 0;                    /* the caller blanks it */
     *pline = fresh;
     return 1;
 }
@@ -185,21 +263,26 @@ static void push_history(Vt *v, const VtCell *line)
         slot = v->hist_head;            /* full: the oldest goes */
         v->hist_head = (v->hist_head + 1) % v->hist_cap;
     }
-    copy = realloc(v->hist[slot], v->cols * sizeof(VtCell));
+    copy = v->hist[slot];
+    if (!copy || (int)RCAP(copy) < (int)RLEN(line)) {
+        row_free(copy);
+        copy = row_new(RLEN(line));
+    }
+    v->hist[slot] = copy;
     if (!copy) {
         v->hist_w[slot] = 0;
         return;
     }
-    memcpy(copy, line, v->cols * sizeof(VtCell));
-    v->hist[slot] = copy;
-    v->hist_w[slot] = v->cols;
+    memcpy(copy, line, RLEN(line) * sizeof(VtCell));
+    RLEN(copy) = RLEN(line);
+    v->hist_w[slot] = RLEN(line);
 }
 
 /* Record a scroll of [top,bot] by n (up > 0) for the display: one blit
  * then the rows that came in - or, if it cannot be one blit, all of it. */
 static void note_scroll(Vt *v, int top, int bot, int n)
 {
-    int h = bot - top + 1, y;
+    int h = bot - top + 1;
     v->any_dirty = 1;
     if (v->all_dirty)
         return;
@@ -217,38 +300,59 @@ static void note_scroll(Vt *v, int top, int bot, int n)
     v->s_n += n;
     /* the rows' dirty marks travel with their contents */
     if (n > 0) {
-        for (y = top; y <= bot - n; y++)
-            v->dirty[y] = v->dirty[y + n];
-        for (y = bot - n + 1; y <= bot; y++)
+        int y;
+        memmove(v->dirty + top, v->dirty + top + n, h - n);
+        memmove(v->dx0 + top, v->dx0 + top + n, (h - n) * 2);
+        memmove(v->dx1 + top, v->dx1 + top + n, (h - n) * 2);
+        for (y = bot - n + 1; y <= bot; y++) {
             v->dirty[y] = 1;
+            v->dx0[y] = 0;
+            v->dx1[y] = v->cols - 1;
+        }
     } else {
-        for (y = bot; y >= top - n; y--)
-            v->dirty[y] = v->dirty[y + n];
-        for (y = top; y < top - n; y++)
+        int y;
+        memmove(v->dirty + top - n, v->dirty + top, h + n);
+        memmove(v->dx0 + top - n, v->dx0 + top, (h + n) * 2);
+        memmove(v->dx1 + top - n, v->dx1 + top, (h + n) * 2);
+        for (y = top; y < top - n; y++) {
             v->dirty[y] = 1;
+            v->dx0[y] = 0;
+            v->dx1[y] = v->cols - 1;
+        }
     }
 }
 
 static void scroll_up(Vt *v, int top, int bot, int n)
 {
-    int h = bot - top + 1;
+    int h = bot - top + 1, i, y;
     VtCell b = blank_of(v);
     if (n > h)
         n = h;
     if (n <= 0)
         return;
-    {
+    if (h == v->rows && n < h) {
+        /* the whole screen: the top rows go to the history, their
+         * buffers come back blank as the bottom rows - the ring turns */
+        for (i = 0; i < n; i++) {
+            VtCell **p = &v->cur[ri(v, i)];
+            if (!v->alt)
+                swap_into_history(v, p);
+            blank_range(*p, 0, v->cols, b);
+        }
+        v->base[v->alt] = ri(v, n);
+    } else {
         VtCell *gone[1024];
-        int i, k = n < 1024 ? n : 1024;
+        int k = n < 1024 ? n : 1024;
         for (i = 0; i < k; i++) {
-            gone[i] = v->cur[top + i];
+            gone[i] = v->cur[ri(v, top + i)];
             if (!v->alt && top == 0)
                 swap_into_history(v, &gone[i]);
         }
-        memmove(&v->cur[top], &v->cur[top + k], (h - k) * sizeof(VtCell *));
+        for (y = top; y <= bot - k; y++)
+            v->cur[ri(v, y)] = v->cur[ri(v, y + k)];
         for (i = 0; i < k; i++) {
-            v->cur[bot - k + 1 + i] = gone[i];
-            fill(gone[i], v->cols, b);
+            v->cur[ri(v, bot - k + 1 + i)] = gone[i];
+            blank_range(gone[i], 0, v->cols, b);
         }
     }
     note_scroll(v, top, bot, n);
@@ -256,21 +360,26 @@ static void scroll_up(Vt *v, int top, int bot, int n)
 
 static void scroll_down(Vt *v, int top, int bot, int n)
 {
-    int h = bot - top + 1;
+    int h = bot - top + 1, i, y;
     VtCell b = blank_of(v);
     if (n > h)
         n = h;
     if (n <= 0)
         return;
-    {
+    if (h == v->rows && n < h) {
+        v->base[v->alt] = ri(v, v->rows - n);
+        for (i = 0; i < n; i++)
+            blank_range(v->cur[ri(v, i)], 0, v->cols, b);
+    } else {
         VtCell *gone[1024];
-        int i, k = n < 1024 ? n : 1024;
+        int k = n < 1024 ? n : 1024;
         for (i = 0; i < k; i++)
-            gone[i] = v->cur[bot - k + 1 + i];
-        memmove(&v->cur[top + k], &v->cur[top], (h - k) * sizeof(VtCell *));
+            gone[i] = v->cur[ri(v, bot - k + 1 + i)];
+        for (y = bot; y >= top + k; y--)
+            v->cur[ri(v, y)] = v->cur[ri(v, y - k)];
         for (i = 0; i < k; i++) {
-            v->cur[top + i] = gone[i];
-            fill(gone[i], v->cols, b);
+            v->cur[ri(v, top + i)] = gone[i];
+            blank_range(gone[i], 0, v->cols, b);
         }
     }
     note_scroll(v, top, bot, -n);
@@ -359,12 +468,14 @@ static void put(Vt *v, uint32_t cp)
     if (w == 2 && v->x == v->cols - 1) {
         if (!v->autowrap)
             return;
+        grow(row(v, v->y), v->cols);
         row(v, v->y)[v->x] = blank_of(v);   /* no room: wrap first */
         dirty_row(v, v->y);
         v->x = 0;
         linefeed(v);
     }
     r = row(v, v->y);
+    grow(r, v->insert || v->x + w >= v->cols ? v->cols : v->x + w + 1);
     if (v->insert) {
         int n = v->cols - v->x - w;
         if (n > 0)
@@ -381,7 +492,10 @@ static void put(Vt *v, uint32_t cp)
         r[v->x + 1] = v->pen;
         r[v->x + 1].cp = VT_WIDE_TAIL;
     }
-    dirty_row(v, v->y);
+    if (v->insert)
+        dirty_row(v, v->y);
+    else
+        dirty_span(v, v->y, v->x - 1, v->x + w);
     v->last_cp = cp;
     if (v->x + w >= v->cols) {
         v->x = v->cols - 1;
@@ -397,8 +511,8 @@ static void erase(Vt *v, int y, int x0, int x1)
     if (x0 < 0) x0 = 0;
     if (x1 > v->cols) x1 = v->cols;
     if (x1 > x0) {
-        fill(row(v, y) + x0, x1 - x0, blank_of(v));
-        dirty_row(v, y);
+        blank_range(row(v, y), x0, x1, blank_of(v));
+        dirty_span(v, y, x0, x1 - 1);
     }
 }
 
@@ -419,7 +533,7 @@ static void erase_display(Vt *v, int how)
     } else if (how == 3) {                  /* the scrollback too */
         int i;
         for (i = 0; i < v->hist_cap; i++) {
-            free(v->hist[i]);
+            row_free(v->hist[i]);
             v->hist[i] = NULL;
             v->hist_w[i] = 0;
         }
@@ -434,10 +548,11 @@ static void insert_chars(Vt *v, int n)
     int keep = v->cols - v->x - n;
     if (n <= 0)
         return;
+    grow(r, v->cols);
     if (keep > 0)
         memmove(r + v->x + n, r + v->x, keep * sizeof(VtCell));
     fill(r + v->x, n < v->cols - v->x ? n : v->cols - v->x, blank_of(v));
-    dirty_row(v, v->y);
+    dirty_span(v, v->y, v->x, v->cols - 1);
 }
 
 static void delete_chars(Vt *v, int n)
@@ -446,12 +561,13 @@ static void delete_chars(Vt *v, int n)
     int keep = v->cols - v->x - n;
     if (n <= 0)
         return;
+    grow(r, v->cols);
     if (keep > 0)
         memmove(r + v->x, r + v->x + n, keep * sizeof(VtCell));
     else
         keep = 0;
     fill(r + v->x + keep, v->cols - v->x - keep, blank_of(v));
-    dirty_row(v, v->y);
+    dirty_span(v, v->y, v->x, v->cols - 1);
 }
 
 /* ---- the alternate screen --------------------------------------------- */
@@ -465,7 +581,7 @@ static void use_alt(Vt *v, int on, int clear)
     if (on && clear) {
         int y;
         for (y = 0; y < v->rows; y++)
-            fill(v->cur[y], v->cols, blank_of(v));
+            blank_range(v->cur[y], 0, v->cols, blank_of(v));
     }
     dirty_all(v);
 }
@@ -495,7 +611,7 @@ static void full_reset(Vt *v)
     for (i = 0; i < 2; i++) {
         int y;
         for (y = 0; y < v->rows; y++)
-            fill(v->lines[i][y], v->cols, blank_of(v));
+            blank_range(v->lines[i][y], 0, v->cols, blank_of(v));
     }
     v->x = v->y = v->pending = 0;
     v->top = 0;
@@ -814,7 +930,7 @@ static void esc(Vt *v, int c)
         if (c == '8') {                 /* DECALN: the screen full of E */
             int y, x;
             for (y = 0; y < v->rows; y++)
-                for (x = 0; x < v->cols; x++) {
+                for (grow(row(v, y), v->cols), x = 0; x < v->cols; x++) {
                     row(v, y)[x] = blank_of(v);
                     row(v, y)[x].cp = 'E';
                 }
@@ -1070,35 +1186,114 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
          * put()'s general checks (width, line drawing, insert) cost. */
         if (c >= 0x20 && c < 0x7F && v->state == S_GROUND && !v->uneed &&
             v->g[v->gl] != '0' && !v->insert) {
-            VtCell *r = row(v, v->y);
+            /* whole runs at a time: on a 14 MHz Amiga every instruction
+             * per letter shows */
+            const uint32_t fg = v->pen.fg, bg = v->pen.bg;
+            const uint16_t at = v->pen.attr;
+            const int cols = v->cols;
             for (;;) {
+                VtCell *r, *d;
+                const uint8_t *p = buf + i, *e = buf + len;
+                int lim, x, l;
                 if (v->pending && v->autowrap) {
                     v->x = 0;
                     linefeed(v);
-                    r = row(v, v->y);
                 }
                 v->pending = 0;
-                if (r[v->x].cp == VT_WIDE_TAIL && v->x > 0)
-                    r[v->x - 1] = blank_of(v);
-                if (v->x + 1 < v->cols && r[v->x + 1].cp == VT_WIDE_TAIL)
-                    r[v->x + 1] = blank_of(v);
-                r[v->x] = v->pen;
-                r[v->x].cp = (uint32_t)c;
-                v->dirty[v->y] = 1;
-                if (v->x + 1 >= v->cols) {
-                    v->x = v->cols - 1;
+                r = row(v, v->y);
+                x = v->x;
+                l = (int)RLEN(r);
+                if (l < x)
+                    grow(r, x);         /* a gap before the run: blanks */
+                else if (x > 0 && x < l && r[x].cp == VT_WIDE_TAIL)
+                    r[x - 1] = blank_of(v);
+                d = r + x;
+                lim = cols - x;
+                /* one pass: check a byte, store its cell */
+                while (lim > 0 && p < e && (uint8_t)(*p - 0x20) < 0x5F) {
+                    d->cp = *p++;
+                    d->fg = fg;
+                    d->bg = bg;
+                    d->attr = at;
+                    d++;
+                    lim--;
+                }
+                x = (int)(d - r);
+                if (x > l)
+                    RLEN(r) = x;
+                else if (x < l && r[x].cp == VT_WIDE_TAIL)
+                    r[x] = blank_of(v);
+                dirty_span(v, v->y, v->x - 1, x);
+                if (x >= cols) {
+                    v->x = cols - 1;
                     v->pending = 1;
                 } else
-                    v->x++;
-                if (i + 1 >= len)
+                    v->x = x;
+                i = (int)(p - buf);
+                if (i >= len || (uint8_t)(buf[i] - 0x20) >= 0x5F)
                     break;
-                c = buf[i + 1];
-                if (c < 0x20 || c >= 0x7F)
-                    break;
-                i++;
             }
+            i--;                        /* the for loop steps past it */
             v->any_dirty = 1;
             v->last_cp = (uint32_t)buf[i];
+            continue;
+        }
+        /* a whole CSI with plain parameters inside this write: parsed
+         * here in one go, not byte by byte through the state machine
+         * (colour changes, cursor moves - most of what programs send) */
+        if (v->state == S_GROUND && !v->uneed &&
+            ((c == 0x1B && i + 1 < len && buf[i + 1] == '[') ||
+             (c == 0x9B && !v->utf8))) {
+            int j = i + (c == 0x1B ? 2 : 1), np = 0, ok = 0;
+            int par[MAXPARAM];
+            par[0] = -1;
+            while (j < len) {
+                int d = buf[j];
+                if (d >= '0' && d <= '9') {
+                    if (np == 0) np = 1;
+                    if (par[np - 1] < 0) par[np - 1] = 0;
+                    if (par[np - 1] < 100000)
+                        par[np - 1] = par[np - 1] * 10 + (d - '0');
+                } else if (d == ';') {
+                    if (np == 0) np = 1;
+                    if (np < MAXPARAM) par[np++] = -1;
+                } else {
+                    ok = d >= 0x40 && d <= 0x7E;
+                    break;
+                }
+                j++;
+            }
+            if (ok) {
+                memcpy(v->param, par, (np ? np : 1) * sizeof par[0]);
+                v->nparam = np;
+                v->have_digit = 0;
+                v->priv = v->priv2 = v->inter = 0;
+                v->state = S_GROUND;
+                csi(v, buf[j]);
+                i = j;
+                continue;
+            }
+        }
+        /* a run of new lines: one scroll of them all (scroll-nl, blank
+         * lines from programs) instead of a scroll per line */
+        if (c == 10 && v->state == S_GROUND && i + 1 < len &&
+            buf[i + 1] == 10 && v->y <= v->bot) {
+            int k = 1, d, s, h = v->bot - v->top + 1;
+            while (i + k < len && buf[i + k] == 10)
+                k++;
+            i += k - 1;
+            v->pending = 0;
+            d = v->bot - v->y;
+            if (k <= d)
+                v->y += k;
+            else {
+                v->y = v->bot;
+                for (s = k - d; s > 0; s -= h > 1 ? h - 1 : 1)
+                    scroll_up(v, v->top, v->bot,
+                              h > 1 && s > h - 1 ? h - 1 : s);
+            }
+            if (v->lnm)
+                v->x = 0;
             continue;
         }
         /* Latin-1 (the Amiga's ANSI): bytes 0x80-0x9F are C1 controls */
@@ -1118,7 +1313,7 @@ static void free_screen(VtCell **l, int rows)
     if (!l)
         return;
     for (y = 0; y < rows; y++)
-        free(l[y]);
+        row_free(l[y]);
     free(l);
 }
 
@@ -1129,7 +1324,7 @@ static VtCell **alloc_screen(int cols, int rows)
     if (!l)
         return NULL;
     for (y = 0; y < rows; y++)
-        if (!(l[y] = calloc(cols, sizeof(VtCell)))) {
+        if (!(l[y] = row_new(cols))) {
             free_screen(l, rows);
             return NULL;
         }
@@ -1147,12 +1342,15 @@ Vt *vt_new(int cols, int rows, int scrollback)
     v->lines[1] = alloc_screen(cols, rows);
     v->tabs = calloc(cols, 1);
     v->dirty = calloc(rows, 1);
+    v->dx0 = calloc(rows, 2);
+    v->dx1 = calloc(rows, 2);
     v->hist_cap = scrollback;
     if (scrollback > 0) {
         v->hist = calloc(scrollback, sizeof *v->hist);
         v->hist_w = calloc(scrollback, sizeof *v->hist_w);
     }
     if (!v->lines[0] || !v->lines[1] || !v->tabs || !v->dirty ||
+        !v->dx0 || !v->dx1 ||
         (scrollback > 0 && (!v->hist || !v->hist_w))) {
         vt_free(v);
         return NULL;
@@ -1169,13 +1367,15 @@ void vt_free(Vt *v)
     if (!v)
         return;
     for (i = 0; i < v->hist_cap && v->hist; i++)
-        free(v->hist[i]);
+        row_free(v->hist[i]);
     free(v->hist);
     free(v->hist_w);
     free_screen(v->lines[0], v->rows);
     free_screen(v->lines[1], v->rows);
     free(v->tabs);
     free(v->dirty);
+    free(v->dx0);
+    free(v->dx1);
     free(v);
 }
 
@@ -1183,6 +1383,7 @@ void vt_resize(Vt *v, int cols, int rows)
 {
     VtCell **ng[2];
     uint8_t *nt, *nd;
+    uint16_t *nx0, *nx1;
     int i, y, shift = 0, w;
 
     if (cols == v->cols && rows == v->rows)
@@ -1193,9 +1394,11 @@ void vt_resize(Vt *v, int cols, int rows)
     ng[1] = alloc_screen(cols, rows);
     nt = calloc(cols, 1);
     nd = calloc(rows, 1);
-    if (!ng[0] || !ng[1] || !nt || !nd) {
+    nx0 = calloc(rows, 2);
+    nx1 = calloc(rows, 2);
+    if (!ng[0] || !ng[1] || !nt || !nd || !nx0 || !nx1) {
         free_screen(ng[0], rows); free_screen(ng[1], rows);
-        free(nt); free(nd);
+        free(nt); free(nd); free(nx0); free(nx1);
         return;
     }
     /* fewer rows: lines above the cursor go to the history first, so the
@@ -1204,19 +1407,32 @@ void vt_resize(Vt *v, int cols, int rows)
         shift = v->y - rows + 1;
         if (!v->alt)
             for (i = 0; i < shift; i++)
-                push_history(v, v->lines[0][i]);
+                push_history(v, v->lines[0][(v->base[0] + i) % v->rows]);
     }
     w = cols < v->cols ? cols : v->cols;
     for (i = 0; i < 2; i++) {
-        for (y = 0; y < rows && y + shift < v->rows; y++)
-            memcpy(ng[i][y], v->lines[i][y + shift], w * sizeof(VtCell));
+        for (y = 0; y < rows && y + shift < v->rows; y++) {
+            int oi = v->base[i] + y + shift;
+            const VtCell *o;
+            if (oi >= v->rows)
+                oi -= v->rows;
+            o = v->lines[i][oi];
+            int n = (int)RLEN(o) < w ? (int)RLEN(o) : w;
+            memcpy(ng[i][y], o, n * sizeof(VtCell));
+            RLEN(ng[i][y]) = n;
+        }
         free_screen(v->lines[i], v->rows);
         v->lines[i] = ng[i];
+        v->base[i] = 0;
     }
     free(v->tabs);
     free(v->dirty);
+    free(v->dx0);
+    free(v->dx1);
     v->tabs = nt;
     v->dirty = nd;
+    v->dx0 = nx0;
+    v->dx1 = nx1;
     v->cols = cols;
     v->rows = rows;
     v->cur = v->lines[v->alt];
@@ -1282,7 +1498,8 @@ const VtCell *vt_line(const Vt *v, int r, int back, int *width)
     }
     if (idx < 0)
         idx = 0;
-    *width = v->cols;
+    idx = ri(v, idx);
+    *width = RLEN(v->cur[idx]);       /* past it: blank */
     return v->cur[idx];
 }
 
@@ -1296,10 +1513,15 @@ void vt_cursor(const Vt *v, int *x, int *y, int *visible)
 int vt_take_changes(Vt *v, VtChanges *ch)
 {
     static uint8_t copy[1024];
+    static uint16_t c0[1024], c1s[1024];
     int any = v->any_dirty;
     int n = v->rows < (int)sizeof copy ? v->rows : (int)sizeof copy;
     memcpy(copy, v->dirty, n);
+    memcpy(c0, v->dx0, n * 2);
+    memcpy(c1s, v->dx1, n * 2);
     ch->dirty = copy;
+    ch->x0 = c0;
+    ch->x1 = c1s;
     ch->all = v->all_dirty || v->rows > (int)sizeof copy;
     ch->scroll_top = v->s_top;
     ch->scroll_bottom = v->s_bot;

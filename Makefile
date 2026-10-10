@@ -9,6 +9,12 @@ all: CTerm test
 ifdef PROFILE
 CFLAGS += -DPROFILE
 endif
+ifdef PROFILE_ECLOCK
+CFLAGS += -DPROFILE_ECLOCK
+endif
+ifdef DTDEBUG
+CFLAGS += -DDTDEBUG
+endif
 
 CTerm: src/main.c src/vt.c src/vt.h src/boxtable.h src/console.c src/console.h
 	$(CC) $(CFLAGS) src/main.c src/vt.c src/console.c -o CTerm
@@ -26,9 +32,13 @@ tests/vtdump: tests/vtdump.c src/vt.c src/vt.h
 tests/amiga_test: tests/amiga_test.c src/vt.c src/vt.h
 	gcc -O2 -Wall -o $@ tests/amiga_test.c src/vt.c
 
-test: tests/vtdump tests/amiga_test
+test: tests/vtdump tests/amiga_test tests/shadow_test
 	.venv/bin/python tests/compare.py
 	tests/amiga_test
+	tests/shadow_test tests/streams/*.bin
+
+tests/shadow_test: tests/shadow_test.c src/vt.c src/vt.h
+	gcc -O2 -Wall -o tests/shadow_test tests/shadow_test.c src/vt.c
 
 clean:
 	rm -f tests/vtdump CTerm
