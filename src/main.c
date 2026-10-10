@@ -717,7 +717,7 @@ static void run(void)
     } else if (dialhost[0]) {
         say("\x1b[2m[calling ");
         say(dialhost);
-        say("...]\x1b[0m\r\n");
+        say("... Esc gives up]\x1b[0m\r\n");
         refresh();
         if (!connect_out())
             say("\x1b[2m[Return calls again]\x1b[0m\r\n");

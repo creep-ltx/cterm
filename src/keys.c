@@ -15,12 +15,13 @@ static BOOL redial_key(const char *b)
     if (b[0] == '\r') {
         say("\x1b[2m[calling ");
         say(dialhost);
-        say("...]\x1b[0m\r\n");
+        say("... Esc gives up]\x1b[0m\r\n");
         refresh();
         if (connect_out())
             say("\x1b[2m[connected]\x1b[0m\r\n");
         else
             say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+        refresh();                      /* the screen waited with the call */
     }
     return TRUE;
 }
@@ -291,8 +292,14 @@ BOOL window_events(void)
         struct IntuiMessage copy = *m;
         struct Gadget *g = (struct Gadget *)m->IAddress;
         if (copy.Class == IDCMP_RAWKEY) {
-            key(&copy);                 /* IAddress valid only until reply */
+            /* IAddress is valid only until the reply: keep what it points
+             * at (the dead keys before, for MapRawKey) and answer first -
+             * a key can start a long wait (Return calls again), and while
+             * one is unanswered no more messages came */
+            APTR prev = m->IAddress ? *((APTR *)m->IAddress) : NULL;
+            copy.IAddress = &prev;
             ReplyMsg((struct Message *)m);
+            key(&copy);
             continue;
         }
         ReplyMsg((struct Message *)m);

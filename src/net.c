@@ -396,7 +396,6 @@ BOOL connect_out(void)
             "\x1b[0m\r\n");
         return FALSE;
     }
-    say("\x1b[2m[calling - Esc gives up]\x1b[0m\r\n");
     refresh();
     if (!sshmode)
         return dial();
@@ -558,7 +557,7 @@ static void call_tab(const char *host, BOOL pc, BOOL ssh)
     tab_show(ntabs - 1);
     say("\x1b[2m[calling ");
     say(dialhost);
-    say("...]\x1b[0m\r\n");
+    say("... Esc gives up]\x1b[0m\r\n");
     refresh();
     if (!connect_out())
         say("\x1b[2m[Return calls again]\x1b[0m\r\n");
@@ -631,7 +630,7 @@ void call_book(int i, BOOL newtab)
     tab_show(ntabs - 1);
     say("\x1b[2m[calling ");
     say(e->name);
-    say("...]\x1b[0m\r\n");
+    say("... Esc gives up]\x1b[0m\r\n");
     refresh();
     if (!connect_out())
         say("\x1b[2m[Return calls again]\x1b[0m\r\n");
