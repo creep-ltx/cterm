@@ -101,6 +101,13 @@ cannot read it.
   `PROGDIR:Downloads`; a file never goes over one that is there (a
   number is added). When the host waits for files (a BBS upload, or `rz`),
   a requester asks which; several can be chosen at once.
+- **Hydra starts by itself** too (the host's START packet, as
+  HydraCom's terminal did), and goes both ways at once: what the host sends
+  comes in while files you queued with Transfer/Send with Hydra... go out.
+  CTerm runs HydraCom's own code: the HYDRA file transfer protocol was
+  designed by Arjen G. Lentz and Joaquim H. Homrighausen, and HydraCom
+  written by Arjen G. Lentz, LENTZ SOFTWARE-DEVELOPMENT; Hydra and HydraCom
+  are free (see `src/hydra.c` and HydraCom's `license.doc`).
 - **Ymodem and Xmodem** are started by you, after starting the other side
   on the host: Transfer/Receive with Ymodem (names come with the files),
   Receive with Xmodem... (asks the name), Send with Ymodem... and Send

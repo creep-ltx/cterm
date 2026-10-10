@@ -151,6 +151,34 @@ int com_getbyte(void)
 
 /* ---- the files ---- */
 
+/* FINFO's text: time and size as 8 hex digits each, three more such
+ * fields, then the name (up to a space or the end). */
+static long hex8(const char *s)
+{
+    unsigned long v = 0;
+    int i;
+    for (i = 0; i < 8 && s[i]; i++) {
+        int c = tolower((unsigned char)s[i]);
+        v = v * 16 + (unsigned long)(c >= 'a' ? c - 'a' + 10 : c - '0');
+    }
+    return (long)v;
+}
+
+void hy_finfo(const char *s, long *ftime, long *fsize, char *name, int max)
+{
+    int i;
+    *ftime = *fsize = 0;
+    name[0] = 0;
+    if (strlen(s) < 40)
+        return;
+    *ftime = hex8(s);
+    *fsize = hex8(s + 8);
+    s += 40;
+    for (i = 0; i < max - 1 && s[i] && s[i] != ' '; i++)
+        name[i] = s[i];
+    name[i] = 0;
+}
+
 int hy_stat(char *pathname, long *size, long *ftime)
 {
     unsigned long sz = 0;

@@ -336,7 +336,13 @@ BOOL menu_pick(ULONG id)
     case M_LOGSTOP: log_stop(); break;
     case M_ABOUT:
         say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
-            "Amiga.\r\n");
+            "Amiga.\r\n"
+            "File transfers: Zmodem, Ymodem, Xmodem, and the HYDRA file "
+            "transfer protocol\r\n"
+            "(designed by Arjen G. Lentz and Joaquim H. Homrighausen; "
+            "HydraCom's code by\r\n"
+            "Arjen G. Lentz, LENTZ SOFTWARE-DEVELOPMENT - Hydra and HydraCom "
+            "are free).\r\n");
 #ifdef PROFILE
         {   /* ms = ticks / TPMS */
             char l[200];

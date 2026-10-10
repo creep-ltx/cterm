@@ -1362,8 +1362,13 @@ int hydra (char *txpathname, char *txalias)
 
                                    rxfsize = rxftime = 0L;
                                    rxfname[0] = '\0';
-                                   sscanf((char *) rxbuf,"%08lx%08lx%*08lx%*08lx%*08lx%255s",  /* CTerm: %s */
-                                          &rxftime, &rxfsize, rxfname);
+                                   /* CTerm: was sscanf "%08lx%08lx%*08lx
+                                      %*08lx%*08lx%s" - libnix on the Amiga
+                                      does not skip "%*08lx", the name came
+                                      out empty; read by hand (hy_finfo) */
+                                   hy_finfo((char *) rxbuf, &rxftime,
+                                            &rxfsize, rxfname,
+                                            (int) sizeof rxfname);
                                    ;    /* CTerm: no strupr(rxfname) */
 
                                    hydra_gotoxy(13,2);

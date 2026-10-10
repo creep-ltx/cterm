@@ -103,6 +103,8 @@ long  dos_tell     (int handle);
 int   dos_read     (int handle, void *buf, word len);
 int   dos_write    (int handle, void *buf, word len);
 int   hy_stat      (char *pathname, long *size, long *ftime);
+void  hy_finfo     (const char *s, long *ftime, long *fsize, char *name,
+                    int max);
 char *xfer_init    (char *fname, long fsize, long ftime);
 boolean xfer_bad   (void);
 char *xfer_okay    (void);

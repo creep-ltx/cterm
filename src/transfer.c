@@ -197,7 +197,7 @@ static void *x_wopen(void *u, const char *name, unsigned long size,
     int n = 0;
     BPTR f;
     (void)u; (void)size;
-    strncpy(nm, name, 100);
+    strncpy(nm, name[0] ? name : "file", 100);  /* nameless: still one */
     nm[100] = 0;
     for (;;) {                          /* never over a file that is there */
         strcpy(path, xdir);
@@ -206,7 +206,7 @@ static void *x_wopen(void *u, const char *name, unsigned long size,
             break;
         if (++n > 99)
             return NULL;
-        strncpy(nm, name, 96);
+        strncpy(nm, name[0] ? name : "file", 96);
         nm[96] = 0;
         strcat(nm, ".");
         numstr_cat(nm, n);
