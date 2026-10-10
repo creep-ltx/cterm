@@ -793,7 +793,7 @@ static void finish_settings_(int how)
     const char *t;
     BookEntry *bs = booksnap;           /* taken before close frees it */
     int nbs = nbooksnap;
-    BOOL bsok = booksnapped;
+    BOOL bsok = booksnapped, go = TRUE;
     booksnap = NULL;
     book_read();                        /* what is typed, before it goes */
     if (how != 3) {
@@ -867,16 +867,18 @@ static void finish_settings_(int how)
             want_full = FALSE;
             want_depth = owndepth;
             want_bar = scrollbar;
-            switch_display();
+            go = display_switch();      /* refused while Ed or More runs */
         }
-        ownmode = pend_id;
-        ownw = pend_w;
-        ownh = pend_h;
-        want_mode = pend_mode;
-        want_depth = pend_depth;
-        want_full = pend_mode == SCR_OWN && pend_full;
-        want_bar = pend_bar;
-        want_switch = TRUE;             /* the main loop does it */
+        if (go) {
+            ownmode = pend_id;
+            ownw = pend_w;
+            ownh = pend_h;
+            want_mode = pend_mode;
+            want_depth = pend_depth;
+            want_full = pend_mode == SCR_OWN && pend_full;
+            want_bar = pend_bar;
+            want_switch = TRUE;         /* the main loop does it */
+        }
     }
     used_only = how == 1;               /* Use: until a reboot, even on quit */
     envonly = used_only;

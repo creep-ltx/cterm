@@ -572,6 +572,33 @@ void con_close_gadget(struct Con *c)
     }
 }
 
+/* A program has the console raw (Ed, More): it may hold the window. */
+BOOL con_raw(struct Con *c)
+{
+    return c && c->rawmode;
+}
+
+/* The window was opened again (another screen): every process whose
+ * requesters went to the old one - the Shells and what they run, given
+ * it by NP_WindowPtr - uses the new one, not a closed window. */
+void con_window_moved(struct Window *old, struct Window *now)
+{
+    struct List *l[2];
+    struct Node *n;
+    int i;
+    if (!old || old == now)
+        return;
+    l[0] = &SysBase->TaskReady;
+    l[1] = &SysBase->TaskWait;
+    Forbid();
+    for (i = 0; i < 2; i++)
+        for (n = l[i]->lh_Head; n->ln_Succ; n = n->ln_Succ)
+            if (n->ln_Type == NT_PROCESS &&
+                ((struct Process *)n)->pr_WindowPtr == (APTR)old)
+                ((struct Process *)n)->pr_WindowPtr = (APTR)now;
+    Permit();
+}
+
 BOOL con_alive(struct Con *c)
 {
     return c->child_running || c->opens > 0;
@@ -684,7 +711,10 @@ void con_handle(struct Con *c, ULONG sigs)
             struct InfoData *id = BADDR(p->dp_Arg1);
             memset(id, 0, sizeof *id);
             id->id_DiskType = ID_CTRM;  /* not 'CON\0': we edit the lines */
-            id->id_VolumeNode = (BPTR)win;  /* More and Ed find the window */
+            /* More and Ed find the window. They keep the pointer, so the
+             * window must not change under them: CTerm switches screens
+             * only while no console is raw (Ed, More), see main.c */
+            id->id_VolumeNode = (BPTR)win;
             id->id_InUse = 0;
             ReplyPkt(p, DOSTRUE, 0);
             break;

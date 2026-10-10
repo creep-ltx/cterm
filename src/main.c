@@ -480,6 +480,27 @@ void shells_handle(ULONG sigs)
     con_spent_poll();
 }
 
+/* Another screen, the window opened again - not while a program has a
+ * Shell's console raw: Ed and More keep the window's pointer (DISK_INFO
+ * gave it) and would use a closed window. Then a beep, the switch is
+ * dropped (waiting would stop the window's keys: window_events reads
+ * none while one is wanted) and FALSE. The processes given the old
+ * window for their requesters get the new one. */
+BOOL display_switch(void)
+{
+    struct Window *old = win;
+    int i;
+    for (i = 0; i < ntabs; i++)
+        if (con_raw(tabs[i]->con)) {
+            want_switch = FALSE;
+            DisplayBeep(scr);
+            return FALSE;
+        }
+    switch_display();
+    con_window_moved(old, win);
+    return TRUE;
+}
+
 /* A tab of its own: an emulator the window's size, no Shell or host yet. */
 struct Tab *tab_new(void)
 {
@@ -746,7 +767,7 @@ static void run(void)
             break;
         T = shown;
         if (want_switch)
-            switch_display();
+            display_switch();           /* not while Ed or More runs */
         if (!win)
             break;
     }

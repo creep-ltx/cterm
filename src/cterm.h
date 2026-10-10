@@ -377,6 +377,7 @@ void tt_attach(void);
 BOOL open_display(void);
 void close_display(BOOL keep_screen);
 void switch_display(void);
+BOOL display_switch(void);              /* as switch_display, if it may */
 void font_changed(void);
 void ask_ttfont(void);
 void tt_size(int d);
