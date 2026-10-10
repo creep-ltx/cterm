@@ -300,6 +300,8 @@ static LONG c_apen = -1, c_bpen = -1;
 static ULONG c_argb = ~0UL, c_brgb = ~0UL;
 static int c_drmd = -1, c_style = -1;
 static BOOL rgb_memo;                   /* cell_rgb's last answer holds */
+static APTR c_ttfont;                   /* TrueType: the face and style set */
+static LONG c_ttstyle = -1;
 
 void rp_forget(void)
 {
@@ -307,6 +309,8 @@ void rp_forget(void)
     c_argb = c_brgb = ~0UL;
     c_drmd = c_style = -1;
     rgb_memo = FALSE;
+    c_ttfont = NULL;                    /* also when faces close: fonts.c */
+    c_ttstyle = -1;
 }
 
 void apen(ULONG rgb)
@@ -698,11 +702,19 @@ static void tt_run(const ULONG *u, const int *cols, int n, int y,
                    ULONG fg, UWORD attr)
 {
     int i;
+    APTR f = tt_for(attr);
+    LONG st = attr & VT_UNDERLINE ? TT_SoftStyle_Underlined
+                                  : TT_SoftStyle_None;
     drmd(JAM1);
     apen(fg);
-    TT_SetFont(rp, tt_for(attr));
-    TT_SetAttrs(rp, TT_SoftStyle, attr & VT_UNDERLINE
-                ? TT_SoftStyle_Underlined : TT_SoftStyle_None, TAG_END);
+    if (f != c_ttfont) {
+        TT_SetFont(rp, f);
+        c_ttfont = f;
+    }
+    if (st != c_ttstyle) {
+        TT_SetAttrs(rp, TT_SoftStyle, st, TAG_END);
+        c_ttstyle = st;
+    }
     if (ttruns) {
         int from = 0;
         /* glyphs are exactly one cell: draw runs, broken only where a
@@ -1044,6 +1056,8 @@ void draw_cursor(BOOL on)
         apen(fg);
         RectFill(rp, ox + x * cw, oy + y * ch, ox + x * cw + cw - 1,
                  oy + y * ch + ch - 1);
+        if (usett)
+            c.cp = tt_stand_in(c.cp);   /* as the row has it: no box */
         if (usett && c.cp > ' ' && !is_special(c.cp)) {
             ULONG u = c.cp;
             int col = x;
@@ -1112,11 +1126,12 @@ static BOOL cache_alloc(void)
 static void cell_bitmap_glyph(UBYTE c, ULONG fg, UWORD attr)
 {
     struct TextFont *f = font;
-    int lo = f->tf_LoChar, hi = f->tf_HiChar, y, b, w, off;
+    int lo = f->tf_LoChar, hi = f->tf_HiChar, y, b, w, off, i = c;
     ULONG loc;
-    if (c < lo || c > hi)
-        c = hi + 1 - lo + lo;           /* the font's "missing" glyph */
-    loc = ((ULONG *)f->tf_CharLoc)[c - lo];
+    if (i < lo || i > hi)
+        i = hi + 1;                     /* the font's "missing" glyph: an
+                                           int, 256 when HiChar is 255 */
+    loc = ((ULONG *)f->tf_CharLoc)[i - lo];
     off = loc >> 16;
     w = loc & 0xFFFF;
     if (w > cw)
@@ -1156,6 +1171,7 @@ static void cell_tt_glyph(ULONG cp, ULONG fg, ULONG bg, UWORD attr, int w)
      * on the baseline (measured: an "n" is 8 rows, an "E" 10 - put both
      * at the cell's top and the text jitters) */
     TT_SetFont(rp, tt_for(attr));
+    c_ttfont = tt_for(attr);            /* tt_run's memo: what is set now */
     TT_SetAttrs(rp, TT_Encoding, TT_Encoding_UTF32_BE, TAG_END);
     TT_TextExtent(rp, (APTR)&u, 1, &te);
     top = cbase + te.te_Extent.MinY;

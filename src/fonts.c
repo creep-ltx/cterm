@@ -56,6 +56,7 @@ BOOL load_font(void)
 void close_tt(void)
 {
     int i;
+    rp_forget();                        /* draw.c's memo of the face set */
     for (i = 0; i < 4; i++)
         if (ttface[i]) {
             TT_CloseFont(ttface[i]);
