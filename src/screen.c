@@ -302,6 +302,9 @@ BOOL open_display(void)
         return FALSE;
     }
     rp = win->RPort;
+    /* every plane, as a new window has: the mask kept is the last
+     * screen's (a 16-colour one's narrows a graphics card's colours) */
+    planes_full();
     SetFont(rp, font);
     tt_attach();
     make_menus();

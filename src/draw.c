@@ -187,41 +187,34 @@ BOOL owed;                       /* drawing owed: a frame timer runs */
 BOOL flood;                      /* the last draw was a scroll */
 static int curx = -1, cury = -1;        /* where the cursor was drawn */
 
-/* The pen cache: an RGB value asked of the screen once. The pens
- * obtained (each released once at the end: every ObtainBestPen is a
- * share of its pen) are at most NPEN; in front of them a small table
- * answers any colour seen before, also the ones that got the nearest
- * pen when all NPEN were taken (24-bit art on an 8-bit Workbench). */
+/* The pen cache: an RGB value asked of the screen once. */
 #define NPEN 256
 static ULONG pc_rgb[NPEN];
 static LONG pc_pen[NPEN];
 int npc;
-#define NPH 512                         /* the table (a power of 2) */
-static ULONG ph_key[NPH];               /* rgb | 0x80000000; 0: empty */
-static LONG ph_pen[NPH];
 
 static LONG pen_for(ULONG rgb)
 {
     int i, best = -1;
-    LONG d, bd = 0x7FFFFFFF, p;
-    ULONG key = rgb | 0x80000000UL, h = (rgb * 2654435761UL) >> 23;
-    if (ph_key[h] == key)
-        return ph_pen[h];
-    for (i = 0; i < npc; i++)           /* pushed out of the table */
+    LONG d, bd = 0x7FFFFFFF;
+    static int mru;                     /* where the last one was found */
+    if (mru < npc && pc_rgb[mru] == rgb)
+        return pc_pen[mru];
+    for (i = 0; i < npc; i++)
         if (pc_rgb[i] == rgb) {
-            p = pc_pen[i];
-            goto found;
+            mru = i;
+            return pc_pen[i];
         }
     if (npc < NPEN) {
-        p = ObtainBestPen(scr->ViewPort.ColorMap,
-                          ((rgb >> 16) & 255) * 0x01010101,
-                          ((rgb >> 8) & 255) * 0x01010101,
-                          (rgb & 255) * 0x01010101,
-                          OBP_Precision, PRECISION_IMAGE, TAG_END);
+        LONG p = ObtainBestPen(scr->ViewPort.ColorMap,
+                               ((rgb >> 16) & 255) * 0x01010101,
+                               ((rgb >> 8) & 255) * 0x01010101,
+                               (rgb & 255) * 0x01010101,
+                               OBP_Precision, PRECISION_IMAGE, TAG_END);
         if (p >= 0) {
             pc_rgb[npc] = rgb;
             pc_pen[npc++] = p;
-            goto found;
+            return p;
         }
     }
     for (i = 0; i < npc; i++) {             /* full: the nearest we have */
@@ -234,11 +227,7 @@ static LONG pen_for(ULONG rgb)
             best = i;
         }
     }
-    p = best >= 0 ? pc_pen[best] : 1;
-found:
-    ph_key[h] = key;
-    ph_pen[h] = p;
-    return p;
+    return best >= 0 ? pc_pen[best] : 1;
 }
 
 /* Plain (planar) screens: only the bitplanes some pen on show differs
@@ -362,7 +351,6 @@ void release_pens(void)
 {
     while (npc > 0)
         ReleasePen(scr->ViewPort.ColorMap, pc_pen[--npc]);
-    memset(ph_key, 0, sizeof ph_key);   /* the next screen's are others */
 }
 
 /* What a cell's colours come to, as RGB. */
