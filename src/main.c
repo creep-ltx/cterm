@@ -138,6 +138,9 @@ static BOOL want_full, want_bar;
 static Vt *vt;
 static BOOL local = TRUE;               /* the Amiga Shell, not the PC */
 static LONG want_cols = 80, want_rows = 25; /* the first window, in cells */
+static LONG wl = -1, wt, ww, wh;        /* the Workbench window, remembered */
+static BOOL remember = TRUE;            /* FALSE: a one-off start (COLS,
+                                           HOST...) - its window is not kept */
 static BOOL quitting;
 static BOOL owed;                       /* drawing owed: a frame timer runs */
 static BOOL flood;                      /* the last draw was a scroll */
@@ -1593,6 +1596,7 @@ static LONG lfd = -1, sock = -1;
 static LONG port = DEFAULT_PORT;
 static int tstate, tcmd;
 static BOOL utf8 = TRUE;
+static BOOL saved_utf8 = TRUE;          /* the setting; utf8 may be LATIN1's */
 static char dialhost[128];              /* HOST: CTerm calls out */
 static UBYTE sbuf[64];                  /* a subnegotiation coming in */
 static int sblen;
@@ -2075,9 +2079,15 @@ static void load_prefs(void)
 {
     static char buf[800];
     char *p = buf;
-    LONG n = GetVar(PREFS_VAR, buf, sizeof buf, GVF_GLOBAL_ONLY);
+    /* the whole file: without GVF_BINARY_VAR, GetVar stops at the first
+     * line break (every setting after "truetype" was lost) */
+    LONG n = GetVar(PREFS_VAR, buf, sizeof buf,
+                    GVF_GLOBAL_ONLY | GVF_BINARY_VAR);
     if (n <= 0)
         return;
+    if (n >= (LONG)sizeof buf)
+        n = sizeof buf - 1;
+    buf[n] = 0;
     hadprefs = TRUE;
     while (*p) {
         char *eol = strchr(p, '\n'), *val;
@@ -2106,7 +2116,24 @@ static void load_prefs(void)
             }
             else if (!stricmp(p, "full")) fullscreen = val[0] == '1';
             else if (!stricmp(p, "scrollbar")) scrollbar = val[0] == '1';
-            else if (!stricmp(p, "utf8")) utf8 = val[0] == '1';
+            else if (!stricmp(p, "utf8")) utf8 = saved_utf8 = val[0] == '1';
+            else if (!stricmp(p, "window")) {
+                /* four numbers: left,top,width,height (libnix's strtol
+                 * gave no end pointer here, so read them by hand) */
+                LONG v[4] = { -1, 0, 0, 0 };
+                int k = 0;
+                const char *q = val;
+                for (k = 0; k < 4 && *q; k++) {
+                    LONG n = 0;
+                    while (*q >= '0' && *q <= '9')
+                        n = n * 10 + (*q++ - '0');
+                    v[k] = n;
+                    if (*q == ',')
+                        q++;
+                }
+                wl = v[0]; wt = v[1]; ww = v[2]; wh = v[3];
+                if (k < 4 || ww < 100 || wh < 50) wl = -1;
+            }
         }
         if (!eol)
             break;
@@ -2138,7 +2165,14 @@ static void save_prefs(void)
     }
     strcat(buf, "\nfull="); strcat(buf, fullscreen ? "1" : "0");
     strcat(buf, "\nscrollbar="); strcat(buf, scrollbar ? "1" : "0");
-    strcat(buf, "\nutf8="); strcat(buf, utf8 ? "1" : "0");
+    strcat(buf, "\nutf8="); strcat(buf, saved_utf8 ? "1" : "0");
+    if (wl >= 0) {
+        strcat(buf, "\nwindow=");
+        numstr_cat(buf, wl); strcat(buf, ",");
+        numstr_cat(buf, wt); strcat(buf, ",");
+        numstr_cat(buf, ww); strcat(buf, ",");
+        numstr_cat(buf, wh);
+    }
     strcat(buf, "\n");
     SetVar(PREFS_VAR, buf, -1, GVF_GLOBAL_ONLY | GVF_SAVE_VAR);
 }
@@ -2271,10 +2305,18 @@ static BOOL open_display(void)
         int w = want_cols * cw + 4 + scr->WBorLeft + 22 + 2,
             h = want_rows * ch + 2 + scr->WBorTop + scr->Font->ta_YSize + 1 +
                 scr->WBorBottom + 2;
+        int l = 0, t = top0;
+        if (remember && wl >= 0 && scr != ownscr) {
+            l = wl; t = wt; w = ww; h = wh;     /* as it was left */
+        }
         if (w > scr->Width) w = scr->Width;
         if (h > scr->Height - top0) h = scr->Height - top0;
+        if (l + w > scr->Width) l = scr->Width - w;
+        if (t + h > scr->Height) t = scr->Height - h;
+        if (l < 0) l = 0;
+        if (t < top0) t = top0;
         win = OpenWindowTags(NULL,
-            WA_Left, 0, WA_Top, top0, WA_Width, w, WA_Height, h,
+            WA_Left, l, WA_Top, t, WA_Width, w, WA_Height, h,
             WA_Title, (ULONG)"CTerm",
             scr == ownscr ? WA_CustomScreen : WA_PubScreen, (ULONG)scr,
             WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
@@ -2301,6 +2343,10 @@ static BOOL open_display(void)
 
 static void close_display(BOOL keep_screen)
 {
+    if (win && remember && !fullscreen && scr != ownscr) {
+        wl = win->LeftEdge; wt = win->TopEdge;  /* kept for next time */
+        ww = win->Width; wh = win->Height;
+    }
     if (win) {
         if (menu) ClearMenuStrip(win);
         if (gadsok) RemoveGList(win, &vgad, -1);
@@ -2634,7 +2680,7 @@ static BOOL menu_pick(ULONG id)
 #endif
         break;
     case M_UTF8:
-        utf8 = !utf8;
+        utf8 = saved_utf8 = !utf8;
         pcmode = FALSE;
         vt_set_utf8(vt, utf8);
         painter_forget();
@@ -2963,7 +3009,7 @@ static void run(void)
     if (lfd >= 0) CloseSocket(lfd);
 }
 
-static BOOL arg_pc;
+static BOOL arg_pc, arg_latin1;
 
 int main(int argc, char **argv)
 {
@@ -2980,10 +3026,12 @@ int main(int argc, char **argv)
             return RETURN_FAIL;
         }
         if (args[0]) port = *(LONG *)args[0];
-        if (args[1]) utf8 = FALSE;
+        if (args[1]) arg_latin1 = TRUE;
         if (args[2]) local = FALSE;     /* wait for the PC's relay */
         if (args[3]) want_cols = *(LONG *)args[3];
         if (args[4]) want_rows = *(LONG *)args[4];
+        if (args[2] || args[3] || args[4] || args[5] || args[6])
+            remember = FALSE;
         if (args[5]) {                  /* the Shell runs this script first */
             strncpy(fromfile, (char *)args[5], sizeof fromfile - 1);
             fromfile[sizeof fromfile - 1] = 0;
@@ -3009,6 +3057,8 @@ int main(int argc, char **argv)
     load_prefs();
     if (arg_pc)
         pcmode = TRUE;
+    if (arg_latin1)
+        utf8 = FALSE;
     /* first start: TrueType if it is installed (DejaVu Sans Mono) */
     if (!hadprefs)
         usett = TTEngineBase && file_exists(ttfile);
@@ -3036,8 +3086,13 @@ int main(int argc, char **argv)
     } else {
         run();
     }
-    if (win)
+    if (win) {
+        if (remember && !fullscreen && scr != ownscr) {
+            wl = win->LeftEdge; wt = win->TopEdge;
+            ww = win->Width; wh = win->Height;
+        }
         save_prefs();
+    }
     if (local) {
         /* nothing may still be open on our port when it goes */
         while (con_alive()) {
