@@ -69,7 +69,9 @@ const VtCell *vt_line(const Vt *vt, int r, int back, int *width);
 int vt_history(const Vt *vt);       /* lines in the scrollback */
 
 void vt_cursor(const Vt *vt, int *x, int *y, int *visible);
-int vt_take_changes(Vt *vt, VtChanges *ch);  /* 0: nothing changed */
+/* 0: nothing changed. ch's arrays are shared by all Vts: use them before
+ * the next call. */
+int vt_take_changes(Vt *vt, VtChanges *ch);
 
 /* Replies the host asked for (DA, cursor position...): take them out. */
 int vt_take_reply(Vt *vt, char *buf, int max);

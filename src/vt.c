@@ -1918,6 +1918,9 @@ void vt_cursor(const Vt *v, int *x, int *y, int *visible)
     *visible = v->cursor_on;
 }
 
+/* The rows' marks are copied into static buffers, one set for all tabs:
+ * the next call (any tab) overwrites them. Both callers (draw.c's
+ * redraw_all and refresh) use them before calling again. */
 int vt_take_changes(Vt *v, VtChanges *ch)
 {
     static uint8_t copy[1024];
