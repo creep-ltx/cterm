@@ -153,6 +153,15 @@ int main(void)
               "off again, and RIS clears them");
         vt_free(m);
     }
+    {   /* DECSCUSR in a host's terminal; the Amiga's ' q' stays a report */
+        Vt *c = vt_new(20, 5, 0);
+        int blink;
+        feed(c, "\x1b[6 q");
+        CHECK(vt_cursor_shape(c, &blink) == 2 && !blink, "6: steady bar");
+        feed(c, "\x1b[3 q");
+        CHECK(vt_cursor_shape(c, &blink) == 1 && blink, "3: blinking underline");
+        vt_free(c);
+    }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     vt_free(v);
     return fails != 0;

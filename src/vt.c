@@ -46,6 +46,8 @@ struct Vt {
     int bracketed, reverse, utf8;
     int mouse, mouse_sgr;               /* 9, 1000, 1002, 1003; SGR form */
     int focus, sync;                    /* 1004 focus reports; 2026 */
+    int cshape, cblink;                 /* DECSCUSR: 0 block, 1 underline,
+                                           2 bar; blinking */
     int amigamode;                  /* the Amiga console's ways (local) */
     int cp437;                      /* bytes 0x80-0xFF are the PC's */
     unsigned long rawev;            /* raw event classes asked for: CSI n{ */
@@ -625,6 +627,7 @@ static void full_reset(Vt *v)
     v->cursor_on = 1;
     v->app_cursor = v->app_keypad = v->bracketed = v->reverse = 0;
     v->mouse = v->mouse_sgr = v->focus = v->sync = 0;
+    v->cshape = v->cblink = 0;
     v->g[0] = v->g[1] = 'B';
     v->gl = 0;
     reset_tabs(v);
@@ -765,6 +768,15 @@ static void csi(Vt *v, int final)
 
     if (v->priv2)                       /* Ed's CSI >?NN v/l/h/w: private */
         return;
+    if (!v->amigamode && v->inter == ' ' && final == 'q') {
+        /* DECSCUSR: 0/1 blinking block, 2 block, 3/4 underline, 5/6 bar
+         * (the Amiga console's ' q' is a window report: amigamode) */
+        int p = P(0, 0);
+        v->cshape = p <= 2 ? 0 : p <= 4 ? 1 : 2;
+        v->cblink = p == 0 || p == 1 || p == 3 || p == 5;
+        v->any_dirty = 1;
+        return;
+    }
     if (v->amigamode) {
         /* the Amiga console's own sequences (console.device) */
         if (v->priv == '>' && final == 'm') {   /* the window's colour */
@@ -1531,6 +1543,11 @@ int vt_reverse_video(const Vt *v) { return v->reverse; }
 int vt_mouse(const Vt *v, int *sgr) { *sgr = v->mouse_sgr; return v->mouse; }
 int vt_focus(const Vt *v) { return v->focus; }
 int vt_sync(const Vt *v) { return v->sync; }
+int vt_cursor_shape(const Vt *v, int *blink)
+{
+    *blink = v->cblink;
+    return v->cshape;
+}
 
 const VtCell *vt_line(const Vt *v, int r, int back, int *width)
 {

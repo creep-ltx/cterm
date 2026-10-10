@@ -1091,6 +1091,30 @@ static void draw_row(int r)
     draw_span(r, 0, cols - 1);
 }
 
+/* An underline or bar cursor (DECSCUSR) over cell x,y, in its letter's
+ * colour. */
+static void cursor_mark(int x, int y)
+{
+    int w, blink, shape = vt_cursor_shape(vt, &blink);
+    const VtCell *line = vt_line(vt, y, 0, &w);
+    VtCell c;
+    ULONG fg, bg;
+    int x0 = ox + x * cw, y0 = oy + y * ch;
+    if (line && x < w)
+        c = line[x];
+    else
+        memset(&c, 0, sizeof c);
+    cell_rgb(&c, &fg, &bg);
+    apen(fg);
+    if (shape == 1) {
+        int t = ch / 8 > 2 ? ch / 8 : 2;
+        RectFill(rp, x0, y0 + ch - t, x0 + cw - 1, y0 + ch - 1);
+    } else {
+        int t = cw / 4 > 2 ? cw / 4 : 2;
+        RectFill(rp, x0, y0, x0 + t - 1, y0 + ch - 1);
+    }
+}
+
 static void draw_cursor(BOOL on)
 {
     int x, y, vis;
@@ -1113,6 +1137,16 @@ static void draw_cursor(BOOL on)
     }
     if (!on || !vis || back > 0 || x >= cols || y >= rows)
         return;
+    {
+        int blink;
+        if (vt_cursor_shape(vt, &blink)) {  /* an underline or a bar */
+            draw_cells(y, x, x);
+            cursor_mark(x, y);
+            curx = x;
+            cury = y;
+            return;
+        }
+    }
     /* the cursor: the cell in reverse */
     {
         int w;
@@ -1363,7 +1397,7 @@ static void forget_shown(void)
 /* One text row: put together from cell pictures, written in one go. */
 static void paint_row(int r)
 {
-    int ps0 = -1, ps1 = -2;
+    int ps0 = -1, ps1 = -2, cshape, blink;
     static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
     int w, x, cx = -1, cy = -1, vis = 0, rw = cols * cw;
     const VtCell *line = vt_line(vt, r, back, &w);
@@ -1373,6 +1407,7 @@ static void paint_row(int r)
     if (r < 0 || r >= rows)
         return;
     vt_cursor(vt, &cx, &cy, &vis);
+    cshape = vt_cursor_shape(vt, &blink);
     if (!vis || back > 0)
         cy = -1;
     sel_span(r, &ps0, &ps1);
@@ -1422,8 +1457,8 @@ static void paint_row(int r)
             pe = NULL;
         }
         prev = c;
-        if ((r == cy && x == cx) ^ (x >= ps0 && x <= ps1)) {
-            /* the cursor, or a marked cell: reversed */
+        if ((r == cy && x == cx && cshape == 0) ^ (x >= ps0 && x <= ps1)) {
+            /* the cursor (a block), or a marked cell: reversed */
             ULONG t = fg; fg = bg; bg = t;
             pe = NULL;
             prev = NULL;
@@ -1454,6 +1489,8 @@ static void paint_row(int r)
     }
     WritePixelArray(rowbuf, 0, 0, rw * 4, rp, ox, oy + r * ch, rw, ch,
                     RECTFMT_ARGB);
+    if (r == cy && cshape && cx < cols)
+        cursor_mark(cx, cy);            /* an underline or a bar on top */
 }
 
 /* Use the painter on this screen? And the buffers it needs. */

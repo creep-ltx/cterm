@@ -86,6 +86,7 @@ int vt_reverse_video(const Vt *vt);
 int vt_mouse(const Vt *vt, int *sgr);
 int vt_focus(const Vt *vt);             /* 1004: focus in/out reports */
 int vt_sync(const Vt *vt);              /* 2026: hold drawing till done */
+int vt_cursor_shape(const Vt *vt, int *blink);  /* 0 block, 1 under, 2 bar */
 const char *vt_title(Vt *vt, int *changed);
 int vt_take_bell(Vt *vt);
 
