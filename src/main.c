@@ -53,6 +53,7 @@
 #include "boxtable.h"
 #include "console.h"
 #include "ssh.h"
+#include "dbg.h"
 
 static const char version[] = "$VER: CTerm 0.3b1 (10.10.2026)";
 
@@ -69,6 +70,70 @@ void __chkabort(void) {}
 #define DEFAULT_PORT 7478
 #define SCROLLBACK   2000
 #define POSBAR       6
+
+/* ======================================================================
+ * Tabs: each a terminal of its own - its text, its Shell or connection,
+ * its characters, where it is scrolled, what is marked. The names below
+ * stand for the current tab's (T); only the shown tab is drawn.
+ * ==================================================================== */
+
+struct Tab {
+    Vt *t_vt;
+    struct Con *con;                    /* a local Shell's console */
+    BOOL t_local;                        /* the Amiga Shell, not a host */
+    LONG t_sock, t_lfd;                     /* a host; LISTEN's socket */
+    int t_tstate, t_tcmd;                   /* telnet's parser */
+    UBYTE t_sbuf[64];                     /* a subnegotiation coming in */
+    int t_sblen;
+    char t_dialhost[128];                 /* HOST/SSH: the place called */
+    char t_dialtitle[140];                /* "CTerm: host" */
+    BOOL t_sshmode;                       /* dialhost is user@host */
+    BOOL t_utf8, t_pcmode;                  /* its characters: UTF-8; PC BBS */
+    int t_back;                           /* lines scrolled back */
+    BOOL t_sel_on, t_sel_drag;              /* the selection, in its cells */
+    int t_sa_r, t_sa_c, t_sb_r, t_sb_c;
+    BOOL ended;                         /* its Shell or connection is over */
+};
+
+#define MAXTABS 9
+#define MAXSPENT 64
+static struct Con *spent[MAXSPENT];     /* consoles of closed tabs */
+static int nspent;
+static struct Tab tab0 = { NULL, NULL, TRUE, -1, -1 };
+static struct Tab *tabs[MAXTABS] = { &tab0 };
+static int ntabs = 1;
+static struct Tab *T = &tab0;           /* the current tab */
+static struct Tab *shown = &tab0;       /* the one in the window */
+
+#define vt        (T->t_vt)
+#define local     (T->t_local)
+#define sock      (T->t_sock)
+#define lfd       (T->t_lfd)
+#define tstate    (T->t_tstate)
+#define tcmd      (T->t_tcmd)
+#define sbuf      (T->t_sbuf)
+#define sblen     (T->t_sblen)
+#define dialhost  (T->t_dialhost)
+#define dialtitle (T->t_dialtitle)
+#define sshmode   (T->t_sshmode)
+#define utf8      (T->t_utf8)
+#define pcmode    (T->t_pcmode)
+#define back      (T->t_back)
+#define sel_on    (T->t_sel_on)
+#define sel_drag  (T->t_sel_drag)
+#define sa_r      (T->t_sa_r)
+#define sa_c      (T->t_sa_c)
+#define sb_r      (T->t_sb_r)
+#define sb_c      (T->t_sb_c)
+
+static void tt_attach(void);
+static void title_update(void);
+static void title_update_now(void);
+static ULONG shells_sigmask(void);
+static void shells_handle(ULONG sigs);
+static void tab_new_shell(void);
+static void tab_close_current(void);
+static void tab_show(int i);
 
 /* ======================================================================
  * Colours
@@ -127,9 +192,7 @@ static BOOL ownfg, ownbg;               /* the person's own text/background */
 static ULONG myfg, mybg;
 static ULONG deffg = 0xD8DEE9, defbg = 0x1A1D23;
 static const ULONG *ansi16 = themes[0].ansi;
-static BOOL pcmode;                     /* a PC BBS: CP437, PC colours, bold
-                                           is bright, blink a bright
-                                           background (iCE colours) */
+
 
 static void apply_theme(void)
 {
@@ -207,8 +270,6 @@ static BOOL want_switch;
 static int want_mode, want_depth;
 static BOOL want_full, want_bar;
 
-static Vt *vt;
-static BOOL local = TRUE;               /* the Amiga Shell, not the PC */
 static LONG want_cols = 80, want_rows = 25; /* the first window, in cells */
 static LONG wl = -1, wt, ww, wh;        /* the Workbench window, remembered */
 static char calls[300];                 /* places called, newest first:
@@ -261,7 +322,6 @@ static ULONG pf_calib;
 #define PF_START(v)
 #define PF_ADD(acc, v)
 #endif
-static int back;                        /* lines scrolled back */
 static int curx = -1, cury = -1;        /* where the cursor was drawn */
 
 /* The pen cache: an RGB value asked of the screen once. */
@@ -789,8 +849,6 @@ static BOOL planar;                     /* a native screen, real planes */
 /* ---- the selection: text marked with the mouse ------------------------
  * In screen cells, reading order from the anchor (a) to the end (b),
  * both included; it goes when the text under it moves (a scroll). */
-static BOOL sel_on, sel_drag;
-static int sa_r, sa_c, sb_r, sb_c;
 
 static void sel_bounds(int *r0, int *c0, int *r1, int *c1)
 {
@@ -1523,20 +1581,79 @@ static void update_knob(void)
 
 /* ---- layout ------------------------------------------------------------ */
 
+/* The tab bar: a row of names above the text, while there are tabs. */
+static int tabbar_h(void)
+{
+    return ntabs > 1 && font ? font->tf_YSize + 4 : 0;
+}
+
 static void layout_and_resize(void)
 {
-    int w, h;
+    int w, h, i;
     ox = win->BorderLeft + 2;
-    oy = win->BorderTop + 1;
+    oy = win->BorderTop + 1 + tabbar_h();
     w = win->Width - ox - win->BorderRight - 2 -
         (fullscreen ? POSBAR + 2 : 0);
-    h = win->Height - win->BorderTop - win->BorderBottom - 2;
+    h = win->Height - win->BorderTop - win->BorderBottom - 2 - tabbar_h();
     cols = w / cw;
     rows = h / ch;
     if (cols < 10) cols = 10;
     if (rows < 3) rows = 3;
-    if (cols != vt_cols(vt) || rows != vt_rows(vt))
-        vt_resize(vt, cols, rows);
+    for (i = 0; i < ntabs; i++)         /* all tabs share the window */
+        if (tabs[i]->t_vt && (cols != vt_cols(tabs[i]->t_vt) ||
+                            rows != vt_rows(tabs[i]->t_vt)))
+            vt_resize(tabs[i]->t_vt, cols, rows);
+}
+
+static void tab_label(struct Tab *t, char *out)
+{
+    if (t->t_local)
+        strcpy(out, "Shell");
+    else if (t->t_dialhost[0]) {
+        strcpy(out, t->t_sshmode ? "ssh " : "");
+        strncat(out, t->t_dialhost, 40);
+    } else
+        strcpy(out, "relay");
+}
+
+static void draw_tabbar(void)
+{
+    int h = tabbar_h(), x0 = win->BorderLeft, y0 = win->BorderTop;
+    int x1 = win->Width - win->BorderRight - 1, slot, i;
+    if (!h)
+        return;
+    slot = (x1 - x0 + 1) / ntabs;
+    if (slot > 220)
+        slot = 220;
+    planes_full();
+    rp_forget();
+    apen(mix(defbg, deffg, 12));
+    RectFill(rp, x0, y0, x1, y0 + h - 1);
+    SetFont(rp, font);
+    SetSoftStyle(rp, 0, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
+    for (i = 0; i < ntabs; i++) {
+        char label[64], t[72];
+        int sx = x0 + i * slot, n, fit;
+        BOOL on = tabs[i] == shown;
+        tab_label(tabs[i], label);
+        t[0] = '1' + i;
+        t[1] = ' ';
+        strcpy(t + 2, label);
+        apen(on ? defbg : mix(defbg, deffg, 12));
+        RectFill(rp, sx + 1, y0 + 1, sx + slot - 2, y0 + h - 1);
+        apen(on ? deffg : mix(defbg, deffg, 55));
+        bpen(on ? defbg : mix(defbg, deffg, 12));
+        SetDrMd(rp, JAM2);
+        n = strlen(t);
+        fit = (slot - 8) / (font->tf_XSize ? font->tf_XSize : 8);
+        if (n > fit) n = fit;
+        Move(rp, sx + 4, y0 + 2 + font->tf_Baseline);
+        Text(rp, (STRPTR)t, n > 0 ? n : 0);
+    }
+    if (usett)
+        tt_attach();                    /* the window's font for TrueType */
+    planes_reset();
+    rp_forget();
 }
 
 static void forget_shown(void);
@@ -1553,6 +1670,7 @@ static void redraw_all(void)
              win->Width - win->BorderRight - 1,
              win->Height - win->BorderBottom - 1);
     planes_reset();                     /* all background: no plane yet */
+    draw_tabbar();
     vt_take_changes(vt, &chg);
     curx = cury = -1;
     for (r = 0; r < rows; r++)
@@ -1626,23 +1744,35 @@ static void refresh(void)
 
 /* ---- for console.c ------------------------------------------------- */
 
-void term_write(const UBYTE *b, LONG n)
+/* The console's calls, for its tab (t): the text goes into that tab's
+ * emulator; only the shown tab is drawn. */
+void term_write(void *t, const UBYTE *b, LONG n)
 {
     PF_START(t0);
-    vt_write(vt, b, n);
+    vt_write(((struct Tab *)t)->t_vt, b, n);
     PF_ADD(pf_vt, t0);
 #ifdef PROFILE
     pf_writes++;
 #endif
 }
-int term_cols(void) { return cols; }
-int term_rows(void) { return rows; }
-int term_cursor_x(void) { int x, y, v; vt_cursor(vt, &x, &y, &v); return x; }
-int term_cursor_y(void) { int x, y, v; vt_cursor(vt, &x, &y, &v); return y; }
+int term_cols(void *t) { (void)t; return cols; }
+int term_rows(void *t) { (void)t; return rows; }
+int term_cursor_x(void *t)
+{
+    int x, y, v;
+    vt_cursor(((struct Tab *)t)->t_vt, &x, &y, &v);
+    return x;
+}
+int term_cursor_y(void *t)
+{
+    int x, y, v;
+    vt_cursor(((struct Tab *)t)->t_vt, &x, &y, &v);
+    return y;
+}
 
 static LONG lastcost;                   /* us: the last draw, planar only */
 
-void term_flush(void)
+static void draw_now(void)
 {
     PF_START(t0);
     owed = FALSE;
@@ -1668,7 +1798,7 @@ void term_flush(void)
  * it, so a flood costs one draw per frame, not per write. A timer request
  * says when the frame is up - no clock is read here: on the A1200 (Emu68,
  * PiStorm) reading the system time is costly, and this runs per write. */
-void term_render_soon(void)
+static void draw_soon(void)
 {
     if (owed)
         return;
@@ -1685,6 +1815,22 @@ void term_render_soon(void)
             us = p > 160000 ? 160000 : p;
         con_arm_render(us);
     }
+}
+
+void term_flush(void *t)
+{
+    if (t == shown) {
+        struct Tab *keep = T;
+        T = shown;
+        draw_now();
+        T = keep;
+    }
+}
+
+void term_render_soon(void *t)
+{
+    if (t == shown)
+        draw_soon();
 }
 
 static void scroll_view(int to)
@@ -1722,16 +1868,9 @@ static void scroll_view(int to)
 #define O_NAWS   31
 #define O_TTYPE  24
 
-static LONG lfd = -1, sock = -1;
 static LONG port = DEFAULT_PORT;
-static int tstate, tcmd;
-static BOOL utf8 = TRUE;
 static BOOL saved_utf8 = TRUE;          /* the setting; utf8 may be LATIN1's */
-static char dialhost[128];              /* HOST: CTerm calls out */
-static BOOL sshmode;                    /* SSH: dialhost is user@host */
-static char dialtitle[140];             /* "CTerm: host" */
-static UBYTE sbuf[64];                  /* a subnegotiation coming in */
-static int sblen;
+
 
 static void send_raw(const UBYTE *b, LONG n)
 {
@@ -2077,6 +2216,10 @@ static void key(struct IntuiMessage *m)
 
     if (code & IECODE_UP_PREFIX)
         return;
+    if ((q & IEQUALIFIER_RCOMMAND) && code >= 0x01 && code <= 0x09) {
+        tab_show(code - 0x01);          /* Right Amiga + 1..9: that tab */
+        return;
+    }
     if (local) {
         /* the Amiga Shell: the keymap's own bytes, as CON: gives them;
          * only the scrollback keys stay CTerm's */
@@ -2098,7 +2241,7 @@ static void key(struct IntuiMessage *m)
         if (n > 0) {
             if (back)
                 scroll_view(0);
-            con_keys((UBYTE *)buf, n);
+            con_keys(T->con, (UBYTE *)buf, n);
         }
         return;
     }
@@ -2163,11 +2306,13 @@ static void key(struct IntuiMessage *m)
 
 enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
-       M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS };
+       M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB };
 
 static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"New Shell tab", (STRPTR)"T", 0, 0, (APTR)M_NEWTAB },
     {  NM_ITEM, (STRPTR)"Call...", (STRPTR)"K", 0, 0, (APTR)M_CALL },
+    {  NM_ITEM, (STRPTR)"Close tab", (STRPTR)"W", 0, 0, (APTR)M_CLOSETAB },
     {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
     {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
     {  NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
@@ -2178,7 +2323,7 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Settings...", (STRPTR)"S", 0, 0, (APTR)M_SETTINGS },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Amiga font...", 0, 0, 0, (APTR)M_FONT },
-    {  NM_ITEM, (STRPTR)"TrueType font...", (STRPTR)"T", 0, 0,
+    {  NM_ITEM, (STRPTR)"TrueType font...", 0, 0, 0,
        (APTR)M_TTFONT },
     {  NM_ITEM, (STRPTR)"Bigger text", (STRPTR)"+", 0, 0, (APTR)M_BIGGER },
     {  NM_ITEM, (STRPTR)"Smaller text", (STRPTR)"-", 0, 0, (APTR)M_SMALLER },
@@ -3028,6 +3173,8 @@ static BOOL menu_pick(ULONG id)
     case M_SPEED: speed_test(); break;
     case M_CALL: call_dialog(); break;
     case M_SETTINGS: open_settings(); break;
+    case M_NEWTAB: tab_new_shell(); break;
+    case M_CLOSETAB: tab_close_current(); break;
     case M_COPY: sel_copy(); break;
     case M_PASTE: paste(); break;
     case M_ABOUT:
@@ -3100,7 +3247,7 @@ static void raw_report(int cls, int code, int qual)
     numstr_cat(r, code); strcat(r, ";");
     numstr_cat(r, qual); strcat(r, ";0;0;0;0|");
     p = (UBYTE *)r;
-    con_reply(p, strlen(r));
+    con_reply(T->con, p, strlen(r));
 }
 
 /* ---- copy and paste: clipboard.device unit 0, IFF FTXT (the console
@@ -3255,7 +3402,7 @@ static void paste(void)
             if (back)
                 scroll_view(0);
             if (local)
-                con_keys(t, sz);
+                con_keys(T->con, t, sz);
             else {
                 if (vt_bracketed_paste(vt))
                     send_str("\x1b[200~");
@@ -3459,12 +3606,12 @@ static void call_dialog(void)
     dsig = 1UL << dw->UserPort->mp_SigBit;
     while (!done) {
         struct IntuiMessage *m;
-        ULONG sigs = Wait(dsig | (local ? con_sigmask() : 0));
-        if (local && (sigs & con_sigmask())) {
-            /* the Shell goes on meanwhile */
-            con_handle(sigs);
+        ULONG sigs = Wait(dsig | shells_sigmask());
+        if (sigs & ~dsig) {
+            /* the Shells go on meanwhile */
+            shells_handle(sigs);
             if (con_render_due() && owed)
-                term_flush();
+                draw_now();
         }
         while ((m = GT_GetIMsg(dw->UserPort))) {
             ULONG cl = m->Class;
@@ -3548,7 +3695,7 @@ static BOOL pend_full, pend_bar;
 
 static struct {                         /* what Cancel goes back to */
     int theme, ttsize, fontsize, linespace;
-    BOOL ownfg, ownbg, usett, utf8, pc, pcfont;
+    BOOL ownfg, ownbg, usett, s_utf8, pc, pcfont;
     ULONG myfg, mybg;
     char ttfile[160], fontname[48];
 } snap;
@@ -3757,7 +3904,7 @@ static void open_settings(void)
     strcpy(snap.fontname, fontname);
     snap.fontsize = fontsize;
     snap.linespace = linespace;
-    snap.utf8 = utf8; snap.pc = pcmode;
+    snap.s_utf8 = utf8; snap.pc = pcmode;
     pend_mode = scrmode;
     pend_depth = owndepth;
     pend_id = ownmode;
@@ -3920,8 +4067,8 @@ static void finish_settings_(int how)
         pcfont = snap.pcfont;
         ownfg = snap.ownfg; ownbg = snap.ownbg;
         myfg = snap.myfg; mybg = snap.mybg;
-        if (snap.utf8 != utf8 || snap.pc != pcmode)
-            set_chars(snap.pc ? 2 : snap.utf8 ? 0 : 1);
+        if (snap.s_utf8 != utf8 || snap.pc != pcmode)
+            set_chars(snap.pc ? 2 : snap.s_utf8 ? 0 : 1);
         if (letters) {
             usett = snap.usett;
             ttsize = snap.ttsize;
@@ -4076,8 +4223,10 @@ static BOOL window_events(void)
                 if (vt_raw_events(vt) & (1UL << 11))
                     raw_report(11, 0, 0);
                 else
-                    con_close_gadget();
-            } else
+                    con_close_gadget(T->con);
+            } else if (ntabs > 1)
+                T->ended = TRUE;        /* this host's tab goes */
+            else
                 go = FALSE;
             break;
         case IDCMP_NEWSIZE:
@@ -4085,9 +4234,18 @@ static BOOL window_events(void)
             painter_setup();
             redraw_all();
             RefreshWindowFrame(win);
-            if (sock >= 0)
-                send_naws();
-            raw_report(12, 0, 0);
+            {
+                struct Tab *keep = T;
+                int i;
+                for (i = 0; i < ntabs; i++) {
+                    T = tabs[i];
+                    if (sock >= 0)
+                        send_naws();
+                    if (T->con)
+                        raw_report(12, 0, 0);
+                }
+                T = keep;
+            }
             break;
         case IDCMP_REFRESHWINDOW:
             BeginRefresh(win);
@@ -4110,6 +4268,17 @@ static BOOL window_events(void)
             break;
         }
         case IDCMP_MOUSEBUTTONS:
+            if (copy.Code == SELECTDOWN && tabbar_h() &&
+                copy.MouseY >= win->BorderTop &&
+                copy.MouseY < win->BorderTop + tabbar_h()) {
+                int slot = (win->Width - win->BorderLeft - win->BorderRight)
+                           / ntabs, i;
+                if (slot > 220) slot = 220;
+                i = (copy.MouseX - win->BorderLeft) / slot;
+                if (i >= 0 && i < ntabs)
+                    tab_show(i);
+                break;
+            }
             if (copy.Code == SELECTDOWN && copy.MouseX >= ox &&
                 copy.MouseY >= oy && copy.MouseY < oy + rows * ch &&
                 copy.MouseX < ox + cols * cw) {
@@ -4182,11 +4351,21 @@ static BOOL window_events(void)
  * The main loop
  * ==================================================================== */
 
+static BOOL title_force;
+
+static void title_update_now(void)
+{
+    title_force = TRUE;
+    title_update();
+}
+
 static void title_update(void)
 {
     int changed;
     const char *t = vt_title(vt, &changed);
     static char title[160];
+    if (title_force)
+        changed = TRUE, title_force = FALSE;
     if (!changed || !win)
         return;
     strcpy(title, "CTerm");
@@ -4218,6 +4397,221 @@ static void title_update(void)
 
 static char fromfile[256];              /* FROM: the Shell's first script */
 
+/* ---- tabs ---------------------------------------------------------- */
+
+/* Every tab's Shell: the signals to wait for, the packets to answer. */
+static ULONG shells_sigmask(void)
+{
+    ULONG m = 0;
+    int i;
+    for (i = 0; i < ntabs; i++)
+        if (tabs[i]->con)
+            m |= con_sigmask(tabs[i]->con);
+    return m;
+}
+
+static void shells_handle(ULONG sigs)
+{
+    struct Tab *keep = T;
+    int i;
+    for (i = 0; i < ntabs; i++)
+        if (tabs[i]->con) {
+            T = tabs[i];
+            con_handle(T->con, sigs);
+        }
+    T = keep;
+}
+
+static int tabbar_h(void);
+static void tab_label(struct Tab *t, char *out);
+
+/* A tab of its own: an emulator the window's size, no Shell or host yet. */
+static struct Tab *tab_new(void)
+{
+    struct Tab *t;
+    ULONG lines;
+    if (ntabs >= MAXTABS)
+        return NULL;
+    t = AllocVec(sizeof *t, MEMF_ANY | MEMF_CLEAR);
+    if (!t)
+        return NULL;
+    lines = AvailMem(MEMF_ANY) / 4 / (80 * sizeof(VtCell));
+    t->t_vt = vt_new(cols > 0 ? cols : 80, rows > 0 ? rows : 25,
+                   lines < SCROLLBACK ? (int)lines : SCROLLBACK);
+    if (!t->t_vt) {
+        FreeVec(t);
+        return NULL;
+    }
+    t->t_sock = t->t_lfd = -1;
+    t->t_local = TRUE;
+    t->t_utf8 = saved_utf8;
+    vt_set_utf8(t->t_vt, t->t_utf8);
+    tabs[ntabs++] = t;
+    return t;
+}
+
+/* Show tab i: its text in the window, its font (a PC BBS wears the PC's),
+ * its title. */
+static void tab_show(int i)
+{
+    BOOL bar = tabbar_h() > 0;
+    if (i < 0 || i >= ntabs)
+        return;
+    shown = T = tabs[i];
+    pc_font(pcmode);
+    if (bar != (tabbar_h() > 0) || TRUE) {
+        layout_and_resize();
+        painter_forget();
+    }
+    redraw_all();
+    title_update_now();
+}
+
+/* Written backwards on purpose: the forward search, inlined into
+ * tab_drop, came out of bebbo's gcc -O2 stepping the pointer twice after
+ * tabs[0] - tabs[1] was never found and closing tab 2 spun for ever
+ * (seen in the disassembly, 2026-10-10). */
+static int tab_index(struct Tab *t)
+{
+    int i = ntabs;
+    while (--i >= 0)
+        if (tabs[i] == t)
+            break;
+    return i;
+}
+
+/* A tab goes: its host hung up on, its emulator freed (a local tab only
+ * once its Shell has ended). */
+static void tab_drop(struct Tab *t)
+{
+    struct Tab *keep = T;
+    int i = tab_index(t);
+    if (i < 0)
+        return;
+    T = t;
+    if (sock >= 0) {
+        if (sshmode)
+            ssh_close();
+        else
+            CloseSocket(sock);
+        sock = -1;
+    }
+    if (lfd >= 0) {
+        CloseSocket(lfd);
+        lfd = -1;
+    }
+    if (T->con) {
+        /* kept until CTerm ends: nothing about a Shell's console (its
+         * port, its signal, its timer) is torn down while processes may
+         * still be finishing - freed all at once at the end */
+        if (nspent < MAXSPENT)
+            spent[nspent++] = T->con;
+        T->con = NULL;
+    }
+    vt_free(T->t_vt);
+    memmove(tabs + i, tabs + i + 1, (ntabs - i - 1) * sizeof tabs[0]);
+    ntabs--;
+    if (t != &tab0)
+        FreeVec(t);
+    T = keep == t ? NULL : keep;
+    if (shown == t) {
+        shown = NULL;
+        if (ntabs > 0)
+            tab_show(i < ntabs ? i : ntabs - 1);
+    } else if (ntabs > 0) {
+        T = shown;
+        layout_and_resize();            /* the tab bar may have gone */
+        redraw_all();
+    }
+    if (!T && ntabs > 0)
+        T = shown;
+}
+
+/* A new tab with the Amiga Shell in it, shown. */
+static void tab_new_shell(void)
+{
+    struct Tab *t = tab_new();
+    if (!t) {
+        DisplayBeep(scr);
+        return;
+    }
+    T = t;
+    vt_set_amiga(vt, 1);
+    T->con = con_start("S:Shell-Startup", T);
+    if (!T->con)
+        say("CTerm could not start a Shell.\r\n");
+    tab_show(ntabs - 1);
+}
+
+/* Close the shown tab: its Shell is told the input ended (the tab goes
+ * when the Shell has), a host's is hung up on. */
+static void tab_close_current(void)
+{
+    if (T->con)
+        con_stop(T->con);
+    T->ended = TRUE;
+}
+
+/* Everyone out: the Shells are told the input ended, hosts hung up on. */
+static void quit_all(void)
+{
+    int i;
+    quitting = TRUE;
+    for (i = 0; i < ntabs; i++)
+        if (tabs[i]->con)
+            con_stop(tabs[i]->con);
+        else
+            tabs[i]->ended = TRUE;
+}
+
+/* A host's bytes for tab t (T is t): take what has come, and what keeps
+ * coming without a wait, before drawing - a burst draws once. */
+static void host_input(UBYTE *buf, LONG size)
+{
+    if (lfd >= 0 && sock < 0) {
+        connected();
+        return;
+    }
+    {
+        int rounds = 0;
+        for (;;) {
+            struct timeval tv;
+            LONG k;
+            if (sshmode) {
+                /* drain it: libssh2 may hold decrypted data the socket
+                 * no longer shows */
+                while ((k = ssh_read(buf, size)) > 0)
+                    vt_write(vt, buf, k);
+                if (k < 0)
+                    hung_up();
+                break;
+            }
+            k = recv(sock, buf, size, 0);
+            tv.tv_sec = tv.tv_usec = 0;
+            if (k <= 0) {
+                hung_up();
+                break;
+            }
+            from_host(buf, k);
+            if (++rounds > 16)
+                break;
+            {
+                fd_set rd;
+                FD_ZERO(&rd);
+                FD_SET(sock, &rd);
+                if (WaitSelect(sock + 1, &rd, NULL, NULL, &tv, NULL) <= 0)
+                    break;
+            }
+        }
+    }
+    {
+        char r[256];
+        int k = vt_take_reply(vt, r, sizeof r);
+        if (k > 0)
+            send_data((UBYTE *)r, k);
+    }
+}
+
 static void run(void)
 {
     static UBYTE buf[16384];
@@ -4232,12 +4626,14 @@ static void run(void)
     pf_all0 = ticks();
     term_now(&pf_tv0);
 #endif
+    T = shown = tabs[0];
     if (local) {
         const char *script = fromfile[0] ? fromfile : "S:Shell-Startup";
         BPTR l = Lock((STRPTR)script, ACCESS_READ);
         if (l)
             UnLock(l);
-        if (!con_start(l ? script : NULL)) {
+        T->con = con_start(l ? script : NULL, T);
+        if (!T->con) {
             /* no Shell: say so and wait for the window to be closed -
              * never fall into the network loop, there is no network */
             say("CTerm could not start a Shell.\r\n");
@@ -4275,134 +4671,96 @@ static void run(void)
 
     for (;;) {
         fd_set rd;
-        LONG fd = sock >= 0 ? sock : lfd, n, wait = -1, c;
+        LONG maxfd = -1, n = 0;
         ULONG winsig = 1UL << win->UserPort->mp_SigBit;
         ULONG setsig = setwin ? 1UL << setwin->UserPort->mp_SigBit : 0;
-        ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C |
-                     (local ? con_sigmask() : 0);
-        struct timeval tv;
+        ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig();
+        BOOL hostdata = FALSE;
+        int i;
         FD_ZERO(&rd);
-        if (fd >= 0)
-            FD_SET(fd, &rd);
-        (void)c;
-        if (local) {
-            /* no network here: the plain Amiga wait, and the timer for
-             * what is due - the socket library's WaitSelect costs far
-             * more per round, and a flood of tiny writes is all rounds */
-            /* the frame timer and WaitForChar's timer signal the timer
-             * port, whose bit con_sigmask() includes */
-            {
-                PF_START(tw);
-                sigs = Wait(sigs);
-                PF_ADD(pf_wait, tw);
+        for (i = 0; i < ntabs; i++) {
+            struct Tab *t = tabs[i];
+            LONG fd = t->t_sock >= 0 ? t->t_sock : t->t_lfd;
+            if (t->con)
+                sigs |= con_sigmask(t->con);
+            if (fd >= 0) {
+                FD_SET(fd, &rd);
+                if (fd > maxfd)
+                    maxfd = fd;
             }
-            n = 0;
-        } else {
-            if (wait >= 0) {
-                tv.tv_sec = wait / 1000;
-                tv.tv_usec = (wait % 1000) * 1000;
-            }
-            n = WaitSelect(fd >= 0 ? fd + 1 : 0, fd >= 0 ? &rd : NULL, NULL,
-                           NULL, wait >= 0 ? &tv : NULL, &sigs);
         }
-        if (sigs & SIGBREAKF_CTRL_C) {
-            if (!local)
-                break;
-            quitting = TRUE;
-            con_stop();
-        }
+        if (maxfd < 0) {
+            /* no network: the plain Amiga wait - the socket library's
+             * WaitSelect costs far more per round, and a flood of tiny
+             * writes is all rounds */
+            PF_START(tw);
+            sigs = Wait(sigs);
+            PF_ADD(pf_wait, tw);
+        } else
+            n = WaitSelect(maxfd + 1, &rd, NULL, NULL, NULL, &sigs);
+        T = shown;
+        if ((sigs & SIGBREAKF_CTRL_C) && !quitting)
+            quit_all();
         if (setwin && (sigs & setsig))
             settings_events();
-        if ((sigs & winsig) && !window_events()) {
-            if (!local)
-                break;
-            quitting = TRUE;            /* end the Shell, then us */
-            con_stop();
-        }
-        if (local) {
-            char r[256];
-            int k;
-            {
+        T = shown;
+        if ((sigs & winsig) && !window_events() && !quitting)
+            quit_all();
+        /* every tab: its Shell's packets, its host's bytes */
+        for (i = 0; i < ntabs; i++) {
+            T = tabs[i];
+            if (T->con) {
+                char r[256];
+                int k;
                 PF_START(tp);
-                con_handle(sigs);
+                con_handle(T->con, sigs);
                 PF_ADD(pf_pkt, tp);
+                k = vt_take_reply(vt, r, sizeof r);
+                if (k > 0)
+                    con_reply(T->con, (UBYTE *)r, k);
+                if (!con_alive(T->con))
+                    T->ended = TRUE;    /* the Shell ended */
             }
-            k = vt_take_reply(vt, r, sizeof r);
-            if (k > 0)
-                con_reply((UBYTE *)r, k);
-            if (vt_take_bell(vt))
+            if (n > 0) {
+                LONG fd = sock >= 0 ? sock : lfd;
+                if (fd >= 0 && FD_ISSET(fd, &rd)) {
+                    host_input(buf, sizeof buf);
+                    if (T == shown)
+                        hostdata = TRUE;
+                }
+            }
+            if (vt_take_bell(vt) && T == shown)
                 DisplayBeep(scr);
-            title_update();
-            if (win && !win->MenuStrip && menu)
-                SetMenuStrip(win, menu);        /* Ed has gone */
-            if (con_render_due() && owed)
-                term_flush();
-            if (!con_alive())
-                break;                          /* the Shell ended */
-            if (want_switch)
-                switch_display();
-            if (!win)
-                break;
-            continue;
         }
+        /* tabs whose Shell has ended go */
+        for (i = 0; i < ntabs; i++)
+            if (tabs[i]->ended && !(tabs[i]->con &&
+                                    con_alive(tabs[i]->con))) {
+                tab_drop(tabs[i]);
+                i = -1;                 /* the list moved: again */
+            }
+        if (ntabs == 0)
+            break;
+        T = shown;
+        title_update();
+        if (win && !win->MenuStrip && menu)
+            SetMenuStrip(win, menu);    /* Ed has gone */
+        if (con_render_due() && owed)
+            draw_now();
+        if (hostdata)
+            refresh();
         if (want_switch)
             switch_display();
         if (!win)
             break;
-        if (n > 0 && fd >= 0 && FD_ISSET(fd, &rd)) {
-            if (fd == lfd) {
-                connected();
-            } else {
-                /* take what has come, and what keeps coming without a
-                 * wait, before drawing: a burst draws once */
-                int rounds = 0;
-                for (;;) {
-                    struct timeval tv;
-                    LONG k;
-                    if (sshmode) {
-                        /* drain it: libssh2 may hold decrypted data the
-                         * socket no longer shows */
-                        while ((k = ssh_read(buf, sizeof buf)) > 0)
-                            vt_write(vt, buf, k);
-                        if (k < 0)
-                            hung_up();
-                        break;
-                    }
-                    k = recv(sock, buf, sizeof buf, 0);
-                    tv.tv_sec = tv.tv_usec = 0;
-                    if (k <= 0) {
-                        hung_up();
-                        break;
-                    }
-                    from_host(buf, k);
-                    if (++rounds > 16)
-                        break;
-                    FD_ZERO(&rd);
-                    FD_SET(sock, &rd);
-                    if (WaitSelect(sock + 1, &rd, NULL, NULL, &tv, NULL) <= 0)
-                        break;
-                }
-                {
-                    char r[256];
-                    int k = vt_take_reply(vt, r, sizeof r);
-                    if (k > 0)
-                        send_data((UBYTE *)r, k);
-                }
-                if (vt_take_bell(vt))
-                    DisplayBeep(scr);
-                title_update();
-            }
-        }
-        refresh();
     }
-    if (sock >= 0) CloseSocket(sock);
-    if (lfd >= 0) CloseSocket(lfd);
 }
 
 static BOOL arg_pc, arg_latin1;
 
 int main(int argc, char **argv)
 {
+    tab0.t_utf8 = TRUE;
     int rc = RETURN_OK;
     (void)version;
     (void)argv;
@@ -4524,19 +4882,30 @@ int main(int argc, char **argv)
         envonly = used_only;
         save_prefs();
     }
-    if (local) {
-        /* nothing may still be open on our port when it goes */
-        while (con_alive()) {
-            ULONG sg = con_sigmask();
+    /* nothing may still be open on a Shell's port when it goes */
+    {
+        int i;
+        for (i = 0; i < ntabs; i++)
+            if (tabs[i]->con && con_alive(tabs[i]->con))
+                con_stop(tabs[i]->con);
+        for (;;) {
+            ULONG sg = shells_sigmask();
+            BOOL any = FALSE;
+            for (i = 0; i < ntabs; i++)
+                if (tabs[i]->con && con_alive(tabs[i]->con))
+                    any = TRUE;
+            if (!any)
+                break;
             Wait(sg);
-            con_handle(sg);
+            shells_handle(sg);
         }
-        con_free();
+        while (ntabs > 0)
+            tab_drop(tabs[0]);
+        while (nspent > 0)
+            con_free(spent[--nspent]);
     }
     close_settings();
     clip_close();
-    if (sshmode && sock >= 0)
-        ssh_close();
     close_display(FALSE);
     if (ownfont) CloseFont(ownfont);
     cache_free();

@@ -34,6 +34,7 @@
 #include <string.h>
 
 #include "console.h"
+#include "dbg.h"
 
 struct Device *TimerBase;
 
@@ -43,49 +44,59 @@ struct Device *TimerBase;
 #define READMAX 16
 #define ID_CTRM 0x4354524DUL            /* 'CTRM': "not CON:, edit lines" */
 
-static struct MsgPort *conport;
-static struct timerequest *tio;
-static BOOL timer_open;
-static struct Task *maintask;
-static LONG endbit = -1;
-static struct FileHandle *infh;
-static char startcmd[256];
-static BOOL child_running;
-static int opens;                       /* handles open on this console */
+/* One console: a Shell's port, its typed input, its line editor. CTerm
+ * keeps one per tab. */
+struct Con {
+    void *user;                         /* the tab: given to the term_ calls */
+    struct MsgPort *conport;
+    struct Task *maintask;
+    LONG endbit;
+    struct FileHandle *infh;
+    char startcmd[256];
+    BOOL child_running, started;        /* started: the Shell closes infh */
+    int opens;                          /* handles open on this console */
 
-static UBYTE inq[INMAX];                /* ready for READs */
-static LONG inlen;
-static BOOL eof_pending;
-static BOOL rawmode;
-static struct DosPacket *reads[READMAX];
-static int nreads;
-static struct DosPacket *waitpkt;
-static struct Task *breaktask;
+    UBYTE inq[INMAX];                   /* ready for READs */
+    LONG inlen;
+    BOOL eof_pending;
+    BOOL rawmode;
+    struct DosPacket *reads[READMAX];
+    int nreads;
+    struct DosPacket *waitpkt;
+    struct Task *breaktask;             /* whom Ctrl-C..F go to */
+    LONG breakarg;                      /* CHANGE_SIGNAL's last arg2 */
+    struct timerequest *ctio;           /* a WaitForChar's timeout */
+    BOOL carmed;
 
-/* the line being typed (cooked mode) */
-static UBYTE line[LINEMAX];
-static int llen, lcur;
-static BOOL editing;
-static int x0, y0;                      /* where it starts on screen */
-static UBYTE *hist[HISTMAX];
-static int nhist, hpos = -1;
+    /* the line being typed (cooked mode) */
+    UBYTE line[LINEMAX];
+    int llen, lcur;
+    BOOL editing;
+    int x0, y0;                         /* where it starts on screen */
+    UBYTE *hist[HISTMAX];
+    int nhist, hpos;
+};
 
 /* ---- the helper that runs the Shell ---------------------------------- */
 
 static void child_entry(void)
 {
+    /* which console: set at creation (NP_ExitData), before this runs */
+    struct Process *me = (struct Process *)FindTask(NULL);
+    struct Con *c = (struct Con *)me->pr_ExitData;
     /* an interactive Shell on our handle: returns at EndShell */
-    Execute((STRPTR)startcmd, MKBADDR(infh), 0);
-    Close(MKBADDR(infh));
+    Execute((STRPTR)c->startcmd, MKBADDR(c->infh), 0);
+    Close(MKBADDR(c->infh));
     /* tell CTerm, and leave without returning to its code first */
     Forbid();
-    Signal(maintask, 1UL << endbit);
+    Signal(c->maintask, 1UL << c->endbit);
 }
 
-/* ---- small things ------------------------------------------------------- */
+/* ---- the timer: one port, the frame shared, a WaitForChar per console - */
 
 static struct MsgPort *timerport;
-static struct timerequest *rtio, *ctio;  /* the frame; WaitForChar */
+static struct timerequest *tio, *rtio;  /* the device; the frame */
+static BOOL timer_open, rarmed;
 
 void term_now(struct timeval *tv)
 {
@@ -94,7 +105,6 @@ void term_now(struct timeval *tv)
     else
         tv->tv_secs = tv->tv_micro = 0;
 }
-
 
 void con_timer_init(void)
 {
@@ -107,23 +117,14 @@ void con_timer_init(void)
         timer_open = TRUE;
         TimerBase = tio->tr_node.io_Device;
         rtio = (struct timerequest *)CreateIORequest(timerport, sizeof *rtio);
-        ctio = (struct timerequest *)CreateIORequest(timerport, sizeof *ctio);
         if (rtio) {
             rtio->tr_node.io_Device = tio->tr_node.io_Device;
             rtio->tr_node.io_Unit = tio->tr_node.io_Unit;
         }
-        if (ctio) {
-            ctio->tr_node.io_Device = tio->tr_node.io_Device;
-            ctio->tr_node.io_Unit = tio->tr_node.io_Unit;
-        }
     }
 }
 
-/* Two timer requests on the timer port, whose bit con_sigmask() adds:
- * the frame (draw what is owed) and a WaitForChar's timeout. Neither
- * reads the clock - that is costly on the A1200 under Emu68. */
-static BOOL rarmed, carmed;
-
+/* Neither timer reads the clock - that is costly on the A1200 (Emu68). */
 static void arm(struct timerequest *t, LONG us)
 {
     t->tr_node.io_Command = TR_ADDREQUEST;
@@ -159,17 +160,17 @@ BOOL con_render_due(void)
     return FALSE;
 }
 
+ULONG con_timer_sig(void)
+{
+    return timerport ? 1UL << timerport->mp_SigBit : 0;
+}
+
 void con_timer_free(void)
 {
     if (rtio) {
         disarm(rtio, &rarmed);
         DeleteIORequest((struct IORequest *)rtio);
         rtio = NULL;
-    }
-    if (ctio) {
-        disarm(ctio, &carmed);
-        DeleteIORequest((struct IORequest *)ctio);
-        ctio = NULL;
     }
     if (tio) {
         if (timer_open)
@@ -184,9 +185,11 @@ void con_timer_free(void)
     }
 }
 
-static void wr(const char *s)
+/* ---- small things ------------------------------------------------------- */
+
+static void wr(struct Con *c, const char *s)
 {
-    term_write((const UBYTE *)s, strlen(s));
+    term_write(c->user, (const UBYTE *)s, strlen(s));
 }
 
 static void numcat(char *out, LONG n)
@@ -198,7 +201,7 @@ static void numcat(char *out, LONG n)
     strcat(out, p);
 }
 
-static void goto_rc(int row, int col)
+static void goto_rc(struct Con *c, int row, int col)
 {
     char s[24];
     s[0] = (char)0x9B;
@@ -207,253 +210,259 @@ static void goto_rc(int row, int col)
     strcat(s, ";");
     numcat(s, col + 1);
     strcat(s, "H");
-    wr(s);
+    wr(c, s);
 }
 
-static void push_input(const UBYTE *b, LONG n)
+static void push_input(struct Con *c, const UBYTE *b, LONG n)
 {
-    if (n > INMAX - inlen)
-        n = INMAX - inlen;
+    if (n > INMAX - c->inlen)
+        n = INMAX - c->inlen;
     if (n > 0) {
-        CopyMem((APTR)b, inq + inlen, n);
-        inlen += n;
+        CopyMem((APTR)b, c->inq + c->inlen, n);
+        c->inlen += n;
     }
 }
 
 /* Answer waiting READs from what is ready; and a waiting WAIT_CHAR. */
-static void serve(void)
+static void serve(struct Con *c)
 {
-    while (nreads > 0 && (inlen > 0 || eof_pending)) {
-        struct DosPacket *p = reads[0];
+    while (c->nreads > 0 && (c->inlen > 0 || c->eof_pending)) {
+        struct DosPacket *p = c->reads[0];
         LONG want = p->dp_Arg3, n = 0;
-        if (inlen > 0) {
-            n = want < inlen ? want : inlen;
+        if (c->inlen > 0) {
+            n = want < c->inlen ? want : c->inlen;
             if (n < 0)
                 n = 0;
-            CopyMem(inq, (APTR)p->dp_Arg2, n);
-            memmove(inq, inq + n, inlen - n);
-            inlen -= n;
-        } else
-            eof_pending = FALSE;        /* an end of input: read 0 */
-        memmove(reads, reads + 1, (nreads - 1) * sizeof reads[0]);
-        nreads--;
+            CopyMem(c->inq, (APTR)p->dp_Arg2, n);
+            memmove(c->inq, c->inq + n, c->inlen - n);
+            c->inlen -= n;
+        } else {
+            c->eof_pending = FALSE;     /* an end of input: read 0 */
+        }
+        memmove(c->reads, c->reads + 1, (c->nreads - 1) * sizeof c->reads[0]);
+        c->nreads--;
         ReplyPkt(p, n, 0);
     }
-    if (waitpkt && (inlen > 0 || eof_pending)) {
-        ReplyPkt(waitpkt, DOSTRUE, 0);
-        waitpkt = NULL;
-        if (ctio)
-            disarm(ctio, &carmed);
+    if (c->waitpkt && (c->inlen > 0 || c->eof_pending)) {
+        ReplyPkt(c->waitpkt, DOSTRUE, 0);
+        c->waitpkt = NULL;
+        if (c->ctio)
+            disarm(c->ctio, &c->carmed);
     }
 }
 
 /* ---- the line editor (cooked mode) --------------------------------- */
 
-static void begin_line(void)
+static void begin_line(struct Con *c)
 {
-    if (editing)
+    if (c->editing)
         return;
-    editing = TRUE;
-    llen = lcur = 0;
-    hpos = -1;
-    term_flush();
-    x0 = term_cursor_x();
-    y0 = term_cursor_y();
+    c->editing = TRUE;
+    c->llen = c->lcur = 0;
+    c->hpos = -1;
+    term_flush(c->user);
+    c->x0 = term_cursor_x(c->user);
+    c->y0 = term_cursor_y(c->user);
 }
 
 /* Draw the line from where it starts, and put the cursor at lcur. */
-static void redraw_line(void)
+static void redraw_line(struct Con *c)
 {
-    int cols = term_cols(), end, want, got, p;
-    goto_rc(y0, x0);
-    term_write(line, llen);
-    wr("\x9b" "J");
+    int cols = term_cols(c->user), end, want, got, p;
+    goto_rc(c, c->y0, c->x0);
+    term_write(c->user, c->line, c->llen);
+    wr(c, "\x9b" "J");
     /* if the line pushed the screen up, it starts higher now */
-    end = x0 + llen;
-    want = y0 + (llen > 0 && end % cols == 0 ? end / cols - 1 : end / cols);
-    got = term_cursor_y();
+    end = c->x0 + c->llen;
+    want = c->y0 + (c->llen > 0 && end % cols == 0 ? end / cols - 1
+                                                   : end / cols);
+    got = term_cursor_y(c->user);
     if (got < want)
-        y0 -= want - got;
-    p = x0 + lcur;
-    goto_rc(y0 + p / cols, p % cols);
-    term_render_soon();
+        c->y0 -= want - got;
+    p = c->x0 + c->lcur;
+    goto_rc(c, c->y0 + p / cols, p % cols);
+    term_render_soon(c->user);
 }
 
-static void set_line(const UBYTE *s)
+static void set_line(struct Con *c, const UBYTE *s)
 {
-    llen = lcur = strlen((const char *)s);
-    if (llen > LINEMAX)
-        llen = lcur = LINEMAX;
-    CopyMem((APTR)s, line, llen);
-    redraw_line();
+    c->llen = c->lcur = strlen((const char *)s);
+    if (c->llen > LINEMAX)
+        c->llen = c->lcur = LINEMAX;
+    CopyMem((APTR)s, c->line, c->llen);
+    redraw_line(c);
 }
 
-static void remember(void)
+static void remember(struct Con *c)
 {
     UBYTE *h;
-    if (llen == 0)
+    if (c->llen == 0)
         return;
-    if (nhist && strlen((char *)hist[nhist - 1]) == (size_t)llen &&
-        !memcmp(hist[nhist - 1], line, llen))
+    if (c->nhist && strlen((char *)c->hist[c->nhist - 1]) ==
+                    (size_t)c->llen &&
+        !memcmp(c->hist[c->nhist - 1], c->line, c->llen))
         return;
-    if (nhist == HISTMAX) {
-        FreeVec(hist[0]);
-        memmove(hist, hist + 1, (HISTMAX - 1) * sizeof hist[0]);
-        nhist--;
+    if (c->nhist == HISTMAX) {
+        FreeVec(c->hist[0]);
+        memmove(c->hist, c->hist + 1, (HISTMAX - 1) * sizeof c->hist[0]);
+        c->nhist--;
     }
-    h = AllocVec(llen + 1, MEMF_ANY);
+    h = AllocVec(c->llen + 1, MEMF_ANY);
     if (h) {
-        CopyMem(line, h, llen);
-        h[llen] = 0;
-        hist[nhist++] = h;
+        CopyMem(c->line, h, c->llen);
+        h[c->llen] = 0;
+        c->hist[c->nhist++] = h;
     }
 }
 
-static void finish_line(void)
+static void finish_line(struct Con *c)
 {
-    int cols = term_cols(), p = x0 + llen;
-    goto_rc(y0 + p / cols, p % cols);
-    wr("\n");
-    remember();
-    push_input(line, llen);
-    push_input((const UBYTE *)"\n", 1);
-    editing = FALSE;
-    llen = lcur = 0;
-    term_render_soon();
-    serve();
+    int cols = term_cols(c->user), p = c->x0 + c->llen;
+    goto_rc(c, c->y0 + p / cols, p % cols);
+    wr(c, "\n");
+    remember(c);
+    push_input(c, c->line, c->llen);
+    push_input(c, (const UBYTE *)"\n", 1);
+    c->editing = FALSE;
+    c->llen = c->lcur = 0;
+    term_render_soon(c->user);
+    serve(c);
 }
 
 /* One key's bytes, cooked. */
-static void edit_key(const UBYTE *b, LONG n)
+static void edit_key(struct Con *c, const UBYTE *b, LONG n)
 {
-    UBYTE c = b[0];
-    if (c == 0x9B && n >= 2) {          /* cursor keys */
+    UBYTE k0 = b[0];
+    if (k0 == 0x9B && n >= 2) {         /* cursor keys */
         UBYTE k = b[1];
-        begin_line();
-        if (k == 'A' && nhist) {                    /* up: history */
-            hpos = hpos < 0 ? nhist - 1 : (hpos > 0 ? hpos - 1 : 0);
-            set_line(hist[hpos]);
-        } else if (k == 'B' && hpos >= 0) {         /* down */
-            if (++hpos >= nhist) {
-                hpos = -1;
-                set_line((const UBYTE *)"");
+        begin_line(c);
+        if (k == 'A' && c->nhist) {                 /* up: history */
+            c->hpos = c->hpos < 0 ? c->nhist - 1
+                    : (c->hpos > 0 ? c->hpos - 1 : 0);
+            set_line(c, c->hist[c->hpos]);
+        } else if (k == 'B' && c->hpos >= 0) {      /* down */
+            if (++c->hpos >= c->nhist) {
+                c->hpos = -1;
+                set_line(c, (const UBYTE *)"");
             } else
-                set_line(hist[hpos]);
-        } else if (k == 'C' && lcur < llen) {
-            lcur++;
-            redraw_line();
-        } else if (k == 'D' && lcur > 0) {
-            lcur--;
-            redraw_line();
+                set_line(c, c->hist[c->hpos]);
+        } else if (k == 'C' && c->lcur < c->llen) {
+            c->lcur++;
+            redraw_line(c);
+        } else if (k == 'D' && c->lcur > 0) {
+            c->lcur--;
+            redraw_line(c);
         } else if (k == ' ' && n >= 3) {            /* shift: ends */
-            lcur = b[2] == 'A' ? 0 : llen;
-            redraw_line();
+            c->lcur = b[2] == 'A' ? 0 : c->llen;
+            redraw_line(c);
         }
         return;
     }
     while (n-- > 0) {
-        c = *b++;
-        if (c == '\r' || c == '\n') {
-            begin_line();
-            finish_line();
-        } else if (c == 8) {                        /* backspace */
-            begin_line();
-            if (lcur > 0) {
-                memmove(line + lcur - 1, line + lcur, llen - lcur);
-                lcur--;
-                llen--;
-                redraw_line();
+        UBYTE ch = *b++;
+        if (ch == '\r' || ch == '\n') {
+            begin_line(c);
+            finish_line(c);
+        } else if (ch == 8) {                       /* backspace */
+            begin_line(c);
+            if (c->lcur > 0) {
+                memmove(c->line + c->lcur - 1, c->line + c->lcur,
+                        c->llen - c->lcur);
+                c->lcur--;
+                c->llen--;
+                redraw_line(c);
             }
-        } else if (c == 0x7F) {                     /* del */
-            begin_line();
-            if (lcur < llen) {
-                memmove(line + lcur, line + lcur + 1, llen - lcur - 1);
-                llen--;
-                redraw_line();
+        } else if (ch == 0x7F) {                    /* del */
+            begin_line(c);
+            if (c->lcur < c->llen) {
+                memmove(c->line + c->lcur, c->line + c->lcur + 1,
+                        c->llen - c->lcur - 1);
+                c->llen--;
+                redraw_line(c);
             }
-        } else if (c == 0x18) {                     /* ctrl-x: clear */
-            begin_line();
-            set_line((const UBYTE *)"");
-        } else if (c == 0x1C) {                     /* ctrl-\: end */
-            if (!editing || llen == 0) {
-                eof_pending = TRUE;
-                serve();
+        } else if (ch == 0x18) {                    /* ctrl-x: clear */
+            begin_line(c);
+            set_line(c, (const UBYTE *)"");
+        } else if (ch == 0x1C) {                    /* ctrl-\: end */
+            if (!c->editing || c->llen == 0) {
+                c->eof_pending = TRUE;
+                serve(c);
             }
-        } else if (c >= 0x20 && !(c >= 0x80 && c < 0xA0) &&
-                   llen < LINEMAX - 1) {
-            begin_line();
-            memmove(line + lcur + 1, line + lcur, llen - lcur);
-            line[lcur++] = c;
-            llen++;
-            if (lcur == llen) {                     /* at the end: just add */
-                term_write(&c, 1);
-                term_render_soon();
+        } else if (ch >= 0x20 && !(ch >= 0x80 && ch < 0xA0) &&
+                   c->llen < LINEMAX - 1) {
+            begin_line(c);
+            memmove(c->line + c->lcur + 1, c->line + c->lcur,
+                    c->llen - c->lcur);
+            c->line[c->lcur++] = ch;
+            c->llen++;
+            if (c->lcur == c->llen) {               /* at the end: just add */
+                term_write(c->user, &ch, 1);
+                term_render_soon(c->user);
             } else
-                redraw_line();
+                redraw_line(c);
         }
     }
 }
 
 /* ---- what CTerm calls ----------------------------------------------- */
 
-void con_keys(const UBYTE *b, LONG n)
+void con_keys(struct Con *c, const UBYTE *b, LONG n)
 {
     LONG i;
     /* Ctrl-C..F: break signals, never input */
     for (i = 0; i < n; i++)
         if (b[i] >= 3 && b[i] <= 6) {
-            if (breaktask)
-                Signal(breaktask, SIGBREAKF_CTRL_C << (b[i] - 3));
+            if (c->breaktask)
+                Signal(c->breaktask, SIGBREAKF_CTRL_C << (b[i] - 3));
             return;
         }
-    if (rawmode) {
-        push_input(b, n);
-        serve();
+    if (c->rawmode) {
+        push_input(c, b, n);
+        serve(c);
     } else
-        edit_key(b, n);
+        edit_key(c, b, n);
 }
 
-void con_reply(const UBYTE *b, LONG n)
+void con_reply(struct Con *c, const UBYTE *b, LONG n)
 {
-    push_input(b, n);
-    serve();
+    push_input(c, b, n);
+    serve(c);
 }
 
-void con_close_gadget(void)
+void con_close_gadget(struct Con *c)
 {
     /* a cooked reader (the Shell) is told the input ended; a raw one
      * gets nothing unless it asked for close reports (class 11) */
-    if (!rawmode) {
-        eof_pending = TRUE;
-        serve();
+    if (!c->rawmode) {
+        c->eof_pending = TRUE;
+        serve(c);
     }
 }
 
-BOOL con_alive(void)
+BOOL con_alive(struct Con *c)
 {
-    return child_running || opens > 0;
+    return c->child_running || c->opens > 0;
 }
 
-ULONG con_sigmask(void)
+ULONG con_sigmask(struct Con *c)
 {
-    ULONG m = 0;
-    if (conport)
-        m |= 1UL << conport->mp_SigBit;
-    if (endbit >= 0)
-        m |= 1UL << endbit;
-    if (timerport)
-        m |= 1UL << timerport->mp_SigBit;
+    ULONG m = con_timer_sig();
+    if (c->conport)
+        m |= 1UL << c->conport->mp_SigBit;
+    if (c->endbit >= 0)
+        m |= 1UL << c->endbit;
     return m;
 }
 
-void con_handle(ULONG sigs)
+void con_handle(struct Con *c, ULONG sigs)
 {
     struct Message *m;
-    if (!conport)
+    if (!c->conport)
         return;
-    if (endbit >= 0 && (sigs & (1UL << endbit)))
-        child_running = FALSE;
-    while ((m = GetMsg(conport))) {
+    if (c->endbit >= 0 && (sigs & (1UL << c->endbit))) {
+        c->child_running = FALSE;
+    }
+    while ((m = GetMsg(c->conport))) {
         struct DosPacket *p = (struct DosPacket *)m->mn_Node.ln_Name;
         struct MsgPort *from = p->dp_Port;
         switch (p->dp_Type) {
@@ -463,71 +472,71 @@ void con_handle(ULONG sigs)
             struct FileHandle *fh = BADDR(p->dp_Arg1);
             fh->fh_Port = (struct MsgPort *)DOSTRUE;    /* interactive */
             fh->fh_Args = 1;
-            opens++;
+            c->opens++;
             ReplyPkt(p, DOSTRUE, 0);
             break;
         }
         case ACTION_END:
-            if (opens > 0)
-                opens--;
+            if (c->opens > 0)
+                c->opens--;
             ReplyPkt(p, DOSTRUE, 0);
             break;
         case ACTION_WRITE: {
             LONG n = p->dp_Arg3;
             if (from)
-                breaktask = from->mp_SigTask;
+                c->breaktask = from->mp_SigTask;
             if (n > 0)
-                term_write((const UBYTE *)p->dp_Arg2, n);
+                term_write(c->user, (const UBYTE *)p->dp_Arg2, n);
             ReplyPkt(p, n > 0 ? n : 0, 0);
-            term_render_soon();
+            term_render_soon(c->user);
             break;
         }
         case ACTION_READ:
             if (from)
-                breaktask = from->mp_SigTask;
-            if (nreads < READMAX) {
-                reads[nreads++] = p;
-                serve();
-                if (nreads) {
+                c->breaktask = from->mp_SigTask;
+            if (c->nreads < READMAX) {
+                c->reads[c->nreads++] = p;
+                serve(c);
+                if (c->nreads) {
                     /* about to wait for the person: show everything */
-                    if (!rawmode)
-                        begin_line();
-                    term_flush();
+                    if (!c->rawmode)
+                        begin_line(c);
+                    term_flush(c->user);
                 }
             } else
                 ReplyPkt(p, -1, ERROR_NO_FREE_STORE);
             break;
         case ACTION_WAIT_CHAR:
-            if (inlen > 0 || eof_pending) {
+            if (c->inlen > 0 || c->eof_pending) {
                 ReplyPkt(p, DOSTRUE, 0);
             } else if (p->dp_Arg1 <= 0) {
                 /* "is a key there?" without waiting: nobody is looking at
                  * the screen yet, so it is drawn within the frame (jump
                  * scroll) - conbench's sync-line is a stream of these */
-                term_render_soon();
+                term_render_soon(c->user);
                 ReplyPkt(p, DOSFALSE, 0);
             } else {
-                term_flush();           /* it will really wait: show all */
-                if (waitpkt)
-                    ReplyPkt(waitpkt, DOSFALSE, 0);
-                waitpkt = p;
-                if (ctio) {
-                    disarm(ctio, &carmed);
-                    arm(ctio, p->dp_Arg1);
-                    carmed = TRUE;
+                term_flush(c->user);    /* it will really wait: show all */
+                if (c->waitpkt)
+                    ReplyPkt(c->waitpkt, DOSFALSE, 0);
+                c->waitpkt = p;
+                if (c->ctio) {
+                    disarm(c->ctio, &c->carmed);
+                    arm(c->ctio, p->dp_Arg1);
+                    c->carmed = TRUE;
                 }
             }
             break;
         case ACTION_SCREEN_MODE:
-            if (p->dp_Arg1 && !rawmode && editing && llen) {
+            if (p->dp_Arg1 && !c->rawmode && c->editing && c->llen) {
                 /* typed ahead, then raw: hand over what was typed */
-                push_input(line, llen);
-                llen = lcur = 0;
+                push_input(c, c->line, c->llen);
+                c->llen = c->lcur = 0;
             }
-            rawmode = p->dp_Arg1 != 0;
-            if (rawmode)
-                editing = FALSE;
-            term_flush();
+            c->rawmode = p->dp_Arg1 != 0;
+            if (c->rawmode)
+                c->editing = FALSE;
+            term_flush(c->user);
             ReplyPkt(p, DOSTRUE, 0);
             break;
         case ACTION_DISK_INFO: {
@@ -540,10 +549,20 @@ void con_handle(ULONG sigs)
             break;
         }
         case ACTION_CHANGE_SIGNAL: {
-            struct Task *old = breaktask;
-            if (p->dp_Arg2)
-                breaktask = (struct Task *)p->dp_Arg2;
-            ReplyPkt(p, DOSTRUE, (LONG)old);
+            /* arg2 is the message port to signal (a process's pr_MsgPort,
+             * seen on 3.2.3: 0x5C past the process), not a task: Signal()
+             * on a port writes into its message list. Take its task;
+             * answer with what was given before. */
+            struct Node *n = (struct Node *)p->dp_Arg2;
+            LONG old = c->breakarg;
+            if (n) {
+                if (n->ln_Type == NT_MSGPORT)
+                    c->breaktask = ((struct MsgPort *)n)->mp_SigTask;
+                else if (n->ln_Type == NT_TASK || n->ln_Type == NT_PROCESS)
+                    c->breaktask = (struct Task *)n;
+                c->breakarg = p->dp_Arg2;
+            }
+            ReplyPkt(p, DOSTRUE, old);
             break;
         }
         case ACTION_SEEK:
@@ -558,76 +577,94 @@ void con_handle(ULONG sigs)
         }
     }
     /* a WAIT_CHAR whose time is up */
-    if (carmed && CheckIO((struct IORequest *)ctio)) {
-        WaitIO((struct IORequest *)ctio);
-        carmed = FALSE;
-        if (waitpkt) {
-            ReplyPkt(waitpkt, DOSFALSE, 0);
-            waitpkt = NULL;
+    if (c->carmed && CheckIO((struct IORequest *)c->ctio)) {
+        WaitIO((struct IORequest *)c->ctio);
+        c->carmed = FALSE;
+        if (c->waitpkt) {
+            ReplyPkt(c->waitpkt, DOSFALSE, 0);
+            c->waitpkt = NULL;
         }
     }
 }
 
-BOOL con_start(const char *startup)
+struct Con *con_start(const char *startup, void *user)
 {
     struct Process *pr;
-    maintask = FindTask(NULL);
-    conport = CreateMsgPort();
-    endbit = AllocSignal(-1);
-    if (!conport || endbit < 0)
-        return FALSE;
-    infh = AllocDosObject(DOS_FILEHANDLE, NULL);
-    if (!infh)
-        return FALSE;
-    infh->fh_Type = conport;
-    infh->fh_Port = (struct MsgPort *)DOSTRUE;  /* interactive */
-    infh->fh_Args = 1;
-    opens = 1;
-    startcmd[0] = 0;
-    if (startup && startup[0]) {
-        strcpy(startcmd, "Execute ");
-        strncat(startcmd, startup, sizeof startcmd - 10);
+    struct Con *c = AllocVec(sizeof *c, MEMF_ANY | MEMF_CLEAR);
+    if (!c)
+        return NULL;
+    c->user = user;
+    c->endbit = -1;
+    c->hpos = -1;
+    c->maintask = FindTask(NULL);
+    c->conport = CreateMsgPort();
+    c->endbit = AllocSignal(-1);
+    c->infh = AllocDosObject(DOS_FILEHANDLE, NULL);
+    if (!c->conport || c->endbit < 0 || !c->infh) {
+        con_free(c);
+        return NULL;
     }
-    child_running = TRUE;
+    if (tio) {                          /* its own WaitForChar timer */
+        c->ctio = (struct timerequest *)CreateIORequest(timerport,
+                                                        sizeof *c->ctio);
+        if (c->ctio) {
+            c->ctio->tr_node.io_Device = tio->tr_node.io_Device;
+            c->ctio->tr_node.io_Unit = tio->tr_node.io_Unit;
+        }
+    }
+    c->infh->fh_Type = c->conport;
+    c->infh->fh_Port = (struct MsgPort *)DOSTRUE;   /* interactive */
+    c->infh->fh_Args = 1;
+    c->opens = 1;
+    if (startup && startup[0]) {
+        strcpy(c->startcmd, "Execute ");
+        strncat(c->startcmd, startup, sizeof c->startcmd - 10);
+    }
+    c->child_running = TRUE;
     pr = CreateNewProcTags(NP_Entry, (ULONG)child_entry,
                            NP_Name, (ULONG)"CTerm Shell",
                            NP_StackSize, 16384,
-                           NP_ConsoleTask, (ULONG)conport,
+                           NP_ConsoleTask, (ULONG)c->conport,
                            NP_WindowPtr, (ULONG)win,
+                           NP_ExitData, (ULONG)c,   /* the child's console */
                            TAG_END);
     if (!pr) {
-        child_running = FALSE;
-        FreeDosObject(DOS_FILEHANDLE, infh);
-        infh = NULL;
-        opens = 0;
-        return FALSE;
+        c->child_running = FALSE;
+        c->opens = 0;
+        con_free(c);
+        return NULL;
     }
-    return TRUE;
+    c->started = TRUE;
+    return c;
 }
 
 /* The person wants out: end the input so the Shell ends by itself. The
  * caller keeps answering packets until con_alive() is FALSE. */
-void con_stop(void)
+void con_stop(struct Con *c)
 {
-    eof_pending = TRUE;
-    if (breaktask)
-        Signal(breaktask, SIGBREAKF_CTRL_C);
-    serve();
+    c->eof_pending = TRUE;
+    if (c->breaktask)
+        Signal(c->breaktask, SIGBREAKF_CTRL_C);
+    serve(c);
 }
 
 /* Only when nothing is open on the port any more. */
-void con_free(void)
+void con_free(struct Con *c)
 {
     int i;
-    if (conport) {
-        DeleteMsgPort(conport);
-        conport = NULL;
+    if (!c)
+        return;
+    if (c->ctio) {
+        disarm(c->ctio, &c->carmed);
+        DeleteIORequest((struct IORequest *)c->ctio);
     }
-    if (endbit >= 0) {
-        FreeSignal(endbit);
-        endbit = -1;
-    }
-    for (i = 0; i < nhist; i++)
-        FreeVec(hist[i]);
-    nhist = 0;
+    if (c->infh && !c->started)
+        FreeDosObject(DOS_FILEHANDLE, c->infh);
+    if (c->conport)
+        DeleteMsgPort(c->conport);
+    if (c->endbit >= 0)
+        FreeSignal(c->endbit);
+    for (i = 0; i < c->nhist; i++)
+        FreeVec(c->hist[i]);
+    FreeVec(c);
 }
