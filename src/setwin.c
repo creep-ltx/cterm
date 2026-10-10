@@ -30,12 +30,6 @@ static void font_attr(void);
 static void letters_changed(void);
 static void where_changed(void);
 static void picture_changed(void);
-static void booklist_free(void);
-static void booklist_make(void);
-static void booklist_again(void);
-static void book_read(void);
-static void book_show(void);
-static Object *page_book(void);
 static Object *page_files(void);
 static Object *page_screen(void);
 static Object *page_text(void);
@@ -80,11 +74,6 @@ static struct List settabs;             /* the tabs' names */
 static struct TextAttr setfont;         /* what the font button shows */
 static int setpart;                     /* 0 the text, 1 the background */
 static int setpage;                     /* the tab last shown */
-static struct List booklist;            /* the phone book's names */
-static int bcur = -1;                   /* the entry shown: -1 none */
-static BookEntry *booksnap;             /* the book as it was: Cancel */
-static int nbooksnap;
-static BOOL booksnapped;                /* booksnap/nbooksnap are taken */
 static int pend_mode, pend_depth;
 static ULONG pend_id;
 static LONG pend_w, pend_h;
@@ -113,11 +102,7 @@ static STRPTR altlabels[] = { (STRPTR)"Meta for hosts (bash, emacs)",
                               (STRPTR)"Amiga characters everywhere", NULL };
 static STRPTR tablabels[] = { (STRPTR)"Screen", (STRPTR)"Text",
                               (STRPTR)"Colours", (STRPTR)"Keys",
-                              (STRPTR)"Phone book", (STRPTR)"Files", NULL };
-static STRPTR kindlabels[] = { (STRPTR)"telnet", (STRPTR)"ssh", NULL };
-static STRPTR booklettlabels[] = { (STRPTR)"CTerm's setting",
-                                   (STRPTR)"Amiga font", (STRPTR)"TrueType",
-                                   (STRPTR)"PC font (IBM VGA)", NULL };
+                              (STRPTR)"Files", NULL };
 static STRPTR themelabels[NTHEMES + 1];
 
 BOOL reaction_open(void)
@@ -351,165 +336,14 @@ static void picture_changed(void)
     set_attr(S_PIC, GETFILE_FullFile, (ULONG)bgfile);
 }
 
-/* ---- the phone book page ---- */
-
-static void booklist_free(void)
-{
-    struct Node *n;
-    if (booklist.lh_Head)
-        while ((n = RemHead(&booklist)))
-            FreeListBrowserNode(n);
-}
-
-static void booklist_make(void)
-{
-    int i;
-    NewList(&booklist);
-    for (i = 0; i < nbook; i++) {
-        struct Node *n = AllocListBrowserNode(1, LBNCA_CopyText, TRUE,
-            LBNCA_Text, (ULONG)(book[i].name[0] ? book[i].name : "?"),
-            TAG_END);
-        if (n)
-            AddTail(&booklist, n);
-    }
-}
-
-/* The list again (a name changed, an entry came or went). */
-static void booklist_again(void)
-{
-    set_attr(S_BLIST, LISTBROWSER_Labels, ~0UL);   /* let go of it */
-    booklist_free();
-    booklist_make();
-    set_attr(S_BLIST, LISTBROWSER_Labels, (ULONG)&booklist);
-    set_attr(S_BLIST, LISTBROWSER_Selected, (ULONG)bcur);
-}
-
-/* What is typed in the fields, into the entry shown. */
-static void book_read(void)
-{
-    BookEntry *e;
-    const char *t;
-    if (bcur < 0 || bcur >= nbook || !setobj)
-        return;
-    e = &book[bcur];
-#define TXT(id, f) if ((t = (const char *)get_attr(id, STRINGA_TextVal))) { \
-        strncpy(f, t, sizeof f - 1); f[sizeof f - 1] = 0; }
-    TXT(S_BNAME, e->name);
-    TXT(S_BHOST, e->host);
-    TXT(S_BUSER, e->user);
-    TXT(S_BPASS, e->pass);
-#undef TXT
-    if ((t = (const char *)get_attr(S_BDOWN, GETFILE_Drawer))) {
-        strncpy(e->down, t, sizeof e->down - 1);
-        e->down[sizeof e->down - 1] = 0;
-    }
-    if ((t = (const char *)get_attr(S_BUP, GETFILE_Drawer))) {
-        strncpy(e->up, t, sizeof e->up - 1);
-        e->up[sizeof e->up - 1] = 0;
-    }
-    e->port = get_attr(S_BPORT, INTEGER_Number);
-    e->ssh = get_attr(S_BKIND, CHOOSER_Selected);
-    e->letters = get_attr(S_BLET, CHOOSER_Selected);
-    e->chars = get_attr(S_BCHR, CHOOSER_Selected);
-    book_tidy(e);
-}
-
-/* The entry shown, into the fields (none: empty and asleep). */
-static void book_show(void)
-{
-    static BookEntry none;
-    const BookEntry *e = bcur >= 0 && bcur < nbook ? &book[bcur] : &none;
-    static const int ids[] = { S_BNAME, S_BHOST, S_BPORT, S_BKIND, S_BUSER,
-        S_BPASS, S_BLET, S_BCHR, S_BDOWN, S_BUP, S_BDEL };
-    int i;
-    set_attr(S_BNAME, STRINGA_TextVal, (ULONG)e->name);
-    set_attr(S_BHOST, STRINGA_TextVal, (ULONG)e->host);
-    set_attr(S_BPORT, INTEGER_Number, e->port);
-    set_attr(S_BKIND, CHOOSER_Selected, e->ssh);
-    set_attr(S_BUSER, STRINGA_TextVal, (ULONG)e->user);
-    set_attr(S_BPASS, STRINGA_TextVal, (ULONG)e->pass);
-    set_attr(S_BLET, CHOOSER_Selected, e->letters);
-    set_attr(S_BCHR, CHOOSER_Selected, e->chars);
-    set_attr(S_BDOWN, GETFILE_Drawer, (ULONG)e->down);
-    set_attr(S_BUP, GETFILE_Drawer, (ULONG)e->up);
-    for (i = 0; i < (int)(sizeof ids / sizeof ids[0]); i++)
-        set_attr(ids[i], GA_Disabled, e == &none);
-}
-
-static Object *page_book(void)
-{
-    Object *h, *o, *top, *c1, *c2, *p = r_page(), *g;
-    const BookEntry *e = bcur >= 0 && bcur < nbook ? &book[bcur] : NULL;
-    static BookEntry none;
-    if (!e)
-        e = &none;
-    /* the list on the left, the entry on the right: short enough for a
-     * 256-line screen */
-    top = HLayoutObject, End;
-    g = r_group("Places");
-    booklist_make();
-    o = sg[S_BLIST] = ListBrowserObject, GA_ID, S_BLIST, GA_RelVerify, TRUE,
-        LISTBROWSER_Labels, (ULONG)&booklist, LISTBROWSER_ShowSelected, TRUE,
-        LISTBROWSER_Selected, (ULONG)bcur, End;
-    if (o)
-        SetAttrs(g, LAYOUT_AddChild, (ULONG)o, CHILD_MinWidth, 110,
-                 CHILD_MinHeight, 48, TAG_END);
-    h = HLayoutObject, LAYOUT_EvenSize, TRUE, End;
-    r_add(h, r_button(S_BNEW, "New"), NULL);
-    r_add(h, r_button(S_BDEL, "Delete"), NULL);
-    if (h)
-        SetAttrs(g, LAYOUT_AddChild, (ULONG)h, CHILD_WeightedHeight, 0,
-                 TAG_END);
-    if (top && g)
-        SetAttrs(top, LAYOUT_AddChild, (ULONG)g, CHILD_WeightedWidth, 35,
-                 TAG_END);
-    g = r_group("The place");
-    c1 = VLayoutObject, End;
-    c2 = VLayoutObject, End;
-    r_add(c1, r_string(S_BNAME, e->name, sizeof e->name - 1, FALSE), "Name");
-    r_add(c1, r_string(S_BHOST, e->host, sizeof e->host - 1, FALSE),
-          "Address");
-    r_add(c1, sg[S_BPORT] = IntegerObject, GA_ID, S_BPORT, GA_RelVerify,
-          TRUE, GA_TabCycle, TRUE, INTEGER_Number, e->port, INTEGER_Minimum,
-          0, INTEGER_Maximum, 65535, INTEGER_Arrows, FALSE, End, "Port");
-    r_add(c1, r_chooser(S_BKIND, kindlabels, e->ssh), "Connection");
-    r_add(c2, r_string(S_BUSER, e->user, sizeof e->user - 1, FALSE),
-          "User");
-    r_add(c2, r_string(S_BPASS, e->pass, sizeof e->pass - 1, TRUE),
-          "Password");
-    r_add(c2, r_chooser(S_BLET, booklettlabels, e->letters), "Letters");
-    r_add(c2, r_chooser(S_BCHR, charlabels, e->chars), "Characters");
-    h = HLayoutObject, End;
-    r_add(h, c1, NULL);
-    r_add(h, c2, NULL);
-    r_add(g, h, NULL);
-    if (top && g)
-        SetAttrs(top, LAYOUT_AddChild, (ULONG)g, CHILD_WeightedWidth, 65,
-                 TAG_END);
-    r_put(p, top);
-    g = r_group("This place's files (empty: the Files tab's)");
-    h = HLayoutObject, End;
-    r_add(h, r_drawer(S_BDOWN, e->down, "Downloads go to"), "Downloads");
-    r_add(h, r_drawer(S_BUP, e->up, "Uploads come from"), "Uploads");
-    r_add(g, h, NULL);
-    r_put(p, g);
-    if (e == &none) {
-        static const int ids[] = { S_BNAME, S_BHOST, S_BPORT, S_BKIND,
-            S_BUSER, S_BPASS, S_BLET, S_BCHR, S_BDOWN, S_BUP, S_BDEL };
-        int i;
-        for (i = 0; i < (int)(sizeof ids / sizeof ids[0]); i++)
-            r_disable(ids[i], TRUE);
-    }
-    return r_wrap(p);
-}
-
 static Object *page_files(void)
 {
     Object *p = r_page(), *g = r_group("Files to and from hosts");
     r_add(g, r_drawer(S_DLDIR, dldir, "Downloads go to"), "Downloads");
     r_add(g, r_drawer(S_ULDIR, uldir, "Uploads come from"), "Uploads");
     r_put(p, g);
-    g = r_group("A phone book entry's own drawers come first");
+    g = r_group("A phone book entry's own drawers come first "
+                "(Project/Phone book...)");
     r_put(p, g);
     return r_wrap(p);
 }
@@ -528,11 +362,6 @@ static void close_settings_(void)
     if (settabs.lh_Head)
         while ((n = RemHead(&settabs)))
             FreeClickTabNode(n);
-    booklist_free();
-    if (booksnap)                       /* closed without Cancel: not needed */
-        FreeVec(booksnap);
-    booksnap = NULL;
-    booksnapped = FALSE;
 }
 
 static Object *page_screen(void)
@@ -694,18 +523,6 @@ static void open_settings_(void)
     strcpy(snap.passkey, passkey);
     strcpy(snap.dldir, dldir);
     strcpy(snap.uldir, uldir);
-    if (booksnap)
-        FreeVec(booksnap);
-    /* no book yet is a book of none: Cancel takes back what New added */
-    booksnap = nbook ? AllocVec(nbook * sizeof *book, MEMF_ANY) : NULL;
-    nbooksnap = booksnap ? nbook : 0;
-    booksnapped = booksnap || !nbook;
-    if (booksnap)
-        memcpy(booksnap, book, nbook * sizeof *book);
-    if (bcur >= nbook)
-        bcur = nbook - 1;
-    if (bcur < 0 && nbook)
-        bcur = 0;
     pend_mode = scrmode;
     pend_depth = owndepth;
     pend_id = ownmode;
@@ -723,8 +540,7 @@ static void open_settings_(void)
     }
     pages = PageObject, PAGE_Add, (ULONG)page_screen(),
         PAGE_Add, (ULONG)page_text(), PAGE_Add, (ULONG)page_colours(),
-        PAGE_Add, (ULONG)page_keys(), PAGE_Add, (ULONG)page_book(),
-        PAGE_Add, (ULONG)page_files(), PAGE_Current, setpage, End;
+        PAGE_Add, (ULONG)page_keys(), PAGE_Add, (ULONG)page_files(), PAGE_Current, setpage, End;
     buttons = HLayoutObject, LAYOUT_EvenSize, TRUE, End;
     r_add(buttons, r_button(S_SAVE, "_Save"), NULL);
     r_add(buttons, r_button(S_USE, "_Use"), NULL);
@@ -735,8 +551,8 @@ static void open_settings_(void)
         (ULONG)&settabs, CLICKTAB_Current, setpage,
         CLICKTAB_PageGroup, (ULONG)pages, End;
     if (root && sg[S_TABS]) {
-        /* wide enough for every tab's name and the phone book's two
-         * columns (the pages don't all say how wide they need) */
+        /* wide enough for every tab's name (the pages don't all say
+         * how wide they need) */
         int w = 40;
         for (i = 0; tablabels[i]; i++)
             w += TextLength(&scr->RastPort, tablabels[i],
@@ -791,11 +607,7 @@ static void finish_settings(int how)
 static void finish_settings_(int how)
 {
     const char *t;
-    BookEntry *bs = booksnap;           /* taken before close frees it */
-    int nbs = nbooksnap;
-    BOOL bsok = booksnapped, go = TRUE;
-    booksnap = NULL;
-    book_read();                        /* what is typed, before it goes */
+    BOOL go = TRUE;
     if (how != 3) {
         if ((t = (const char *)get_attr(S_KUSER, STRINGA_TextVal)))
             userkey[0] = toupper((UBYTE)t[0]);
@@ -811,13 +623,6 @@ static void finish_settings_(int how)
         }
     }
     close_settings();
-    if (how == 3 && bsok && nbs <= book_room()) {   /* the book as it was */
-        if (nbs)
-            memcpy(book, bs, nbs * sizeof *book);
-        nbook = nbs;
-    }
-    if (bs)
-        FreeVec(bs);
     if (how == 3) {
         BOOL letters = snap.usett != usett || snap.ttsize != ttsize ||
                        strcmp(snap.ttfile, ttfile) ||
@@ -884,7 +689,6 @@ static void finish_settings_(int how)
     envonly = used_only;
     save_prefs();
     envonly = FALSE;
-    book_save();                        /* the book is kept either way */
     remake_menus();                     /* the login keys */
 }
 
@@ -1077,46 +881,7 @@ static int settings_gadget(int id)
             redraw_all();
         }
         break;
-    case S_BLIST:
-        v = get_attr(S_BLIST, LISTBROWSER_Selected);
-        if ((int)v != bcur) {
-            book_read();
-            bcur = (LONG)v < nbook ? (int)(LONG)v : -1;
-            booklist_again();
-            book_show();
-        }
-        break;
-    case S_BNEW:
-        book_read();
-        if (book_need()) {
-            book_blank(&book[nbook], "New place");
-            bcur = nbook++;
-            booklist_again();
-            book_show();
-            ActivateLayoutGadget((struct Gadget *)setlayout, setwin, NULL,
-                                 (ULONG)sg[S_BNAME]);
-        }
-        break;
-    case S_BDEL:
-        if (bcur >= 0 && bcur < nbook) {
-            memmove(&book[bcur], &book[bcur + 1],
-                    (nbook - bcur - 1) * sizeof book[0]);
-            nbook--;
-            if (bcur >= nbook)
-                bcur = nbook - 1;
-            booklist_again();
-            book_show();
-        }
-        break;
-    case S_BNAME:
-        book_read();
-        booklist_again();               /* its name in the list */
-        break;
-    case S_BHOST:
-        book_read();
-        book_show();                    /* a URL taken apart */
-        break;
-    case S_BDOWN: case S_BUP: case S_DLDIR: case S_ULDIR:
+    case S_DLDIR: case S_ULDIR:
         DoMethod(sg[id], GFILE_REQUEST, (ULONG)setwin);
         break;
     case S_SAVE: return keys_clash() ? 0 : 2;

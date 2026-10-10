@@ -44,7 +44,11 @@ in the Amiga Shell `CSI 1..6 SP q` sets the cursor's shape as on xterm
 
 ## The phone book
 
-Settings, Phone book tab: the places you call, each with
+Project/Phone book... (Right Amiga+B) opens the phone book, a window of
+its own: the places on the left (New, Copy, Delete), the one chosen on
+the right. What you type counts at once and is saved when the window
+closes. Call (or a double-click on a place) calls it in a new tab and
+closes the book. Each place has
 
 - a name, the address (a host name, an IP number, or a `telnet://` or
   `ssh://user@host:port` link, which is taken apart) and the port;
@@ -57,8 +61,8 @@ Settings, Phone book tab: the places you call, each with
   font) and the characters (UTF-8, Latin-1, PC BBS);
 - its own download and upload drawers (empty: the Files tab's).
 
-Choose a place in the Call window and Call: it opens in a new tab dressed
-the way the entry says (ssh in a CTermSSH window). `CTerm BOOK "name"`
+A place opens in a new tab dressed the way the entry says (the Call
+window lists the places too) (ssh in a CTermSSH window). `CTerm BOOK "name"`
 calls one from the Shell. The book is kept in `ENVARC:CTerm/phonebook`
 as plain text, passwords too, as the BBS dialers of old did.
 
@@ -153,7 +157,7 @@ as they came, colour codes and all, so a BBS screen plays back from it.
 ## Settings
 
 Settings/Settings... (Right Amiga+S) opens one window for everything,
-in six tabs (it is built with OS 3.2's own window classes, so it looks
+in five tabs (it is built with OS 3.2's own window classes, so it looks
 like the system's settings programs):
 
 - **Screen:** a Workbench window or CTerm's own screen (any screen mode
@@ -168,7 +172,6 @@ like the system's settings programs):
 - **Keys:** what the Alt key does (Meta for programs on other
   computers, or the Amiga's own Alt characters), and the letters for
   sending the phone book's user name and password.
-- **Phone book:** see above.
 - **Files:** where downloads go and where the upload requester opens.
 - **Picture** (on the Colours tab): a picture behind the text (any format the Amiga's
   datatypes read: PNG, JPEG, IFF...), and how much of it shows through

@@ -221,14 +221,13 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SCR_DEEP, M_UTF8, M_ABOUT, M_TTFONT, M_BIGGER, M_SMALLER, M_SPEED,
        M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
        M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS, M_YRECV, M_XRECV, M_YSEND,
-       M_XSEND, M_HSEND, M_XWIN };
+       M_XSEND, M_HSEND, M_XWIN, M_BOOK };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT, S_ALT, S_THEME, S_PART,
        S_R, S_G, S_B, S_RESET, S_PIC, S_NOPIC, S_SEE, S_KUSER, S_KPASS,
-       S_BLIST, S_BNEW, S_BDEL, S_BNAME, S_BHOST, S_BPORT, S_BKIND, S_BUSER,
-       S_BPASS, S_BLET, S_BCHR, S_BDOWN, S_BUP, S_DLDIR, S_ULDIR,
+       S_DLDIR, S_ULDIR,
        S_SAVE, S_USE, S_CANCEL, S_N };
 
 /* ---- shared state ---- */
@@ -407,6 +406,11 @@ void mouse_cell(int mx, int my, int *r, int *c);
 void own_path(char *buf, int max, const char *sibling);
 void tab_from_book(const BookEntry *e);
 void call_book(int i, BOOL newtab);
+/* bookwin.c: the phone book's own window */
+void bookwin_open(void);
+void bookwin_events(void);
+void bookwin_close(void);               /* the book saved */
+ULONG bookwin_sigmask(void);
 void send_login(BOOL pass);
 void call_dialog(void);
 void reaction_close(void);

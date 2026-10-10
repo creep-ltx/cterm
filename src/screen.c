@@ -14,6 +14,7 @@ static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"New Shell tab", (STRPTR)"T", 0, 0, (APTR)M_NEWTAB },
     {  NM_ITEM, (STRPTR)"Call...", (STRPTR)"K", 0, 0, (APTR)M_CALL },
+    {  NM_ITEM, (STRPTR)"Phone book...", (STRPTR)"B", 0, 0, (APTR)M_BOOK },
     {  NM_ITEM, (STRPTR)"Close tab", (STRPTR)"W", 0, 0, (APTR)M_CLOSETAB },
     {  NM_ITEM, (STRPTR)"Start log...", (STRPTR)"L", 0, 0, (APTR)M_LOG },
     {  NM_ITEM, (STRPTR)"Stop log", 0, 0, 0, (APTR)M_LOGSTOP },
@@ -352,6 +353,7 @@ void switch_display(void)
     if (setwin)
         close_settings();               /* its screen may be going */
     xwin_shut();
+    bookwin_close();
     BOOL keep = want_mode == SCR_OWN && scrmode == SCR_OWN &&
                 want_depth == owndepth;
     want_switch = FALSE;
@@ -390,6 +392,7 @@ BOOL menu_pick(ULONG id)
     case M_SMALLER: tt_size(-2); break;
     case M_SPEED: speed_test(); break;
     case M_CALL: call_dialog(); break;
+    case M_BOOK: bookwin_open(); break;
     case M_SETTINGS: open_settings(); break;
     case M_NEWTAB: tab_new_shell(); break;
     case M_CLOSETAB: tab_close_current(); break;

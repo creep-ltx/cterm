@@ -76,7 +76,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-static const char version[] = "$VER: CTerm 0.3b6 (10.10.2026)";
+static const char version[] = "$VER: CTerm 0.3b7 (10.10.2026)";
 
 struct Library *SocketBase;
 struct Library *KeymapBase;
@@ -930,7 +930,7 @@ BOOL loop_round(LONG xfd, LONG ms)
     ULONG winsig = 1UL << win->UserPort->mp_SigBit;
     ULONG setsig = setwin ? 1UL << setwin->UserPort->mp_SigBit : 0;
     ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
-                 xwin_sigmask();
+                 xwin_sigmask() | bookwin_sigmask();
     BOOL hostdata = FALSE, ready = FALSE;
     ULONG consigs = 0;
     int i;
@@ -998,6 +998,8 @@ BOOL loop_round(LONG xfd, LONG ms)
         settings_events();
     if (sigs & xwin_sigmask())
         xwin_events();
+    if (sigs & bookwin_sigmask())
+        bookwin_events();
     T = shown;
     if ((sigs & winsig) && !window_events() && !quitting)
         quit_all();
@@ -1331,6 +1333,7 @@ static int cterm_main(int argc, char **argv)
     }
     close_settings();
     xwin_shut();                        /* before its classes and screen go */
+    bookwin_close();
     reaction_close();
     clip_close();
     close_display(FALSE);
