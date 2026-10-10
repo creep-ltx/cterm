@@ -7,6 +7,7 @@ static void make_menus(void);
 static void make_menus(void);
 static BOOL open_own_screen(void);
 static void close_own_screen(void);
+static void clear_leftover(void);
 static void ask_switch(int mode, int depth, BOOL full, BOOL bar);
 
 static struct NewMenu newmenu[] = {
@@ -120,7 +121,7 @@ static BOOL open_own_screen(void)
 {
     struct Screen *wb = LockPubScreen(NULL);
     ULONG id = INVALID_ID;
-    int depth = owndepth;
+    int depth = owndepth, tries;
     UWORD pens[] = { (UWORD)~0 };
     if (wb) {
         id = GetVPModeID(&wb->ViewPort);
@@ -142,26 +143,84 @@ static BOOL open_own_screen(void)
         if (best != INVALID_ID)
             id = best;
     }
-    ownscr = OpenScreenTags(NULL,
-        SA_DisplayID, id, SA_Depth, depth,
-        SA_Width, ownmode != INVALID_ID && ownw > 0 ? ownw : STDSCREENWIDTH,
-        SA_Height, ownmode != INVALID_ID && ownh > 0 ? ownh : STDSCREENHEIGHT,
-        SA_Title, (ULONG)"CTerm", SA_PubName, (ULONG)"CTERM",
-        SA_Type, PUBLICSCREEN, SA_Pens, (ULONG)pens, SA_SysFont, 1,
-        SA_SharePens, TRUE, SA_Interleaved, TRUE,
-        SA_ShowTitle, !fullscreen, TAG_END);
+    for (tries = 0; tries < 2 && !ownscr; tries++) {
+        ULONG err = 0;
+        ownscr = OpenScreenTags(NULL,
+            SA_DisplayID, id, SA_Depth, depth,
+            SA_Width, ownmode != INVALID_ID && ownw > 0 ? ownw
+                                                        : STDSCREENWIDTH,
+            SA_Height, ownmode != INVALID_ID && ownh > 0 ? ownh
+                                                         : STDSCREENHEIGHT,
+            SA_Title, (ULONG)"CTerm", SA_PubName, (ULONG)"CTERM",
+            SA_Type, PUBLICSCREEN, SA_Pens, (ULONG)pens, SA_SysFont, 1,
+            SA_SharePens, TRUE, SA_Interleaved, TRUE,
+            SA_ShowTitle, !fullscreen, SA_ErrorCode, (ULONG)&err, TAG_END);
+        if (!ownscr && err == OSERR_PUBNOTUNIQUE && !tries)
+            clear_leftover();           /* then once more */
+        else if (!ownscr)
+            break;
+    }
     if (!ownscr)
         return FALSE;
     PubScreenStatus(ownscr, 0);
     return TRUE;
 }
 
+/* The own screen closes only without visitors (other programs' windows
+ * on "CTERM", or their locks on it): Intuition will not make it private
+ * while there are any (bit 0 clear). They get two seconds to go, then
+ * the person is asked, on this screen, to close them. "Leave it open"
+ * keeps it as it is: it is used again if CTerm goes back to its own
+ * screen, and after Quit it stays until a later CTerm clears it up. */
 static void close_own_screen(void)
 {
-    if (ownscr && (PubScreenStatus(ownscr, PSNF_PRIVATE) & PSNF_PRIVATE)) {
-        CloseScreen(ownscr);
-        ownscr = NULL;
+    static struct EasyStruct es = {
+        sizeof(struct EasyStruct), 0, (UBYTE *)"CTerm",
+        (UBYTE *)"Other programs still have windows on CTerm's screen.\n"
+                 "Close them, then choose Retry.",
+        (UBYTE *)"Retry|Leave it open"
+    };
+    int i;
+    while (ownscr) {
+        for (i = 0; i < 20; i++) {
+            if (PubScreenStatus(ownscr, PSNF_PRIVATE) & PSNF_PRIVATE) {
+                CloseScreen(ownscr);
+                ownscr = NULL;
+                return;
+            }
+            Delay(5);
+        }
+        {
+            /* a window of our own, out of the way, for the requester to
+             * appear on this screen (ours: not a visitor) */
+            struct Window *w = OpenWindowTags(NULL, WA_CustomScreen,
+                (ULONG)ownscr, WA_Left, 0, WA_Top, 0, WA_Width, 1,
+                WA_Height, 1, WA_Borderless, TRUE, WA_Backdrop, TRUE,
+                TAG_END);
+            i = EasyRequestArgs(w, &es, NULL, NULL);
+            if (w)
+                CloseWindow(w);
+        }
+        if (i == 0)
+            return;                     /* left open */
     }
+}
+
+/* A "CTERM" screen left by an earlier CTerm (its visitors kept it open
+ * past Quit): with no windows left it can go, so ours can open. */
+static void clear_leftover(void)
+{
+    struct List *l = LockPubScreenList();
+    struct PubScreenNode *n, *found = NULL;
+    for (n = (struct PubScreenNode *)l->lh_Head; n->psn_Node.ln_Succ;
+         n = (struct PubScreenNode *)n->psn_Node.ln_Succ)
+        if (n->psn_Node.ln_Name && !strcmp(n->psn_Node.ln_Name, "CTERM") &&
+            !n->psn_Screen->FirstWindow)
+            found = n;
+    UnlockPubScreenList();
+    if (found && (PubScreenStatus(found->psn_Screen, PSNF_PRIVATE) &
+                  PSNF_PRIVATE))
+        CloseScreen(found->psn_Screen);
 }
 
 /* ======================================================================
