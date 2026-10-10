@@ -269,3 +269,10 @@ A1200 on 2026-10-09:
 - RGB pens;
 - the settings window with ASL screen mode and font requesters;
 - prefs in ENV/ENVARC.
+
+**Open, 2026-10-10 night:** the user saw one yellow (recoverable) guru on
+an FS-UAE A1200 030/50 (AGA), switching by the menu from own screen 16
+colours + full screen + scroll bar to "Own screen, like Workbench" -
+maybe after running CTermTour. Number not noted. Not reproduced in three
+runs of the same menu steps (wasabid's Alert() hook saw nothing). If it
+comes back: note the number, and whether the tour ran first.
