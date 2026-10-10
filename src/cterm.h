@@ -208,15 +208,11 @@ struct Tab {
     LONG t_plen;
     struct Xfer *t_xfer;                /* a transfer in it, or NULL */
     BOOL t_serial;                      /* a serial line, not TCP */
-    SerLine t_line;                     /* its line */
-    char t_phone[48];                   /* a modem dials it (empty: the
-                                           line is the connection) */
-    char t_init[64], t_dialpre[24];     /* its own init, dial prefix */
-    struct Ser *t_ser;                  /* its device, open */
+    SerTab t_st;                        /* its line, number, device */
 };
 
 /* The tab has its host or line: something to send to. */
-#define linked    (sock >= 0 || T->t_ser != NULL)
+#define linked    (sock >= 0 || T->t_st.ser != NULL)
 
 /* Themes: the text and background, the 16 ANSI colours, and what the
  * Amiga's pens 2-7 mean in the local Shell (Ed and friends use them). */
@@ -343,6 +339,7 @@ void draw_tabbar(void);
 BOOL xfer_click(int x, int y);
 void transfer_menu(int what);
 void transfer_free(void);
+APTR mod_entry(BPTR seg, ULONG head, ULONG version, BOOL *found);
 void transfer_tab_gone(struct Tab *t);   /* its Hydra queue goes */
 void deep_call(void (*fn)(void));
 __attribute__((noinline)) __stdargs APTR RNewObject(struct IClass *c, CONST_STRPTR id, ULONG tag1, ...);

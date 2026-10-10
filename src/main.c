@@ -13,7 +13,8 @@
  *   screen.c   screens, windows and menus
  *   keys.c     the keyboard, and the mouse for programs on hosts
  *   net.c      telnet, calling out, the Call window, phone book calls
- *   serial.c   serial lines: a null modem, a modem's dial-up
+ *   serial.c   serial lines: the settings and tabs; the line's own code
+ *              is sermod.c, a file loaded when a line opens
  *   serwin.c   a serial line's settings, a window of their own
  *   ssh.c      ssh (libssh2 on AmiSSL), in CTermSSH only
  *   clip.c     copy and paste, and the log
@@ -78,7 +79,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-static const char version[] = "$VER: CTerm 0.3b8 (10.10.2026)";
+static const char version[] = "$VER: CTerm 0.3b9 (11.10.2026)";
 
 struct Library *SocketBase;
 struct Library *KeymapBase;
@@ -857,7 +858,7 @@ static void run(void)
             }
         }
     } else if (dialhost[0]) {
-        say(T->t_serial && !T->t_phone[0] ? "\x1b[2m[opening "
+        say(T->t_serial && !T->t_st.phone[0] ? "\x1b[2m[opening "
                                            : "\x1b[2m[calling ");
         say(dialhost);
         say("... Esc gives up]\x1b[0m\r\n");
@@ -1035,7 +1036,7 @@ BOOL loop_round(LONG xfd, LONG ms)
             if (!con_alive(T->con))
                 T->ended = TRUE;    /* the Shell ended */
         }
-        if (T->t_ser && !T->t_xfer && serial_due() &&
+        if (T->t_st.ser && !T->t_xfer && serial_due() &&
             (hostbuf || (hostbuf = AllocVec(16384, MEMF_ANY)))) {
             serial_input(hostbuf, 16384);
             if (T == shown)

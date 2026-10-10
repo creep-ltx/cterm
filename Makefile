@@ -18,7 +18,7 @@ SSHINC = -I$(TP)/amiga -I$(TP)/AmiSSL/Developer/include -I$(TP)/libssh2-1.11.1/i
 SSHLIB = $(TP)/lib/libssh2.a -L$(TP)/AmiSSL/Developer/lib/AmigaOS3 -lamisslstubs -lm
 
 SRC = src/main.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c src/bookwin.c src/serial.c src/serwin.c
-HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h src/serial.h
+HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h src/serial.h src/sermod.h
 
 # CTerm: everything but ssh (small enough for a stock A1200)
 # -flto: the parts (split into files) inlined across files again - the
@@ -55,7 +55,7 @@ $(TP)/lib/libssh2.a:
 # The transfer protocols: files of their own, loaded when a transfer starts
 # (src/xfermod.h). No C start-up: modstart.c is their way in.
 MODFLAGS = -O2 -m68020 -noixemul -nostartfiles -fomit-frame-pointer -Wno-pointer-sign
-protocols: Protocols/Zmodem Protocols/XYmodem Protocols/Hydra
+protocols: Protocols/Zmodem Protocols/XYmodem Protocols/Hydra Protocols/Serial
 Protocols/Zmodem: src/modstart.c src/zmodem.c src/xfer.h src/xfermod.h
 	mkdir -p Protocols
 	$(CC) $(MODFLAGS) -Wall -DMOD_ZMODEM src/modstart.c src/zmodem.c -o $@
@@ -65,6 +65,10 @@ Protocols/XYmodem: src/modstart.c src/xymodem.c src/xfer.h src/xfermod.h
 Protocols/Hydra: src/modstart.c src/hydraenv.c src/hydra.c src/hydra.h src/hydraenv.h src/xfer.h src/xfermod.h
 	mkdir -p Protocols
 	$(CC) $(MODFLAGS) -w -DMOD_HYDRA src/modstart.c src/hydraenv.c src/hydra.c -o $@
+# The serial line's code (sermod.h): loaded when a serial tab opens its line
+Protocols/Serial: src/sermod.c src/sermod.h src/serial.h
+	mkdir -p Protocols
+	$(CC) $(MODFLAGS) -Wall src/sermod.c -o $@
 
 deploy: CTerm CTermSSH CTermTour protocols
 	wasabi mkdir Work:Utils/CTerm 2>/dev/null || true
@@ -75,6 +79,7 @@ deploy: CTerm CTermSSH CTermTour protocols
 	wasabi put Protocols/Zmodem Work:Utils/CTerm/Protocols/Zmodem
 	wasabi put Protocols/XYmodem Work:Utils/CTerm/Protocols/XYmodem
 	wasabi put Protocols/Hydra Work:Utils/CTerm/Protocols/Hydra
+	wasabi put Protocols/Serial Work:Utils/CTerm/Protocols/Serial
 	wasabi mkdir Work:Utils/CTerm/Fonts 2>/dev/null || true
 	wasabi put fonts/PxPlus_IBM_VGA_8x16.ttf Work:Utils/CTerm/Fonts/PxPlus_IBM_VGA_8x16.ttf
 	wasabi put fonts/LICENSE.txt Work:Utils/CTerm/Fonts/LICENSE.txt

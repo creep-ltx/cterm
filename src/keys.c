@@ -13,7 +13,7 @@ static BOOL redial_key(const char *b)
     if (local || !dialhost[0] || linked)
         return FALSE;
     if (b[0] == '\r') {
-        say(T->t_serial && !T->t_phone[0] ? "\x1b[2m[opening "
+        say(T->t_serial && !T->t_st.phone[0] ? "\x1b[2m[opening "
                                            : "\x1b[2m[calling ");
         say(dialhost);
         say("... Esc gives up]\x1b[0m\r\n");

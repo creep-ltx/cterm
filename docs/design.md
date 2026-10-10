@@ -23,7 +23,8 @@ VT100/xterm emulation. Decided 2026-10-09.
 | Display: window/screen/full screen, scroll bar, fonts, pens, drawing | `src/display.c` | Yes |
 | Keys: raw keys to xterm sequences | `src/keys.c` | Yes |
 | Connection: telnet over TCP (listen for the PC relay; later dial out) | `src/net.c` | Yes |
-| Serial lines: null modem, a modem's dial-up, answering | `src/serial.c`, `src/serial.h` | Yes |
+| Serial lines: the settings, the tabs (CTerm's side) | `src/serial.c`, `src/serial.h` | Yes |
+| The line's code, loaded on demand (`Protocols/Serial`): the device, dialling, the modem's words | `src/sermod.c`, `src/sermod.h` | Yes |
 | A serial line's settings window (phone book, Settings) | `src/serwin.c` | Yes |
 | Main loop, settings, menus | `src/main.c` | Yes |
 | PC relay: runs a program in a pty, connects to the Amiga | `pc/cterm-relay.py` | PC |
@@ -193,9 +194,37 @@ In the order the user and I agreed (2026-10-10):
     untested - serial.device returned such writes at once in FS-UAE;
   - Ymodem/Xmodem over serial not run (same XferIO path as Zmodem);
   - SERF_RAD_BOOGIE for 57600+ not used (unverified on hardware);
-  - the serial code is ~25 KB of CTerm (serial.c 9 KB at -Os, serwin.c
-    3 KB, the Modem tab and the book's fields); a protocol-style module
-    loaded on demand would save ~12 KB if it matters.
+  - **done 2026-10-11 (0.3b9): the line's code loaded on demand.** The
+    device's reading and writing, dialling, the modem's words and hanging
+    up are `src/sermod.c`, built as `Protocols/Serial` (10,140 bytes, no C
+    start-up, as the protocols); CTerm keeps the glue in serial.c (the
+    settings, the phone book's fields, the tabs, the menu) and serwin.c.
+    CTerm 227,812 -> 220,024 bytes (-7.8 KB; the file itself is bigger
+    than what left CTerm: its own string calls, its own copy of the entry
+    and LTO no longer inlining across). The interface is `src/sermod.h`:
+    SerEnv (CTerm's calls: words into the tab, waits serving the window
+    and the Shells, transfers, the clock) and SerMod (call, close, take,
+    write, poll...); each tab's SerTab (its line, number, init, the open
+    device) is all the file sees of a tab. Loaded by serial_call(),
+    unloaded when no line is open and none of its code is on the stack
+    (a counter around every call into it: its waits serve the window and
+    the Shells, so a close from in there must not pull the code away -
+    serial_poll unloads later). A write CTS keeps for ever (the "stuck"
+    line) keeps the file loaded: the device still holds a request. A
+    missing file: "[serial support missing: PROGDIR:Protocols/Serial not
+    found]" in the tab, Return tries again. **Why Protocols/ and not a new
+    Parts/ drawer:** it is the drawer people already keep beside CTerm
+    (the deploy, the README); one drawer of loaded-on-demand files is one
+    thing to keep, and the serial line is the connection's protocol much
+    as telnet is. The header's own mark ("CTSL") and version keep the
+    two kinds apart: the transfer loader never runs it, and the other
+    way round. Tested in FS-UAE (verified 2026-10-11, fakemodem.py):
+    dial, CONNECT, Zmodem down 2 files 361 KB md5-identical, the board's
+    hang-up (NO CARRIER, Return dialled again: the file loaded again),
+    +++/ATH0 on closing, BUSY with 2 redials, the file renamed away (the
+    message, no crash), null modem both ways (echo). serwin.c (3 KB, the
+    line's settings window) stays: it is opened from Settings and the
+    phone book, not with a line.
 - Later idea: Hydra's chat with the other side during a transfer
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
 - Also: an ssh password login tried against a real server, ARexx,

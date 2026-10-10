@@ -34,7 +34,18 @@ typedef struct {
     LONG answer;                        /* RING: answer it (ATA) */
 } Modem;
 
-extern SerLine serdef;                  /* the serial terminal's line */
+/* A tab's line: what the line's code (sermod.h) is given. */
+typedef struct {
+    SerLine line;                       /* its line */
+    char phone[48];                     /* a modem dials it (empty: the
+                                           line is the connection) */
+    char init[64], dialpre[24];         /* its own init, dial prefix */
+    BOOL named;                         /* a phone book place */
+    struct Ser *ser;                    /* its device, open (the line
+                                           code's own) */
+} SerTab;
+
+extern SerLine serdef;                /* the serial terminal's line */
 extern Modem modem;
 
 extern const LONG ser_rates[];          /* the usual speeds, 0 at the end */

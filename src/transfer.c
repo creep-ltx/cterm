@@ -36,10 +36,36 @@ struct XMod {
     struct XferMod *m;
 };
 
+/* A file's way in: the header (head, version, then the entry's address,
+ * inside the file) found in its loaded segments. NULL: no header, or one
+ * of another version (*found TRUE then) - such a file is not run at all.
+ * The protocols' files and the serial line's (sermod.h) are found so. */
+APTR mod_entry(BPTR seg, ULONG head, ULONG version, BOOL *found)
+{
+    BPTR s;
+    *found = FALSE;
+    for (s = seg; s; s = *(BPTR *)BADDR(s)) {
+        /* in 2-byte steps: the 68k puts data on even addresses, not on
+         * multiples of 4 (the 68020 reads a long from any even one).
+         * The segment's words are mem[-2] (its length, in bytes, these
+         * 8 included) to mem[n - 3]; the header is 6 words. */
+        UWORD *mem = (UWORD *)BADDR(s);
+        ULONG n = ((ULONG *)mem)[-1] / 2, i;   /* the length, in words */
+        for (i = 2; i + 8 <= n; i++)
+            if (*(ULONG *)(mem + i) == head) {
+                *found = TRUE;
+                return *(ULONG *)(mem + i + 2) == version
+                       ? (APTR)*(ULONG *)(mem + i + 4) : NULL;
+            }
+    }
+    return NULL;
+}
+
 static BOOL mod_load(struct XMod *x, const char *name)
 {
     char path[64];
-    BPTR s;
+    BOOL found;
+    XferModStart start;
     strcpy(path, "PROGDIR:Protocols/");
     strcat(path, name);
     x->m = NULL;
@@ -53,30 +79,12 @@ static BOOL mod_load(struct XMod *x, const char *name)
         refresh();
         return FALSE;
     }
-    /* the header: XFERMOD_HEAD, XFERMOD_VERSION, then the way in (inside
-     * the file). A file of another version is not run at all. */
-    for (s = x->seg; s && !x->m; s = *(BPTR *)BADDR(s)) {
-        /* in 2-byte steps: the 68k puts data on even addresses, not on
-         * multiples of 4 (the 68020 reads a long from any even one).
-         * The segment's words are mem[-2] (its length, in bytes, these
-         * 8 included) to mem[n - 3]; the header is 6 words. */
-        UWORD *mem = (UWORD *)BADDR(s);
-        ULONG n = ((ULONG *)mem)[-1] / 2, i;   /* the length, in words */
-        BOOL found = FALSE;
-        for (i = 2; i + 8 <= n; i++)
-            if (*(ULONG *)(mem + i) == XFERMOD_HEAD) {
-                found = TRUE;
-                if (*(ULONG *)(mem + i + 2) == XFERMOD_VERSION) {
-                    XferModStart start =
-                        (XferModStart)*(ULONG *)(mem + i + 4);
-                    struct XferMod *m = start(&menv);
-                    if (m && m->magic == XFERMOD_MAGIC)
-                        x->m = m;
-                }
-                break;
-            }
-        if (found)
-            break;
+    start = (XferModStart)mod_entry(x->seg, XFERMOD_HEAD, XFERMOD_VERSION,
+                                    &found);
+    if (start) {
+        struct XferMod *m = start(&menv);
+        if (m && m->magic == XFERMOD_MAGIC)
+            x->m = m;
     }
     if (!x->m) {
         UnLoadSeg(x->seg);
