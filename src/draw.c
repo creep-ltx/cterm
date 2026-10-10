@@ -1,0 +1,1844 @@
+/*
+ * draw - colours, drawing the text (pens, Text() and the fast painter),
+ * the scroll bar, the layout and the picture behind the text.
+ */
+#include "cterm.h"
+
+struct CEntry;
+static ULONG index_rgb(int i);
+static ULONG mix(ULONG a, ULONG b, int pct);
+static LONG pen_for(ULONG rgb);
+static void planes_reset(void);
+static void mask_pen(LONG p);
+static void drmd(int m);
+static void softstyle(int st);
+static ULONG pen_rgb(int i);
+static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg);
+static void cell_rgb(const VtCell *c, ULONG *fg, ULONG *bg);
+static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg);
+static void RF(int x0, int y0, int x1, int y1);
+static void SETCOL(ULONG rgb);
+static void hline(int x0, int x1, int y, int th);
+static void vline(int x, int y0, int y1, int th);
+static void draw_box(UBYTE arms, int x, int y);
+static void draw_block(ULONG cp, int x, int y, ULONG fg, ULONG bg);
+static void disc(int cx, int cy, int r, BOOL leftonly);
+static BOOL draw_shape(ULONG cp, int x, int y);
+static UBYTE fallback(ULONG cp);
+static BOOL is_special(ULONG cp);
+static ULONG tt_stand_in(ULONG cp);
+static APTR tt_for(UWORD attr);
+static void tt_run(const ULONG *u, const int *cols, int n, int y, ULONG fg, UWORD attr);
+static BOOL sel_span(int r, int *s0, int *s1);
+static void draw_cells(int r, int x0, int x1);
+static int area_right(void);
+static void paint_row(int r);
+static void backdrop_put(LONG x, LONG y, LONG w, LONG h);
+static void draw_span(int r, int a, int b);
+static void cursor_mark(int x, int y);
+static BOOL cache_alloc(void);
+static void cell_bitmap_glyph(UBYTE c, ULONG fg, UWORD attr);
+static void cell_tt_glyph(ULONG cp, ULONG fg, ULONG bg, UWORD attr, int w);
+static void make_cell(struct CEntry *e);
+static struct CEntry *cell_get(ULONG cp, ULONG fg, ULONG bg, UWORD attr, UBYTE wide);
+static void shift_shown(int top, int bottom, int n);
+static void forget_shown(void);
+static void paint_row(int r);
+static APTR mksysi(ULONG which, int sysz);
+static void mkarrow(struct Gadget *g, APTR im, int le, int te, int id);
+static void draw_tabbar(void);
+static void __attribute__((noinline)) load_pic_(void);
+static void backdrop_put(LONG x, LONG y, LONG w, LONG h);
+static void forget_shown(void);
+
+const struct Theme themes[NTHEMES] = {
+    { "Nord", 0xD8DEE9, 0x1A1D23,
+      { 0x3B4252, 0xBF616A, 0xA3BE8C, 0xEBCB8B, 0x81A1C1, 0xB48EAD,
+        0x88C0D0, 0xE5E9F0, 0x4C566A, 0xD57780, 0xB5D09E, 0xF0D399,
+        0x94B4D6, 0xC5A3C0, 0x8FBCBB, 0xFFFFFF },
+      { 0xFFFFFF, 0x88C0D0, 0x4C566A, 0xB48EAD, 0xA3BE8C, 0xEBCB8B } },
+    { "Black", 0xC0C0C0, 0x000000,
+      { 0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA,
+        0x00AAAA, 0xAAAAAA, 0x555555, 0xFF5555, 0x55FF55, 0xFFFF55,
+        0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF },
+      { 0xFFFFFF, 0x6688BB, 0x777777, 0xAA00AA, 0x00AA00, 0xAA5500 } },
+    { "Workbench", 0x000000, 0xAAAAAA,
+      { 0x000000, 0x990000, 0x006600, 0x885500, 0x002288, 0x772277,
+        0x006666, 0xDDDDDD, 0x444444, 0xCC2222, 0x228822, 0xAA7700,
+        0x2244CC, 0x993399, 0x118888, 0xFFFFFF },
+      { 0xFFFFFF, 0x6688BB, 0x777777, 0x772277, 0x006600, 0x885500 } },
+    { "Amber", 0xFFB000, 0x1A1000,
+      { 0x3A2800, 0xFF7A00, 0xD09000, 0xFFC840, 0xB07800, 0xE08800,
+        0xFFD070, 0xFFB000, 0x6A4800, 0xFF9A40, 0xE8A830, 0xFFE090,
+        0xC89040, 0xF0A040, 0xFFE0A0, 0xFFF0D0 },
+      { 0xFFE0A0, 0xD09000, 0x6A4800, 0xFF7A00, 0xE8A830, 0xFFC840 } },
+    { "Green", 0x33FF66, 0x001A08,
+      { 0x0A3A18, 0x22AA44, 0x33FF66, 0x88FF88, 0x22CC55, 0x44DD77,
+        0x66FF99, 0x33FF66, 0x115522, 0x55CC66, 0x77FF99, 0xBBFFBB,
+        0x44DD77, 0x66EE88, 0x99FFBB, 0xDDFFDD },
+      { 0xBBFFBB, 0x22CC55, 0x115522, 0x44DD77, 0x77FF99, 0x88FF88 } },
+    { "Light", 0x2E3440, 0xECEFF4,
+      { 0x2E3440, 0xBF616A, 0x5E8A3A, 0xB08A30, 0x3B6EA5, 0x8F5A8A,
+        0x3A8A8A, 0xD8DEE9, 0x4C566A, 0xD06070, 0x6A9A48, 0xC09A40,
+        0x4C7EB5, 0x9F6A9A, 0x4A9A9A, 0xFFFFFF },
+      { 0x000000, 0x3B6EA5, 0x9099A8, 0x8F5A8A, 0x5E8A3A, 0xB08A30 } },
+};
+
+/* The PC's own 16 colours (VGA): PC BBS art is drawn for these. */
+static const ULONG vga16[16] = {
+    0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA,
+    0xAAAAAA, 0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF,
+    0x55FFFF, 0xFFFFFF
+};
+
+int theme;
+BOOL ownfg, ownbg;               /* the person's own text/background */
+ULONG myfg, mybg;
+ULONG deffg = 0xD8DEE9, defbg = 0x1A1D23;
+static const ULONG *ansi16 = themes[0].ansi;
+
+
+void apply_theme(void)
+{
+    if (theme < 0 || theme >= NTHEMES)
+        theme = 0;
+    deffg = ownfg ? myfg : themes[theme].fg;
+    defbg = ownbg ? mybg : themes[theme].bg;
+    ansi16 = themes[theme].ansi;
+}
+
+static ULONG index_rgb(int i)
+{
+    static const UBYTE cube[6] = { 0, 95, 135, 175, 215, 255 };
+    if (i < 16)
+        return pcmode ? vga16[i] : ansi16[i];
+    if (i < 232) {
+        i -= 16;
+        return ((ULONG)cube[i / 36] << 16) | ((ULONG)cube[(i / 6) % 6] << 8) |
+               cube[i % 6];
+    }
+    i = 8 + (i - 232) * 10;
+    return ((ULONG)i << 16) | ((ULONG)i << 8) | i;
+}
+
+static ULONG mix(ULONG a, ULONG b, int pct)       /* pct of b into a */
+{
+    ULONG out = 0;
+    int sh;
+    for (sh = 0; sh <= 16; sh += 8) {
+        int x = (a >> sh) & 255, y = (b >> sh) & 255;
+        out |= (ULONG)((x * (100 - pct) + y * pct) / 100) << sh;
+    }
+    return out;
+}
+/* ======================================================================
+ * The display
+ * ==================================================================== */
+
+int scrmode = SCR_WB, owndepth = 8;
+ULONG ownmode = INVALID_ID;      /* the own screen's mode; INVALID_ID:
+                                           the Workbench's, at owndepth */
+LONG ownw, ownh;                 /* its size; 0: the mode's own */
+BOOL fullscreen, scrollbar = TRUE;
+struct Screen *ownscr, *scr;
+struct DrawInfo *dri;
+struct Window *win;                     /* console.c hands it to More/Ed */
+struct RastPort *rp;
+struct TextFont *font, *ownfont;
+char fontname[48];
+int fontsize;
+int cw, ch, cbase;               /* the cell */
+int linespace;                   /* extra pixels between lines */
+
+/* TrueType, through ttengine.library: a .ttf file at a pixel size, with
+ * its bold and italic files where there are any. */
+BOOL usett;
+char ttfile[160] = "SYS:Fonts/TrueType/DejaVuSansMono.ttf";
+/* The PC's own font for PC BBS mode: the IBM VGA 8x16 as pixel outlines
+ * (int10h.org's Ultimate Oldschool PC Font Pack, CC BY-SA 4.0), at its
+ * one true size and not smoothed. */
+BOOL pcfont = TRUE;              /* the setting */
+BOOL altmeta = TRUE;             /* Alt is Meta in a host's tab */
+char userkey[2] = "U";           /* Right Amiga + it: send the name */
+char passkey[2] = "P";           /* ... the password */
+char dldir[160], uldir[160];     /* where files come, go from */
+char pcttfile[160] = "PROGDIR:Fonts/PxPlus_IBM_VGA_8x16.ttf";
+int fontover;                    /* worn for the tab: BL_* (0: none) */
+BOOL ttaa = TRUE;                /* smoothing; off for pixel fonts */
+struct KeepFont keepfont;
+int ttsize = 14;
+APTR ttface[4];                  /* regular, bold, italic, both */
+BOOL ttruns;                     /* whole cells per glyph: runs */
+int ox, oy, cols, rows;          /* where the grid starts, its size */
+APTR visual;
+struct Menu *menu;
+BOOL want_switch;
+int want_mode, want_depth;
+BOOL want_full, want_bar;
+
+LONG want_cols = 80, want_rows = 25; /* the first window, in cells */
+LONG wl = -1, wt, ww, wh;        /* the Workbench window, remembered */
+char calls[300];                 /* places called, newest first:
+                                           "host[:port][!];..." (! = PC) */
+BOOL remember = TRUE;            /* FALSE: a one-off start (COLS,
+                                           HOST...) - its window is not kept */
+BOOL quitting;
+BOOL owed;                       /* drawing owed: a frame timer runs */
+BOOL flood;                      /* the last draw was a scroll */
+static int curx = -1, cury = -1;        /* where the cursor was drawn */
+
+/* The pen cache: an RGB value asked of the screen once. */
+#define NPEN 256
+static ULONG pc_rgb[NPEN];
+static LONG pc_pen[NPEN];
+int npc;
+
+static LONG pen_for(ULONG rgb)
+{
+    int i, best = -1;
+    LONG d, bd = 0x7FFFFFFF;
+    static int mru;                     /* where the last one was found */
+    if (mru < npc && pc_rgb[mru] == rgb)
+        return pc_pen[mru];
+    for (i = 0; i < npc; i++)
+        if (pc_rgb[i] == rgb) {
+            mru = i;
+            return pc_pen[i];
+        }
+    if (npc < NPEN) {
+        LONG p = ObtainBestPen(scr->ViewPort.ColorMap,
+                               ((rgb >> 16) & 255) * 0x01010101,
+                               ((rgb >> 8) & 255) * 0x01010101,
+                               (rgb & 255) * 0x01010101,
+                               OBP_Precision, PRECISION_IMAGE, TAG_END);
+        if (p >= 0) {
+            pc_rgb[npc] = rgb;
+            pc_pen[npc++] = p;
+            return p;
+        }
+    }
+    for (i = 0; i < npc; i++) {             /* full: the nearest we have */
+        int dr = ((pc_rgb[i] >> 16) & 255) - ((rgb >> 16) & 255);
+        int dg = ((pc_rgb[i] >> 8) & 255) - ((rgb >> 8) & 255);
+        int db = (pc_rgb[i] & 255) - (rgb & 255);
+        d = dr * dr + dg * dg + db * db;
+        if (d < bd) {
+            bd = d;
+            best = i;
+        }
+    }
+    return best >= 0 ? pc_pen[best] : 1;
+}
+
+/* Plain (planar) screens: only the bitplanes some pen on show differs
+ * from the background pen in are drawn or scrolled - on a 16-colour
+ * Workbench with the default colours that is one plane of four. After a
+ * full clear every plane outside the mask holds the background's bit
+ * everywhere, so skipping it changes nothing (CCON's plane mask). */
+BOOL painter;                    /* rows built in memory (RTG) */
+
+/* A picture behind the text (the painter only: it composes rows in
+ * memory): bgsrc the picture as read, backdrop the window's inner area
+ * with the picture mixed into the background (bgsee per cent of it). */
+char bgfile[256];
+int bgsee = 40;
+ULONG *bgsrc;
+static LONG bgsw, bgsh;
+static ULONG *backdrop;
+static LONG bkw, bkh, bkx, bky;
+#define MASKKEY 0x01000000UL            /* a cell drawn as a mask: no RGB */
+static LONG pbase = -1;                 /* the clear's pen; -1: no mask */
+static UBYTE pmask;
+
+static void planes_reset(void)
+{
+    if (!painter && !usett && rp->BitMap) {
+        pbase = pen_for(defbg);
+        pmask = 0;
+    } else {
+        pbase = -1;
+        pmask = 0xFF;
+    }
+    SetWriteMask(rp, pmask);
+    rp_forget();                        /* every pen must pass mask_pen */
+}
+
+void planes_full(void)
+{
+    pbase = -1;
+    pmask = 0xFF;
+    SetWriteMask(rp, 0xFF);
+}
+
+static void mask_pen(LONG p)
+{
+    UBYTE m;
+    if (pbase < 0)
+        return;
+    m = pmask | (UBYTE)(p ^ pbase);
+    if (m != pmask) {
+        pmask = m;
+        SetWriteMask(rp, pmask);
+    }
+}
+
+/* What the RastPort is set to, so a run in the same pens and style as
+ * the last costs no graphics calls (each one is dozens of instructions
+ * on a 14 MHz Amiga). Forgotten at every draw: others may touch rp. */
+static LONG c_apen = -1, c_bpen = -1;
+static ULONG c_argb = ~0UL, c_brgb = ~0UL;
+static int c_drmd = -1, c_style = -1;
+static BOOL rgb_memo;                   /* cell_rgb's last answer holds */
+
+void rp_forget(void)
+{
+    c_apen = c_bpen = -1;
+    c_argb = c_brgb = ~0UL;
+    c_drmd = c_style = -1;
+    rgb_memo = FALSE;
+}
+
+void apen(ULONG rgb)
+{
+    LONG p;
+    if (rgb == c_argb)
+        return;
+    c_argb = rgb;
+    p = pen_for(rgb);
+    mask_pen(p);
+    if (p != c_apen) {
+        SetAPen(rp, p);
+        c_apen = p;
+    }
+}
+
+void bpen(ULONG rgb)
+{
+    LONG p;
+    if (rgb == c_brgb)
+        return;
+    c_brgb = rgb;
+    p = pen_for(rgb);
+    mask_pen(p);
+    if (p != c_bpen) {
+        SetBPen(rp, p);
+        c_bpen = p;
+    }
+}
+
+static void drmd(int m)
+{
+    if (m != c_drmd) {
+        SetDrMd(rp, m);
+        c_drmd = m;
+    }
+}
+
+static void softstyle(int st)
+{
+    if (st != c_style) {
+        SetSoftStyle(rp, st, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
+        c_style = st;
+    }
+}
+
+void release_pens(void)
+{
+    while (npc > 0)
+        ReleasePen(scr->ViewPort.ColorMap, pc_pen[--npc]);
+}
+
+/* What a cell's colours come to, as RGB. */
+/* Amiga programs mean Workbench pens by colours 0-7 (Ed's text is pen 1,
+ * "black"): in the local Shell they follow the window's own colours -
+ * background, text, highlight, accent - not ANSI's. */
+static ULONG pen_rgb(int i)
+{
+    if (local && i < 8)
+        return i == 0 ? defbg : i == 1 ? deffg : themes[theme].wbpens[i - 2];
+    return index_rgb(i);
+}
+
+/* Runs next to each other mostly share colours: the last answer is kept
+ * (forgotten with the RastPort state, at every draw). */
+static void cell_rgb(const VtCell *c, ULONG *fg, ULONG *bg)
+{
+    static ULONG kf, kb, rf, rb;
+    static UWORD ka;
+    if (rgb_memo && c->fg == kf && c->bg == kb && c->attr == ka) {
+        *fg = rf;
+        *bg = rb;
+        return;
+    }
+    cell_rgb_(c, fg, bg);
+    kf = c->fg; kb = c->bg; ka = c->attr;
+    rf = *fg; rb = *bg;
+    rgb_memo = TRUE;
+}
+
+static void cell_rgb_(const VtCell *c, ULONG *fg, ULONG *bg)
+{
+    ULONG f, b, cf = c->fg, cb = c->bg;
+    if (pcmode) {
+        /* a PC: bold is the bright half of the 16 colours, blink the
+         * bright backgrounds; the default is grey on black */
+        if (cf == VT_DEFAULT)
+            cf = VT_INDEX(7);
+        if (cb == VT_DEFAULT)
+            cb = VT_INDEX(0);
+        if ((c->attr & VT_BOLD) && VT_IS_INDEX(cf) && (cf & 255) < 8)
+            cf += 8;
+        if ((c->attr & VT_BLINK) && VT_IS_INDEX(cb) && (cb & 255) < 8)
+            cb += 8;
+        f = VT_IS_INDEX(cf) ? index_rgb(cf & 255) : cf & 0xFFFFFF;
+        /* black behind text is the window's own background: on a
+         * Workbench of few colours "black" may come out as another pen */
+        b = cb == VT_INDEX(0) ? defbg
+          : VT_IS_INDEX(cb) ? index_rgb(cb & 255) : cb & 0xFFFFFF;
+    } else {
+        f = cf == VT_DEFAULT ? deffg : VT_IS_INDEX(cf)
+          ? pen_rgb(cf & 255) : cf & 0xFFFFFF;
+        b = cb == VT_DEFAULT ? defbg : VT_IS_INDEX(cb)
+          ? pen_rgb(cb & 255) : cb & 0xFFFFFF;
+    }
+    BOOL inv = (c->attr & VT_INVERSE) != 0;
+    if (vt_reverse_video(vt))
+        inv = !inv;
+    if (inv) {
+        ULONG t = f;
+        f = b;
+        b = t;
+    }
+    if (c->attr & VT_DIM)
+        f = mix(f, b, 40);
+    if (c->attr & VT_HIDDEN)
+        f = b;
+    *fg = f;
+    *bg = b;
+}
+
+/* ---- characters a bitmap font does not have -------------------------- */
+
+/* Drawing either into the window, or into a cell picture in memory (the
+ * painter's letter cache): the shapes below draw through these two. */
+static ULONG *cellbuf;                  /* non-NULL: painting a cell */
+static int cellw;                       /* its row length in pixels */
+static ULONG cellcol;
+
+static void RF(int x0, int y0, int x1, int y1)
+{
+    int x, y;
+    if (!cellbuf) {
+        RectFill(rp, x0, y0, x1, y1);
+        return;
+    }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= cellw) x1 = cellw - 1;
+    if (y1 >= ch) y1 = ch - 1;
+    for (y = y0; y <= y1; y++) {
+        ULONG *p = cellbuf + y * cellw + x0;
+        for (x = x0; x <= x1; x++)
+            *p++ = cellcol;
+    }
+}
+
+static void SETCOL(ULONG rgb)
+{
+    if (cellbuf)
+        cellcol = rgb;
+    else
+        apen(rgb);
+}
+
+static void hline(int x0, int x1, int y, int th)
+{
+    RF(x0, y, x1, y + th - 1);
+}
+
+static void vline(int x, int y0, int y1, int th)
+{
+    RF(x, y0, x + th - 1, y1);
+}
+
+/* Box drawing: four arms from the middle of the cell to its edges -
+ * light, heavy (twice as thick) or double (two thin lines). Each arm
+ * runs a little past the middle, so arms of any kind meet. */
+static void draw_box(UBYTE arms, int x, int y)
+{
+    int t = cw >= 12 ? 2 : 1, cx = x + cw / 2, cy = y + ch / 2, g = t + 1;
+    int a[4], i, k;
+    a[0] = arms >> 6 & 3;               /* up */
+    a[1] = arms >> 4 & 3;               /* right */
+    a[2] = arms >> 2 & 3;               /* down */
+    a[3] = arms & 3;                    /* left */
+    for (i = 0; i < 4; i++) {
+        int w = a[i], th, n, off[2], reach;
+        if (!w)
+            continue;
+        if (w == 3) {
+            n = 2; th = t; off[0] = -g; off[1] = g - t + 1; reach = g;
+        } else {
+            n = 1; th = w == 2 ? 2 * t : t; off[0] = -(th / 2);
+            reach = th / 2;             /* thin arms meet exactly at the
+                                           middle: corners do not stick out */
+        }
+        for (k = 0; k < n; k++) {
+            int o = off[k];
+            switch (i) {
+            case 0: RF(cx + o, y, cx + o + th - 1, cy + reach); break;
+            case 2: RF(cx + o, cy - reach, cx + o + th - 1,
+                             y + ch - 1); break;
+            case 1: RF(cx - reach, cy + o, x + cw - 1,
+                             cy + o + th - 1); break;
+            case 3: RF(x, cy + o, cx + reach, cy + o + th - 1); break;
+            }
+        }
+    }
+}
+
+/* Block elements U+2580-259F: parts of the cell filled. */
+static void draw_block(ULONG cp, int x, int y, ULONG fg, ULONG bg)
+{
+    int hw = cw / 2, hh = ch / 2, i;
+    static const UBYTE quads[16] = {     /* 2596..259F: UL UR LL LR bits */
+        2, 1, 8, 8 | 2 | 1, 8 | 1, 8 | 4 | 2, 8 | 4 | 1, 4, 4 | 2, 4 | 2 | 1
+    };
+    if (cp == 0x2580) { RF(x, y, x + cw - 1, y + hh - 1); return; }
+    if (cp >= 0x2581 && cp <= 0x2588) {          /* lower eighths */
+        i = (cp - 0x2580) * ch / 8;
+        RF(x, y + ch - i, x + cw - 1, y + ch - 1);
+        return;
+    }
+    if (cp >= 0x2589 && cp <= 0x258F) {          /* left eighths */
+        i = (0x2590 - cp) * cw / 8;
+        RF(x, y, x + i - 1, y + ch - 1);
+        return;
+    }
+    if (cp == 0x2590) { RF(x + hw, y, x + cw - 1, y + ch - 1); return; }
+    if (cp >= 0x2591 && cp <= 0x2593) {
+        /* shades: dots, as the PC's font has them (ANSI art lives on
+         * their texture): a quarter, half, three quarters */
+        static UWORD pat[3][2] = { { 0x2222, 0x8888 }, { 0x5555, 0xAAAA },
+                                   { 0x7777, 0xDDDD } };
+        const UWORD *pp = pat[cp - 0x2591];
+        if (cellbuf) {
+            int px, py;
+            for (py = 0; py < ch; py++) {
+                ULONG *row = cellbuf + (y + py) * cellw + x;
+                UWORD bits = pp[py & 1];
+                for (px = 0; px < cw; px++)
+                    row[px] = bits & (0x8000 >> (px & 15)) ? fg : bg;
+            }
+        } else {
+            apen(fg);
+            bpen(bg);
+            drmd(JAM2);
+            SetAfPt(rp, (UWORD *)pp, 1);    /* two lines, from the window */
+            RectFill(rp, x, y, x + cw - 1, y + ch - 1);
+            SetAfPt(rp, NULL, 0);
+        }
+        return;
+    }
+    if (cp == 0x2594) { RF(x, y, x + cw - 1, y + ch / 8); return; }
+    if (cp == 0x2595) { RF(x + cw - cw / 8 - 1, y, x + cw - 1,
+                                 y + ch - 1); return; }
+    if (cp >= 0x2596) {
+        UBYTE q = quads[cp - 0x2596];          /* 8 UL, 4 UR, 2 LL, 1 LR */
+        if (q & 8) RF(x, y, x + hw - 1, y + hh - 1);
+        if (q & 4) RF(x + hw, y, x + cw - 1, y + hh - 1);
+        if (q & 2) RF(x, y + hh, x + hw - 1, y + ch - 1);
+        if (q & 1) RF(x + hw, y + hh, x + cw - 1, y + ch - 1);
+    }
+}
+
+static void disc(int cx, int cy, int r, BOOL leftonly)
+{
+    int dy;
+    for (dy = -r; dy <= r; dy++) {
+        int dx = 0;
+        while ((dx + 1) * (dx + 1) + dy * dy <= r * r + r)
+            dx++;
+        RF(cx - dx, cy + dy, leftonly ? cx : cx + dx, cy + dy);
+    }
+}
+
+/* A few shapes Claude Code and others use. TRUE if drawn. */
+static BOOL draw_shape(ULONG cp, int x, int y)
+{
+    int cx = x + cw / 2, cy = y + ch / 2, r = (cw < ch ? cw : ch) / 3, i;
+    switch (cp) {
+    case 0x25CF: case 0x23FA: case 0x2B24:              /* ● ⏺ */
+        disc(cx, cy, r, FALSE);
+        return TRUE;
+    case 0x25D0: case 0x25D1: case 0x25D2: case 0x25D3:  /* ◐ spinner */
+        disc(cx, cy, r, TRUE);
+        return TRUE;
+    case 0x25CB: case 0x25EF:                            /* ○ */
+        disc(cx, cy, r, FALSE);
+        return TRUE;
+    case 0x25B6: case 0x23F5: case 0x25B8: case 0x25BA:  /* ▶ ⏵ */
+        for (i = 0; i <= r; i++)
+            RF(cx - r / 2, cy - (r - i), cx - r / 2 + i, cy + (r - i));
+        return TRUE;
+    case 0x276F: case 0x203A: case 0x276D:               /* ❯ */
+        for (i = 0; i <= r; i++) {
+            RF(cx - r / 2 + i, cy - r + i, cx - r / 2 + i + 1,
+                     cy - r + i);
+            RF(cx - r / 2 + i, cy + r - i, cx - r / 2 + i + 1,
+                     cy + r - i);
+        }
+        return TRUE;
+    case 0x2026:                                         /* … */
+        for (i = 0; i < 3; i++)
+            RF(x + 1 + i * (cw - 2) / 3, y + cbase - 1,
+                     x + 1 + i * (cw - 2) / 3, y + cbase - 1);
+        return TRUE;
+    case 0x2193: case 0x2191:                            /* ↓ ↑ */
+        vline(cx, y + 1, y + ch - 2, 1);
+        for (i = 1; i <= r; i++) {
+            int yy = cp == 0x2193 ? y + ch - 2 - i : y + 1 + i;
+            RF(cx - i, yy, cx + i, yy);
+        }
+        return TRUE;
+    case 0x2192: case 0x2190:                            /* → ← */
+        hline(x + 1, x + cw - 2, cy, 1);
+        for (i = 1; i <= r; i++) {
+            int xx = cp == 0x2192 ? x + cw - 2 - i : x + 1 + i;
+            RF(xx, cy - i, xx, cy + i);
+        }
+        return TRUE;
+    case 0x23BF:                                         /* ⎿ like └ */
+        draw_box(0x50, x, y);
+        return TRUE;
+    case 0x25A0: case 0x25AA: case 0x25FC:               /* ■ */
+        RF(cx - r, cy - r, cx + r, cy + r);
+        return TRUE;
+    case 0x25C6: case 0x2666:                            /* ◆ */
+        for (i = -r; i <= r; i++)
+            RF(cx - (r - abs(i)), cy + i, cx + (r - abs(i)), cy + i);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* Everything else outside Latin-1: the nearest Latin-1 character. */
+static UBYTE fallback(ULONG cp)
+{
+    switch (cp) {
+    case 0x2018: case 0x2019: case 0x201B: case 0x2032: return '\'';
+    case 0x201C: case 0x201D: case 0x201E: case 0x2033: return '"';
+    case 0x2010: case 0x2011: case 0x2012: case 0x2013: case 0x2014:
+    case 0x2015: case 0x2212: return '-';
+    case 0x2022: case 0x2219: case 0x22C5: return 0xB7;
+    case 0x2713: case 0x2714: case 0x2705: return 'v';
+    case 0x2717: case 0x2718: case 0x274C: return 'x';
+    case 0x26A0: return '!';
+    case 0x2264: return '<';
+    case 0x2265: return '>';
+    case 0x2260: return '#';
+    case 0x03C0: return 'p';
+    case 0x00A0: return ' ';
+    }
+    if ((cp >= 0x2720 && cp <= 0x274B) || cp == 0x2731 || cp == 0x2736 ||
+        cp == 0x2733 || cp == 0x22C6 || cp == 0x2605 || cp == 0x2606)
+        return '*';                                      /* ✻ ✢ ✽ ✶ ✳ */
+    return '?';
+}
+
+/* ---- drawing rows ------------------------------------------------------ */
+
+/* Cells CTerm draws itself rather than with the font: table lines and
+ * blocks always (they must join exactly), and with a bitmap font
+ * everything outside Latin-1. */
+static BOOL is_special(ULONG cp)
+{
+    if (cp == VT_WIDE_TAIL)
+        return FALSE;
+    if (cp >= 0x2500 && cp <= 0x259F)
+        return TRUE;
+    return !usett && cp > 0xFF;
+}
+
+/* Characters Claude Code uses that DejaVu Sans Mono lacks: a close
+ * one it has (measured: Knowledge/amiga/graphics-and-performance.md). */
+static ULONG tt_stand_in(ULONG cp)
+{
+    switch (cp) {
+    case 0x23F5: return 0x25B6;         /* the status line's play marks */
+    case 0x23F4: return 0x25C0;
+    case 0x23BF: return 0x2514;         /* the hook under tool results */
+    case 0x23FA: return 0x25CF;         /* the record dot */
+    }
+    return cp;
+}
+
+static APTR tt_for(UWORD attr)
+{
+    if (pcmode)
+        attr &= ~VT_BOLD;               /* a PC's bold is a colour */
+    int i = (attr & VT_BOLD ? 1 : 0) | (attr & VT_ITALIC ? 2 : 0);
+    return ttface[i] ? ttface[i] : ttface[i & 1] ? ttface[i & 1] : ttface[0];
+}
+
+/* A run of TrueType text on its background; cols[i]: glyph i's cell. */
+static void tt_run(const ULONG *u, const int *cols, int n, int y,
+                   ULONG fg, UWORD attr)
+{
+    int i;
+    drmd(JAM1);
+    apen(fg);
+    TT_SetFont(rp, tt_for(attr));
+    TT_SetAttrs(rp, TT_SoftStyle, attr & VT_UNDERLINE
+                ? TT_SoftStyle_Underlined : TT_SoftStyle_None, TAG_END);
+    if (ttruns) {
+        int from = 0;
+        /* glyphs are exactly one cell: draw runs, broken only where a
+         * wide character takes two */
+        for (i = 1; i <= n; i++)
+            if (i == n || cols[i] != cols[i - 1] + 1) {
+                Move(rp, ox + cols[from] * cw, y + cbase);
+                TT_Text(rp, (APTR)(u + from), i - from);
+                from = i;
+            }
+    } else {
+        for (i = 0; i < n; i++) {
+            Move(rp, ox + cols[i] * cw, y + cbase);
+            TT_Text(rp, (APTR)(u + i), 1);
+        }
+    }
+    drmd(JAM2);
+}
+
+/* Plain (planar) screens: Text() draws the letters. A CPU writer into
+ * the planes was measured on a stock A1200 (FS-UAE, 2026-10-10) and lost:
+ * in C, 13000 instructions for a 76-letter row (~17 ms) against Text()'s
+ * ~3 ms; only assembly could win, and only on many-coloured rows. */
+BOOL planar;                     /* a native screen, real planes */
+
+/* ---- the selection: text marked with the mouse ------------------------
+ * In screen cells, reading order from the anchor (a) to the end (b),
+ * both included; it goes when the text under it moves (a scroll). */
+
+void sel_bounds(int *r0, int *c0, int *r1, int *c1)
+{
+    if (sa_r < sb_r || (sa_r == sb_r && sa_c <= sb_c)) {
+        *r0 = sa_r; *c0 = sa_c; *r1 = sb_r; *c1 = sb_c;
+    } else {
+        *r0 = sb_r; *c0 = sb_c; *r1 = sa_r; *c1 = sa_c;
+    }
+}
+
+/* The selected columns of row r: FALSE when none. */
+static BOOL sel_span(int r, int *s0, int *s1)
+{
+    int r0, c0, r1, c1;
+    if (!sel_on)
+        return FALSE;
+    sel_bounds(&r0, &c0, &r1, &c1);
+    if (r < r0 || r > r1)
+        return FALSE;
+    *s0 = r == r0 ? c0 : 0;
+    *s1 = r == r1 ? c1 : cols - 1;
+    return TRUE;
+}
+
+static void draw_cells(int r, int x0, int x1)
+{
+    static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
+    static UBYTE text[512];
+    int w, x, y = oy + r * ch;
+    const VtCell *line = vt_line(vt, r, back, &w);
+
+    int s0 = -1, s1 = -2, xend = x1;
+    BOOL insel;
+    sel_span(r, &s0, &s1);
+    drmd(JAM2);
+    x = x0;
+    while (x <= xend) {
+        const VtCell *c = x < w && line ? &line[x] : &empty;
+        ULONG fg, bg, cp = c->cp;
+        int n = 0, start = x;
+        /* a run stays on one side of the selection's edges */
+        insel = x >= s0 && x <= s1;
+        x1 = insel ? (s1 < xend ? s1 : xend)
+                   : (x < s0 && s0 - 1 < xend ? s0 - 1 : xend);
+        UWORD style = (c->attr & VT_BOLD && !pcmode ? FSF_BOLD : 0) |
+                      (c->attr & VT_ITALIC ? FSF_ITALIC : 0) |
+                      (c->attr & VT_UNDERLINE ? FSF_UNDERLINED : 0);
+
+        cell_rgb(c, &fg, &bg);
+        if (insel) {
+            ULONG t = fg; fg = bg; bg = t;
+        }
+        if (usett)
+            cp = tt_stand_in(cp);
+        if (is_special(cp)) {
+            /* one special cell: its background, then the shape */
+            apen(bg);
+            RectFill(rp, ox + x * cw, y, ox + x * cw + cw - 1, y + ch - 1);
+            apen(fg);
+            if (cp >= 0x2500 && cp <= 0x257F) {
+                UBYTE a = boxarms[cp - 0x2500];
+                if (a)
+                    draw_box(a, ox + x * cw, y);
+                else {                                  /* ╱ ╲ ╳ */
+                    if (cp != 0x2572) {
+                        Move(rp, ox + x * cw, y + ch - 1);
+                        Draw(rp, ox + x * cw + cw - 1, y);
+                    }
+                    if (cp != 0x2571) {
+                        Move(rp, ox + x * cw, y);
+                        Draw(rp, ox + x * cw + cw - 1, y + ch - 1);
+                    }
+                }
+            } else if (cp >= 0x2580 && cp <= 0x259F) {
+                draw_block(cp, ox + x * cw, y, fg, bg);
+            } else if (!draw_shape(cp, ox + x * cw, y)) {
+                UBYTE ch1 = fallback(cp);
+                bpen(bg);
+                softstyle(style);
+                Move(rp, ox + x * cw, y + cbase);
+                Text(rp, (STRPTR)&ch1, 1);
+            }
+            x++;
+            continue;
+        }
+        /* a run of ordinary characters that look the same - first the
+         * common case in a tight loop: Latin-1 letters in exactly the
+         * same colours and style as the run's first */
+        if (line) {
+            const VtCell *d = &line[x];
+            int lim = x1 < w - 1 ? x1 : w - 1;
+            ULONG cf = c->fg, cb = c->bg;
+            UWORD ca = c->attr;
+            if (lim - x >= (int)sizeof text)
+                lim = x + (int)sizeof text - 1;
+            while (x <= lim) {
+                ULONG dc = d->cp;
+                if (dc > 0xFF || d->fg != cf || d->bg != cb || d->attr != ca)
+                    break;
+                text[n++] = dc < 0x20 ? ' ' : (UBYTE)dc;
+                d++;
+                x++;
+            }
+        }
+        /* then the rest, one by one */
+        while (x <= x1 && n < (int)sizeof text) {
+            const VtCell *d = x < w && line ? &line[x] : &empty;
+            ULONG f2, b2;
+            if (is_special(d->cp))
+                break;
+            if (d != c && (d->attr != c->attr || d->fg != c->fg ||
+                           d->bg != c->bg)) {
+                cell_rgb(d, &f2, &b2);
+                if (f2 != fg || b2 != bg ||
+                    (d->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE)) !=
+                    (c->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE)))
+                    break;
+            }
+            text[n++] = d->cp == VT_WIDE_TAIL ? ' ' : d->cp < 0x20 ? ' '
+                      : (UBYTE)d->cp;
+            x++;
+        }
+        if (usett) {
+            static ULONG u[512];
+            static int ucol[512];
+            int k, m = 0;
+            apen(bg);
+            RectFill(rp, ox + start * cw, y, ox + x * cw - 1, y + ch - 1);
+            for (k = start; k < x; k++) {
+                const VtCell *d = k < w && line ? &line[k] : &empty;
+                if (d->cp == VT_WIDE_TAIL || d->cp <= ' ')
+                    continue;           /* spaces: the background did it */
+                u[m] = tt_stand_in(d->cp);
+                ucol[m++] = k;
+            }
+            if (m)
+                tt_run(u, ucol, m, y, fg, c->attr);
+        } else {
+            if (linespace) {            /* Text() fills the font's rows only */
+                apen(bg);
+                RectFill(rp, ox + start * cw, y, ox + x * cw - 1, y + ch - 1);
+            }
+            apen(fg);
+            bpen(bg);
+            PF_START(tt);
+            softstyle(style);
+            Move(rp, ox + start * cw, y + cbase);
+            Text(rp, (STRPTR)text, n);
+            PF_ADD(pf_text, tt);
+        }
+        if (c->attr & VT_STRIKE)
+            hline(ox + start * cw, ox + x * cw - 1, y + ch / 2, 1);
+    }
+    softstyle(0);
+}
+
+/* The text area's edges: the margin left of column 0 and whatever is
+ * right of the last column. TrueType letters can reach a pixel into the
+ * margin (a "y" at the start of a line), so a row clears its edges too. */
+static int area_right(void)
+{
+    return win->Width - win->BorderRight - 1 - (fullscreen ? POSBAR + 2 : 0);
+}
+static UBYTE shown_blank[1024];
+
+/* Columns a..b of row r, brought up to date: the text up to the last
+ * cell in the span that shows anything, then one fill for the rest. A
+ * blank row already shown blank (after a scroll, say) is not touched. */
+static void draw_span(int r, int a, int b)
+{
+    int w, last, y = oy + r * ch;
+    const VtCell *line = vt_line(vt, r, back, &w);
+    if (b >= cols)
+        b = cols - 1;
+    if (a > b)
+        return;
+    last = b;
+    if (!vt_reverse_video(vt)) {
+        if (!line || w <= a)
+            last = a - 1;
+        else {
+            if (last > w - 1)
+                last = w - 1;
+            while (last >= a) {
+                const VtCell *c = &line[last];
+                if ((c->cp && c->cp != ' ') || c->bg != VT_DEFAULT ||
+                    (c->attr & (VT_INVERSE | VT_UNDERLINE | VT_STRIKE)))
+                    break;
+                last--;
+            }
+        }
+    }
+    {
+        int s0, s1;                     /* marked cells are drawn, blank or not */
+        if (sel_span(r, &s0, &s1) && s1 >= a && s0 <= b && last < s1)
+            last = s1 < b ? s1 : b;
+    }
+    if (last < a && a == 0 && b == cols - 1 &&
+        r < (int)sizeof shown_blank && shown_blank[r])
+        return;
+    if (last >= a)
+        draw_cells(r, a, last);
+    {
+    PF_START(tf);
+    apen(defbg);
+    if (a == 0)
+        RectFill(rp, win->BorderLeft, y, ox - 1, y + ch - 1);
+    if (last < b || b == cols - 1) {
+        int x1 = b == cols - 1 ? area_right() : ox + (b + 1) * cw - 1;
+        if (ox + (last + 1) * cw <= x1)
+            RectFill(rp, ox + (last + 1) * cw, y, x1, y + ch - 1);
+    }
+    PF_ADD(pf_fill, tf);
+    }
+    if (r < (int)sizeof shown_blank) {
+        if (last >= a)
+            shown_blank[r] = 0;
+        else if (a == 0 && b == cols - 1)
+            shown_blank[r] = 1;
+    }
+}
+
+void draw_row(int r)
+{
+    if (r < 0 || r >= rows)
+        return;
+    if (painter) {
+        paint_row(r);                   /* the cursor comes with the row */
+        return;
+    }
+    draw_span(r, 0, cols - 1);
+}
+
+/* An underline or bar cursor (DECSCUSR) over cell x,y, in its letter's
+ * colour. */
+static void cursor_mark(int x, int y)
+{
+    int w, blink, shape = vt_cursor_shape(vt, &blink);
+    const VtCell *line = vt_line(vt, y, 0, &w);
+    VtCell c;
+    ULONG fg, bg;
+    int x0 = ox + x * cw, y0 = oy + y * ch;
+    if (line && x < w)
+        c = line[x];
+    else
+        memset(&c, 0, sizeof c);
+    cell_rgb(&c, &fg, &bg);
+    apen(fg);
+    if (shape == 1) {
+        int t = ch / 8 > 2 ? ch / 8 : 2;
+        RectFill(rp, x0, y0 + ch - t, x0 + cw - 1, y0 + ch - 1);
+    } else {
+        int t = cw / 4 > 2 ? cw / 4 : 2;
+        RectFill(rp, x0, y0, x0 + t - 1, y0 + ch - 1);
+    }
+}
+
+void draw_cursor(BOOL on)
+{
+    int x, y, vis;
+    vt_cursor(vt, &x, &y, &vis);
+    if (painter) {
+        /* the rows carry the cursor: repaint where it was and where it is */
+        if (!on)
+            return;
+        if (cury >= 0 && cury < rows && cury != y)
+            paint_row(cury);
+        if (y < rows)
+            paint_row(y);
+        curx = x;
+        cury = y;
+        return;
+    }
+    if (curx >= 0 && cury >= 0 && cury < rows && curx < cols) {
+        draw_cells(cury, curx, curx);       /* where it was: plain again */
+        curx = cury = -1;
+    }
+    if (!on || !vis || back > 0 || x >= cols || y >= rows)
+        return;
+    {
+        int blink;
+        if (vt_cursor_shape(vt, &blink)) {  /* an underline or a bar */
+            draw_cells(y, x, x);
+            cursor_mark(x, y);
+            curx = x;
+            cury = y;
+            return;
+        }
+    }
+    /* the cursor: the cell in reverse */
+    {
+        int w;
+        const VtCell *line = vt_line(vt, y, 0, &w);
+        VtCell c;
+        ULONG fg, bg;
+        UBYTE t;
+        if (line && x < w)
+            c = line[x];
+        else
+            memset(&c, 0, sizeof c);
+        cell_rgb(&c, &fg, &bg);
+        apen(fg);
+        RectFill(rp, ox + x * cw, oy + y * ch, ox + x * cw + cw - 1,
+                 oy + y * ch + ch - 1);
+        if (usett && c.cp > ' ' && !is_special(c.cp)) {
+            ULONG u = c.cp;
+            int col = x;
+            tt_run(&u, &col, 1, oy + y * ch, bg, c.attr);
+        } else if (c.cp > ' ' && c.cp <= 0xFF) {
+            t = (UBYTE)c.cp;
+            drmd(JAM1);
+            apen(bg);
+            Move(rp, ox + x * cw, oy + y * ch + cbase);
+            Text(rp, (STRPTR)&t, 1);
+        }
+        curx = x;
+        cury = y;
+    }
+}
+
+/* ======================================================================
+ * The painter: rows built in fast memory, one WritePixelArray each
+ *
+ * On an RTG screen with 15 bits or more, graphics.library's ScrollRaster
+ * reads video memory back and costs ~10 ms a line on the A1200 (Emu68,
+ * VideoCore), while writing a ready row costs ~0.03 ms. So here nothing
+ * is ever scrolled or read: every cell (a letter in its colours and
+ * style, a table line, a block) is drawn once into a small picture - the
+ * cell cache - and rows are put together from those pictures and written
+ * in one go. Measured, and CCON found the same: see Knowledge/amiga/
+ * graphics-and-performance.md, "RTG on PiStorm/Emu68".
+ * ==================================================================== */
+
+ULONG *rowbuf;                   /* one text row: cols*cw x ch */
+static LONG rowbuf_n;
+#define CSIZE 4096                      /* cache entries (a power of 2) */
+struct CEntry {
+    ULONG cp, fg, bg;
+    UWORD attr;
+    UBYTE wide, used;
+    ULONG *pix;
+};
+static struct CEntry *ccache;
+static ULONG *cpool;
+static LONG cell_longs;                 /* per entry: 2*cw x ch */
+
+void cache_free(void)
+{
+    if (ccache) { FreeVec(ccache); ccache = NULL; }
+    if (cpool) { FreeVec(cpool); cpool = NULL; }
+}
+
+static BOOL cache_alloc(void)
+{
+    int i;
+    cache_free();
+    cell_longs = 2 * cw * ch;
+    ccache = AllocVec(CSIZE * sizeof *ccache, MEMF_ANY | MEMF_CLEAR);
+    cpool = AllocVec(CSIZE * cell_longs * 4, MEMF_ANY);
+    if (!ccache || !cpool) {
+        cache_free();
+        return FALSE;
+    }
+    for (i = 0; i < CSIZE; i++)
+        ccache[i].pix = cpool + i * cell_longs;
+    return TRUE;
+}
+
+/* A letter of the bitmap font, from its own bits (no window needed). */
+static void cell_bitmap_glyph(UBYTE c, ULONG fg, UWORD attr)
+{
+    struct TextFont *f = font;
+    int lo = f->tf_LoChar, hi = f->tf_HiChar, y, b, w, off;
+    ULONG loc;
+    if (c < lo || c > hi)
+        c = hi + 1 - lo + lo;           /* the font's "missing" glyph */
+    loc = ((ULONG *)f->tf_CharLoc)[c - lo];
+    off = loc >> 16;
+    w = loc & 0xFFFF;
+    if (w > cw)
+        w = cw;
+    for (y = 0; y < f->tf_YSize && y + cbase - f->tf_Baseline < ch; y++) {
+        const UBYTE *row = (const UBYTE *)f->tf_CharData + y * f->tf_Modulo;
+        ULONG *dst = cellbuf + (y + cbase - f->tf_Baseline) * cellw;
+        int shift = attr & VT_ITALIC ? (f->tf_Baseline - y) / 2 : 0;
+        for (b = 0; b < w; b++) {
+            int bit = off + b;
+            if (row[bit >> 3] & (0x80 >> (bit & 7))) {
+                int x = b + shift;
+                if (x >= 0 && x < cellw)
+                    dst[x] = fg;
+                if ((attr & VT_BOLD) && x + 1 < cellw)
+                    dst[x + 1] = fg;    /* the bold smear */
+            }
+        }
+    }
+}
+
+/* A TrueType letter: ttengine's greyscale picture, blended. */
+static void cell_tt_glyph(ULONG cp, ULONG fg, ULONG bg, UWORD attr, int w)
+{
+    struct TT_Pixmap *pm;
+    ULONG u = cp;
+    int x, y, ph, pw;
+    struct TextExtent te;
+    int top, left;
+    pm = TT_GetPixmap(tt_for(attr), (APTR)&u, 1, TT_Encoding,
+                      TT_Encoding_UTF32_BE, TT_Antialias,
+                      ttaa ? TT_Antialias_On : TT_Antialias_Off,
+                      TAG_END);
+    if (!pm)
+        return;
+    /* the picture is the letter's ink only: it goes where the ink sits
+     * on the baseline (measured: an "n" is 8 rows, an "E" 10 - put both
+     * at the cell's top and the text jitters) */
+    TT_SetFont(rp, tt_for(attr));
+    TT_SetAttrs(rp, TT_Encoding, TT_Encoding_UTF32_BE, TAG_END);
+    TT_TextExtent(rp, (APTR)&u, 1, &te);
+    top = cbase + te.te_Extent.MinY;
+    left = te.te_Extent.MinX;
+    if (top < 0) top = 0;
+    if (left < 0) left = 0;
+    ph = (int)pm->ttp_Height;
+    if (top + ph > ch) ph = ch - top;
+    pw = (int)pm->ttp_Width;
+    if (left + pw > w) pw = w - left;
+    for (y = 0; y < ph; y++) {
+        const UBYTE *a = pm->ttp_Data + y * pm->ttp_Width;
+        ULONG *dst = cellbuf + (top + y) * cellw + left;
+        for (x = 0; x < pw; x++) {
+            int k = a[x];
+            if (k == 0)
+                continue;
+            if (k == 255)
+                dst[x] = fg;
+            else {
+                ULONG out = 0;
+                int sh;
+                for (sh = 0; sh <= 16; sh += 8) {
+                    int f2 = (fg >> sh) & 255, b2 = (bg >> sh) & 255;
+                    out |= (ULONG)(b2 + ((f2 - b2) * k) / 255) << sh;
+                }
+                dst[x] = out;
+            }
+        }
+    }
+    TT_FreePixmap(pm);
+}
+
+/* Draw one cell picture into an entry. */
+static void make_cell(struct CEntry *e)
+{
+    ULONG cp = e->cp;
+    int w = e->wide ? 2 * cw : cw;
+    cellbuf = e->pix;
+    cellw = w;
+    SETCOL(e->bg);
+    RF(0, 0, w - 1, ch - 1);
+    SETCOL(e->fg);
+    if (cp >= 0x2500 && cp <= 0x257F && boxarms[cp - 0x2500]) {
+        draw_box(boxarms[cp - 0x2500], 0, 0);
+    } else if (cp >= 0x2571 && cp <= 0x2573) {
+        int i;                          /* the diagonals, by hand */
+        for (i = 0; i < cw; i++) {
+            int y1 = (ch - 1) - i * (ch - 1) / (cw > 1 ? cw - 1 : 1);
+            if (cp != 0x2572) RF(i, y1, i, y1);
+            if (cp != 0x2571) RF(i, ch - 1 - y1, i, ch - 1 - y1);
+        }
+    } else if (cp >= 0x2580 && cp <= 0x259F) {
+        draw_block(cp, 0, 0, e->fg, e->bg);
+    } else if (cp > ' ' && cp != 0xA0) {
+        if (usett)
+            cell_tt_glyph(cp, e->fg, e->bg, e->attr, w);
+        else if (cp <= 0xFF || !draw_shape(cp, 0, 0))
+            cell_bitmap_glyph(cp <= 0xFF ? (UBYTE)cp : fallback(cp), e->fg,
+                              e->attr);
+    }
+    if (e->attr & VT_UNDERLINE) {
+        int uy = cbase + 1 < ch ? cbase + 1 : ch - 1;
+        RF(0, uy, w - 1, uy);
+    }
+    if (e->attr & VT_STRIKE)
+        RF(0, ch / 2, w - 1, ch / 2);
+    cellbuf = NULL;
+}
+
+static struct CEntry *cell_get(ULONG cp, ULONG fg, ULONG bg, UWORD attr,
+                               UBYTE wide)
+{
+    ULONG h = (cp * 2654435761UL) ^ (fg * 0x9E37UL) ^ (bg * 0x85EBUL) ^
+              ((ULONG)attr << 7) ^ wide;
+    int i, k;
+    attr &= VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE;
+    for (k = 0; k < 8; k++) {
+        struct CEntry *e = &ccache[(h + k) & (CSIZE - 1)];
+        if (e->used && e->cp == cp && e->fg == fg && e->bg == bg &&
+            e->attr == attr && e->wide == wide)
+            return e;
+        if (!e->used) {
+            e->cp = cp; e->fg = fg; e->bg = bg; e->attr = attr;
+            e->wide = wide; e->used = 1;
+            make_cell(e);
+            return e;
+        }
+    }
+    i = h & (CSIZE - 1);                /* full there: replace the first */
+    ccache[i].cp = cp; ccache[i].fg = fg; ccache[i].bg = bg;
+    ccache[i].attr = attr; ccache[i].wide = wide; ccache[i].used = 1;
+    make_cell(&ccache[i]);
+    return &ccache[i];
+}
+
+/* What each screen row shows now: a blank row painted blank need not be
+ * painted again (CCON's blank-scroll skip: a flood of empty lines then
+ * costs nothing on screen). Cleared whenever the window is redrawn. */
+/* The rows a scroll moved on screen carry what they showed; the rows it
+ * brought in are blank. */
+static void shift_shown(int top, int bottom, int n)
+{
+    int r;
+    if (bottom >= (int)sizeof shown_blank)
+        bottom = sizeof shown_blank - 1;
+    if (n > 0)
+        for (r = top; r <= bottom; r++)
+            shown_blank[r] = r + n <= bottom ? shown_blank[r + n] : 1;
+    else if (n < 0)
+        for (r = bottom; r >= top; r--)
+            shown_blank[r] = r + n >= top ? shown_blank[r + n] : 1;
+}
+
+static void forget_shown(void)
+{
+    memset(shown_blank, 0, sizeof shown_blank);
+}
+
+/* One text row: put together from cell pictures, written in one go. */
+static void paint_row(int r)
+{
+    int ps0 = -1, ps1 = -2, cshape, blink;
+    static const VtCell empty = { 0, VT_DEFAULT, VT_DEFAULT, 0 };
+    int w, x, cx = -1, cy = -1, vis = 0, rw = cols * cw;
+    const VtCell *line = vt_line(vt, r, back, &w);
+    const VtCell *prev = NULL;
+    ULONG pfg = 0, pbg = 0;
+    struct CEntry *pe = NULL;
+    if (r < 0 || r >= rows)
+        return;
+    vt_cursor(vt, &cx, &cy, &vis);
+    cshape = vt_cursor_shape(vt, &blink);
+    if (!vis || back > 0)
+        cy = -1;
+    sel_span(r, &ps0, &ps1);
+    /* a blank row (all default spaces, no cursor): one fill, or nothing */
+    if (r != cy && !vt_reverse_video(vt) && ps1 < 0) {
+        int blank = 1;
+        for (x = 0; x < w && x < cols && line; x++) {
+            const VtCell *c = &line[x];
+            if ((c->cp && c->cp != ' ') || c->fg != VT_DEFAULT ||
+                c->bg != VT_DEFAULT || c->attr) {
+                blank = 0;
+                break;
+            }
+        }
+        if (blank) {
+            if (r < (int)sizeof shown_blank && shown_blank[r])
+                return;
+            if (backdrop)
+                backdrop_put(ox, oy + r * ch, rw, ch);
+            else {
+                apen(defbg);
+                RectFill(rp, ox, oy + r * ch, ox + rw - 1,
+                         oy + r * ch + ch - 1);
+            }
+            if (r < (int)sizeof shown_blank)
+                shown_blank[r] = 1;
+            return;
+        }
+    }
+    if (r < (int)sizeof shown_blank)
+        shown_blank[r] = 0;
+    for (x = 0; x < cols; x++) {
+        const VtCell *c = x < w && line ? &line[x] : &empty;
+        ULONG fg, bg, cp = c->cp;
+        UBYTE wide = 0;
+        struct CEntry *e;
+        int y, n;
+        ULONG *src, *dst;
+        if (cp == VT_WIDE_TAIL)
+            continue;                   /* drawn with its left half */
+        if (x + 1 < cols && x + 1 < w && line && line[x + 1].cp == VT_WIDE_TAIL)
+            wide = 1;
+        /* neighbours mostly share colours: work them out once a run */
+        if (prev && c->fg == prev->fg && c->bg == prev->bg &&
+            c->attr == prev->attr) {
+            fg = pfg;
+            bg = pbg;
+        } else {
+            cell_rgb(c, &fg, &bg);
+            pfg = fg;
+            pbg = bg;
+            pe = NULL;
+        }
+        prev = c;
+        if ((r == cy && x == cx && cshape == 0) ^ (x >= ps0 && x <= ps1)) {
+            /* the cursor (a block), or a marked cell: reversed */
+            ULONG t = fg; fg = bg; bg = t;
+            pe = NULL;
+            prev = NULL;
+        }
+        if (usett)
+            cp = tt_stand_in(cp);
+        if (cp < ' ')
+            cp = ' ';
+        n = wide ? 2 * cw : cw;
+        if (x * cw + n > rw)
+            n = rw - x * cw;
+        dst = rowbuf + x * cw;
+        if (backdrop && bg == defbg) {
+            /* over the picture: the cell as a mask (white on nothing),
+             * its letter's colour mixed onto the backdrop by it */
+            const ULONG *bk = backdrop + (oy + r * ch - bky) * bkw +
+                              (ox + x * cw - bkx);
+            e = cell_get(cp, 0xFFFFFF, MASKKEY,
+                         pcmode ? c->attr & ~VT_BOLD : c->attr, wide);
+            pe = NULL;
+            src = e->pix;
+            for (y = 0; y < ch; y++) {
+                int k;
+                for (k = 0; k < n; k++) {
+                    int a = src[k] & 255;
+                    ULONG b = bk[k];
+                    if (a == 0)
+                        dst[k] = b;
+                    else if (a == 255)
+                        dst[k] = fg;
+                    else {
+                        ULONG o = 0;
+                        int sh;
+                        for (sh = 0; sh <= 16; sh += 8) {
+                            int bb = (b >> sh) & 255, ff = (fg >> sh) & 255;
+                            o |= (ULONG)(bb + (ff - bb) * a / 255) << sh;
+                        }
+                        dst[k] = o;
+                    }
+                }
+                src += wide ? 2 * cw : cw;
+                dst += rw;
+                bk += bkw;
+            }
+            continue;
+        }
+        if (pe && pe->cp == cp && !wide && !pe->wide && pe->fg == fg &&
+            pe->bg == bg)
+            e = pe;                     /* the same cell again (spaces) */
+        else
+            e = pe = cell_get(cp, fg, bg,
+                              pcmode ? c->attr & ~VT_BOLD : c->attr, wide);
+        src = e->pix;
+        for (y = 0; y < ch; y++) {
+            ULONG *s2 = src, *d2 = dst;
+            int k = n;
+            while (k-- > 0)             /* a few longs: no call overhead */
+                *d2++ = *s2++;
+            src += wide ? 2 * cw : cw;
+            dst += rw;
+        }
+    }
+    WritePixelArray(rowbuf, 0, 0, rw * 4, rp, ox, oy + r * ch, rw, ch,
+                    RECTFMT_ARGB);
+    if (r == cy && cshape && cx < cols)
+        cursor_mark(cx, cy);            /* an underline or a bar on top */
+}
+
+/* Use the painter on this screen? And the buffers it needs. */
+void painter_setup(void)
+{
+    struct BitMap *bm = scr->RastPort.BitMap;
+    LONG need = (LONG)cols * cw * ch;
+    painter = FALSE;
+    planar = !CyberGfxBase || !GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX);
+    if (planar || GetCyberMapAttr(bm, CYBRMATTR_DEPTH) < 15)
+        return;
+    if (!ccache && !cache_alloc())
+        return;
+    if (need > rowbuf_n) {
+        if (rowbuf) FreeVec(rowbuf);
+        rowbuf = AllocVec(need * 4, MEMF_ANY);
+        rowbuf_n = rowbuf ? need : 0;
+    }
+    painter = rowbuf != NULL;
+    backdrop_make();                    /* the picture for this window */
+}
+
+/* After a font or colour change the pictures are out of date. */
+void painter_forget(void)
+{
+    cache_free();
+    if (win)
+        painter_setup();
+}
+
+/* ---- the scroll bar (from AmiClaude: see intuition-border-gadgets.md) - */
+
+struct Gadget vgad, agup, agdn;
+struct PropInfo vpi;
+static struct Image vim;
+APTR iup, idn;
+BOOL gadsok;
+int arrowheld, arrowticks;
+
+static APTR mksysi(ULONG which, int sysz)
+{
+    return NewObject(NULL, (STRPTR)"sysiclass", SYSIA_DrawInfo, (ULONG)dri,
+                     SYSIA_Which, which, SYSIA_Size, sysz, TAG_DONE);
+}
+
+static void mkarrow(struct Gadget *g, APTR im, int le, int te, int id)
+{
+    struct Image *i = (struct Image *)im;
+    g->LeftEdge = le;
+    g->TopEdge = te;
+    g->Width = i->Width;
+    g->Height = i->Height;
+    g->Flags = GFLG_RELRIGHT | GFLG_RELBOTTOM | GFLG_GADGIMAGE |
+               GFLG_GADGHCOMP;
+    g->Activation = GACT_RIGHTBORDER | GACT_RELVERIFY | GACT_IMMEDIATE;
+    g->GadgetType = GTYP_BOOLGADGET;
+    g->GadgetRender = im;
+    g->GadgetID = id;
+}
+
+void add_scroller(void)
+{
+    int brw = win->BorderRight, bbh = win->BorderBottom, vah = 0, vaw = 0;
+    int sysz = scr->Height >= 400 ? SYSISIZE_MEDRES : SYSISIZE_LOWRES;
+    int n = 1;
+    APTR sz = mksysi(SIZEIMAGE, sysz);
+    if (sz) {
+        if (((struct Image *)sz)->Height > bbh)
+            bbh = ((struct Image *)sz)->Height;
+        DisposeObject(sz);
+    }
+    iup = mksysi(UPIMAGE, sysz);
+    idn = mksysi(DOWNIMAGE, sysz);
+    if (iup && idn) {
+        vaw = ((struct Image *)iup)->Width;
+        vah = ((struct Image *)iup)->Height;
+    }
+    memset(&vpi, 0, sizeof vpi);
+    vpi.Flags = AUTOKNOB | FREEVERT | PROPNEWLOOK | PROPBORDERLESS;
+    vpi.VertBody = 0xFFFF;
+    memset(&vgad, 0, sizeof vgad);
+    vgad.LeftEdge = -(brw - 5);
+    vgad.TopEdge = win->BorderTop + 1;
+    vgad.Width = brw - 8;
+    vgad.Height = -(win->BorderTop + bbh + 2 + 2 * vah);
+    vgad.Flags = GFLG_RELRIGHT | GFLG_RELHEIGHT;
+    vgad.Activation = GACT_RELVERIFY | GACT_IMMEDIATE | GACT_RIGHTBORDER |
+                      GACT_FOLLOWMOUSE;
+    vgad.GadgetType = GTYP_PROPGADGET;
+    vgad.GadgetRender = (APTR)&vim;
+    vgad.SpecialInfo = (APTR)&vpi;
+    vgad.GadgetID = 1;
+    if (vah) {
+        int vx = vgad.LeftEdge + (vgad.Width - vaw) / 2;
+        memset(&agup, 0, sizeof agup);
+        memset(&agdn, 0, sizeof agdn);
+        mkarrow(&agup, iup, vx, -(bbh + 2 * vah - 1), 2);
+        mkarrow(&agdn, idn, vx, -(bbh + vah - 1), 3);
+        vgad.NextGadget = &agup;
+        agup.NextGadget = &agdn;
+        n = 3;
+    }
+    AddGList(win, &vgad, -1, n, NULL);
+    RefreshWindowFrame(win);
+    gadsok = TRUE;
+}
+
+/* The scroll bar's knob, or full screen's place bar, says where we are. */
+void update_knob(void)
+{
+    LONG total = vt_history(vt) + rows, top = vt_history(vt) - back;
+    if (fullscreen && win) {
+        int x0 = win->Width - POSBAR, y0 = oy, h = rows * ch, a, b;
+        if (backdrop)
+            backdrop_put(x0 - 1, y0, win->Width - x0 + 1, h);
+        else {
+            apen(defbg);
+            RectFill(rp, x0 - 1, y0, win->Width - 1, y0 + h - 1);
+        }
+        if (vt_history(vt) > 0) {
+            a = y0 + (LONG)h * top / total;
+            b = y0 + (LONG)h * (top + rows) / total - 1;
+            if (b < a + 3) b = a + 3;
+            apen(mix(defbg, deffg, 15));
+            RectFill(rp, x0, y0, win->Width - 3, y0 + h - 1);
+            apen(mix(defbg, deffg, 60));
+            RectFill(rp, x0, a, win->Width - 3, b);
+        }
+        return;
+    }
+    if (!gadsok || (vpi.Flags & KNOBHIT))
+        return;
+    NewModifyProp(&vgad, win, NULL, vpi.Flags, 0,
+                  total > rows ? (0xFFFFUL * top) / (total - rows) : 0, 0,
+                  (0xFFFFUL * rows) / total, 1);
+}
+
+/* ---- layout ------------------------------------------------------------ */
+
+/* The tab bar: a row of names above the text, while there are tabs. */
+int tabbar_h(void)
+{
+    return ntabs > 1 && font ? font->tf_YSize + 4 : 0;
+}
+
+void layout_and_resize(void)
+{
+    int w, h, i;
+    ox = win->BorderLeft + 2;
+    oy = win->BorderTop + 1 + tabbar_h();
+    w = win->Width - ox - win->BorderRight - 2 -
+        (fullscreen ? POSBAR + 2 : 0);
+    h = win->Height - win->BorderTop - win->BorderBottom - 2 - tabbar_h();
+    cols = w / cw;
+    rows = h / ch;
+    if (cols < 10) cols = 10;
+    if (rows < 3) rows = 3;
+    for (i = 0; i < ntabs; i++)         /* all tabs share the window */
+        if (tabs[i]->t_vt && (cols != vt_cols(tabs[i]->t_vt) ||
+                            rows != vt_rows(tabs[i]->t_vt)))
+            vt_resize(tabs[i]->t_vt, cols, rows);
+}
+
+void tab_label(struct Tab *t, char *out)
+{
+    if (t->t_local)
+        strcpy(out, "Shell");
+    else if (t->t_bookname[0])
+        strcpy(out, t->t_bookname);
+    else if (t->t_dialhost[0]) {
+        strcpy(out, t->t_sshmode ? "ssh " : "");
+        strncat(out, t->t_dialhost, 40);
+    } else
+        strcpy(out, "relay");
+}
+
+static void draw_tabbar(void)
+{
+    int h = tabbar_h(), x0 = win->BorderLeft, y0 = win->BorderTop;
+    int x1 = win->Width - win->BorderRight - 1, wd = x1 - x0 + 1, i;
+    if (!h)
+        return;
+    planes_full();
+    rp_forget();
+    apen(mix(defbg, deffg, 12));
+    RectFill(rp, x0, y0, x1, y0 + h - 1);
+    SetFont(rp, font);
+    SetSoftStyle(rp, 0, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
+    for (i = 0; i < ntabs; i++) {
+        char label[64], t[72];
+        /* the width shared equally: a half each, a third each... */
+        int sx = x0 + i * wd / ntabs, slot = x0 + (i + 1) * wd / ntabs - sx;
+        int n, fit;
+        BOOL on = tabs[i] == shown;
+        tab_label(tabs[i], label);
+        t[0] = '1' + i;
+        t[1] = ' ';
+        strcpy(t + 2, label);
+        apen(on ? defbg : mix(defbg, deffg, 12));
+        RectFill(rp, sx + 1, y0 + 1, sx + slot - 2, y0 + h - 1);
+        apen(on ? deffg : mix(defbg, deffg, 55));
+        bpen(on ? defbg : mix(defbg, deffg, 12));
+        SetDrMd(rp, JAM2);
+        n = strlen(t);
+        fit = (slot - 8) / (font->tf_XSize ? font->tf_XSize : 8);
+        if (n > fit) n = fit;
+        Move(rp, sx + 4, y0 + 2 + font->tf_Baseline);
+        Text(rp, (STRPTR)t, n > 0 ? n : 0);
+    }
+    if (usett)
+        tt_attach();                    /* the window's font for TrueType */
+    planes_reset();
+    rp_forget();
+}
+
+/* ---- a picture behind the text --------------------------------------- */
+
+struct Library *DataTypesBase;
+static ULONG *ld_buf;                   /* the loader's result */
+static LONG ld_w, ld_h;
+static const char *ld_path;
+
+/* Read a picture whole, as ARGB, through datatypes (picture.datatype V43:
+ * PDTM_READPIXELARRAY), on the stack it was given. */
+static void __attribute__((noinline)) load_pic_(void)
+{
+    Object *o;
+    struct BitMapHeader *bmh = NULL;
+    LONG y;
+    ld_buf = NULL;
+    if (!DataTypesBase)
+        DataTypesBase = OpenLibrary((STRPTR)"datatypes.library", 39);
+    if (!DataTypesBase)
+        return;
+    o = NewDTObject((APTR)ld_path, DTA_SourceType, DTST_FILE,
+                    DTA_GroupID, GID_PICTURE, PDTA_DestMode, PMODE_V43,
+                    PDTA_Remap, FALSE, TAG_DONE);
+    if (!o)
+        return;
+    DoDTMethod(o, NULL, NULL, DTM_PROCLAYOUT, NULL, 1);
+    GetDTAttrs(o, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE);
+    if (bmh && bmh->bmh_Width > 0 && bmh->bmh_Height > 0) {
+        ld_w = bmh->bmh_Width;
+        ld_h = bmh->bmh_Height;
+        ld_buf = AllocVec(ld_w * ld_h * 4, MEMF_ANY);
+        for (y = 0; ld_buf && y < ld_h; y++)
+            if (!DoMethod(o, PDTM_READPIXELARRAY, (ULONG)(ld_buf + y * ld_w),
+                          PBPAFMT_ARGB, ld_w * 4, 0, y, ld_w, 1)) {
+                FreeVec(ld_buf);
+                ld_buf = NULL;
+            }
+    }
+    DisposeDTObject(o);
+}
+
+/* The datatype classes run on the caller's stack and fail quietly on a
+ * small one (Knowledge/amiga/datatypes-and-media.md): a 64K stack of our
+ * own when ours is smaller. */
+BOOL load_picture(const char *path)
+{
+    struct Task *me = FindTask(NULL);
+    LONG have = (char *)me->tc_SPUpper - (char *)me->tc_SPLower;
+    ld_path = path;
+    if (have >= 32768)
+        load_pic_();
+    else {
+        static struct StackSwapStruct sss;
+        UBYTE *stk = AllocVec(65536, MEMF_ANY);
+        if (!stk)
+            return FALSE;
+        sss.stk_Lower = stk;
+        sss.stk_Upper = (ULONG)(stk + 65536);
+        sss.stk_Pointer = (APTR)(stk + 65536);
+        StackSwap(&sss);
+        load_pic_();
+        StackSwap(&sss);
+        FreeVec(stk);
+    }
+    if (!ld_buf)
+        return FALSE;
+    if (bgsrc)
+        FreeVec(bgsrc);
+    bgsrc = ld_buf;
+    bgsw = ld_w;
+    bgsh = ld_h;
+    return TRUE;
+}
+
+void backdrop_free(void)
+{
+    if (backdrop)
+        FreeVec(backdrop);
+    backdrop = NULL;
+}
+
+/* The window's inner area: the picture covering it (centred, cut, not
+ * stretched out of shape), mixed into the background colour. */
+void backdrop_make(void)
+{
+    LONG x, y, sx0, sy0, scw, sch;
+    backdrop_free();
+    if (!painter || !bgsrc || !win || bgsee <= 0)
+        return;
+    bkx = win->BorderLeft;
+    bky = win->BorderTop;
+    bkw = win->Width - win->BorderLeft - win->BorderRight;
+    bkh = win->Height - win->BorderTop - win->BorderBottom;
+    if (bkw <= 0 || bkh <= 0)
+        return;
+    backdrop = AllocVec(bkw * bkh * 4, MEMF_ANY);
+    if (!backdrop)
+        return;
+    /* cover: the part of the picture with the window's shape */
+    if (bgsw * bkh > bgsh * bkw) {
+        sch = bgsh;
+        scw = bgsh * bkw / bkh;
+    } else {
+        scw = bgsw;
+        sch = bgsw * bkh / bkw;
+    }
+    sx0 = (bgsw - scw) / 2;
+    sy0 = (bgsh - sch) / 2;
+    for (y = 0; y < bkh; y++) {
+        const ULONG *srow = bgsrc + (sy0 + y * sch / bkh) * bgsw + sx0;
+        ULONG *d = backdrop + y * bkw;
+        for (x = 0; x < bkw; x++) {
+            ULONG p = srow[x * scw / bkw], o = 0;
+            int sh;
+            for (sh = 0; sh <= 16; sh += 8) {
+                int a = (defbg >> sh) & 255, b = (p >> sh) & 255;
+                o |= (ULONG)(a + (b - a) * bgsee / 100) << sh;
+            }
+            d[x] = o;
+        }
+    }
+}
+
+/* The backdrop's piece at window x,y, w x h, onto the window. */
+static void backdrop_put(LONG x, LONG y, LONG w, LONG h)
+{
+    if (!backdrop || x < bkx || y < bky || x + w > bkx + bkw ||
+        y + h > bky + bkh)
+        return;
+    WritePixelArray(backdrop, x - bkx, y - bky, bkw * 4, rp, x, y, w, h,
+                    RECTFMT_ARGB);
+}
+
+void redraw_all(void)
+{
+    int r;
+    VtChanges chg;
+    forget_shown();
+    rp_forget();
+    planes_full();
+    if (backdrop)
+        backdrop_put(bkx, bky, bkw, bkh);
+    else {
+        apen(defbg);
+        RectFill(rp, win->BorderLeft, win->BorderTop,
+                 win->Width - win->BorderRight - 1,
+                 win->Height - win->BorderBottom - 1);
+    }
+    planes_reset();                     /* all background: no plane yet */
+    draw_tabbar();
+    vt_take_changes(vt, &chg);
+    curx = cury = -1;
+    for (r = 0; r < rows; r++)
+        draw_row(r);
+    draw_cursor(TRUE);
+    update_knob();
+}
+
+/* Bring the window up to date with the emulator: one blit for a scroll,
+ * then only the rows that changed. */
+void refresh(void)
+{
+    VtChanges chg;
+    int r;
+    static int syncwait;
+    /* the program is between "begin" and "end" of a frame (2026): show
+     * the finished one - but never hold the window more than ~8 frames */
+    if (vt_sync(vt) && syncwait < 8) {
+        syncwait++;
+        owed = TRUE;
+        con_arm_render(20000);
+        return;
+    }
+    syncwait = 0;
+    if (!vt_take_changes(vt, &chg))
+        return;
+    rp_forget();
+    if (sel_on && (chg.all || chg.scroll_n)) {
+        sel_on = sel_drag = FALSE;      /* the text under it moved */
+        if (!chg.all) {
+            int r;
+            for (r = 0; r < rows; r++)  /* repaint where it was */
+                ((uint8_t *)chg.dirty)[r] = 1, ((uint16_t *)chg.x0)[r] = 0,
+                ((uint16_t *)chg.x1)[r] = cols - 1;
+        }
+    }
+    draw_cursor(FALSE);
+    flood = chg.all || chg.scroll_n != 0;
+#ifdef PROFILE
+    if (chg.all || back > 0) pf_nall++;
+    if (chg.scroll_n) pf_nscroll++;
+    for (r = 0; r < rows; r++) if (chg.dirty[r]) pf_nrows++;
+#endif
+    if (painter) {
+        /* nothing is ever scrolled on screen: the rows a scroll moved
+         * are painted again (cheap), the rest only if they changed */
+        int y0 = chg.scroll_n ? chg.scroll_top : rows, y1 = chg.scroll_bottom;
+        for (r = 0; r < rows; r++)
+            if (chg.all || back > 0 || chg.dirty[r] || (r >= y0 && r <= y1))
+                paint_row(r);
+    } else if (chg.all || back > 0) {
+        for (r = 0; r < rows; r++)
+            draw_row(r);
+    } else {
+        if (chg.scroll_n) {
+            bpen(defbg);
+            PF_START(ts);
+            ScrollRaster(rp, 0, chg.scroll_n * ch, win->BorderLeft,
+                         oy + chg.scroll_top * ch, area_right(),
+                         oy + (chg.scroll_bottom + 1) * ch - 1);
+            PF_ADD(pf_scroll, ts);
+            shift_shown(chg.scroll_top, chg.scroll_bottom, chg.scroll_n);
+        }
+        PF_START(tr);
+        for (r = 0; r < rows; r++)
+            if (chg.dirty[r])
+                draw_span(r, chg.x0[r], chg.x1[r]);
+        PF_ADD(pf_rows, tr);
+    }
+    {
+        PF_START(tc);
+        draw_cursor(TRUE);
+        PF_ADD(pf_cur, tc);
+    }
+    {
+        PF_START(tk);
+        update_knob();
+        PF_ADD(pf_knob, tk);
+    }
+}
+
+/* What came from the host, as it came (escape codes and all: a BBS
+ * screen plays back from it), into the tab's log. */
+void log_bytes(const UBYTE *b, LONG n)
+{
+    if (T->t_log)
+        FWrite(T->t_log, (APTR)b, 1, n);
+}
