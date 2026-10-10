@@ -456,6 +456,23 @@ static void move_to(Vt *v, int x, int y)
     v->pending = 0;
 }
 
+/* Up (n < 0) or down n lines: from inside the scroll region the cursor
+ * stops at its margin, from outside at the screen's edge (xterm's rule
+ * for CUU, CUD, CNL, CPL) */
+static void move_lines(Vt *v, int n)
+{
+    int y = v->y + n, lim;
+    if (n < 0) {
+        lim = v->y >= v->top ? v->top : 0;
+        if (y < lim) y = lim;
+    } else {
+        lim = v->y <= v->bot ? v->bot : v->rows - 1;
+        if (y > lim) y = lim;
+    }
+    v->y = y;
+    v->pending = 0;
+}
+
 static void save_cursor(Vt *v)
 {
     Saved *s = &v->saved[v->alt];
@@ -877,14 +894,13 @@ static void csi(Vt *v, int final)
 
     switch (final) {
     case '@': insert_chars(v, n); break;
-    case 'A': move_to(v, v->x, v->y - n - (v->origin ? v->top : 0)); break;
-    case 'B': case 'e':
-        move_to(v, v->x, v->y + n - (v->origin ? v->top : 0)); break;
+    case 'A': move_lines(v, -n); break;
+    case 'B': case 'e': move_lines(v, n); break;
     case 'C': case 'a': move_to(v, v->x + n,
                                 v->y - (v->origin ? v->top : 0)); break;
     case 'D': move_to(v, v->x - n, v->y - (v->origin ? v->top : 0)); break;
-    case 'E': move_to(v, 0, v->y + n - (v->origin ? v->top : 0)); break;
-    case 'F': move_to(v, 0, v->y - n - (v->origin ? v->top : 0)); break;
+    case 'E': v->x = 0; move_lines(v, n); break;
+    case 'F': v->x = 0; move_lines(v, -n); break;
     case 'G': case '`':
         move_to(v, n - 1, v->y - (v->origin ? v->top : 0)); break;
     case 'H': case 'f': move_to(v, P(1, 1) - 1, P(0, 1) - 1); break;

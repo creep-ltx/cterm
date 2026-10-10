@@ -222,6 +222,29 @@ int main(void)
               "wider: the history's wrapped line is one again");
         vt_free(f);
     }
+    {   /* CUU/CUD stop at a margin from inside the region, not outside */
+        Vt *m = vt_new(20, 10, 0);
+        int x, y, vis;
+        feed(m, "\x1b[3;6r\x1b[5;4H\x1b[9A");
+        vt_cursor(m, &x, &y, &vis);
+        CHECK(y == 2 && x == 3, "CUU inside: stops at the top margin");
+        feed(m, "\x1b[9B");
+        vt_cursor(m, &x, &y, &vis);
+        CHECK(y == 5, "CUD inside: stops at the bottom margin");
+        feed(m, "\x1b[2;1H\x1b[9A");
+        vt_cursor(m, &x, &y, &vis);
+        CHECK(y == 0, "CUU above the region: to the top line");
+        feed(m, "\x1b[2;1H\x1b[9B");
+        vt_cursor(m, &x, &y, &vis);
+        CHECK(y == 5, "CUD above the region: stops at its bottom");
+        feed(m, "\x1b[8;5H\x1b[9E");
+        vt_cursor(m, &x, &y, &vis);
+        CHECK(y == 9 && x == 0, "CNL below the region: to the last line");
+        feed(m, "\x1b[8;5H\x1b[9F");
+        vt_cursor(m, &x, &y, &vis);
+        CHECK(y == 2 && x == 0, "CPL below the region: stops at its top");
+        vt_free(m);
+    }
     {   /* CHT stops at the last column; a huge OSC number is no title */
         Vt *t = vt_new(20, 3, 0);
         int x, y, vis, ch;
