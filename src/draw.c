@@ -1699,8 +1699,10 @@ void layout_and_resize(void)
     if (rows < 3) rows = 3;
     for (i = 0; i < ntabs; i++)         /* all tabs share the window */
         if (tabs[i]->t_vt && (cols != vt_cols(tabs[i]->t_vt) ||
-                            rows != vt_rows(tabs[i]->t_vt)))
+                            rows != vt_rows(tabs[i]->t_vt))) {
             vt_resize(tabs[i]->t_vt, cols, rows);
+            con_resized(tabs[i]->con);  /* the line being typed moved */
+        }
 }
 
 void tab_label(struct Tab *t, char *out)

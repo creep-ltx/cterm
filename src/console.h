@@ -25,6 +25,7 @@ void con_keys(struct Con *c, const UBYTE *b, LONG n);  /* typed bytes */
 void con_reply(struct Con *c, const UBYTE *b, LONG n); /* DSR replies... */
 BOOL con_paste(struct Con *c, const UBYTE *b, LONG n); /* as text */
 void con_close_gadget(struct Con *c);   /* the window's close gadget */
+void con_resized(struct Con *c);        /* after the window's size changed */
 void con_free(struct Con *c);           /* after con_alive() is FALSE */
 void con_retire(struct Con *c);         /* its tab closes: all but the port */
 void con_spent_poll(void);              /* closed tabs' ports: refuse */

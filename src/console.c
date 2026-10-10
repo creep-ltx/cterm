@@ -304,6 +304,23 @@ static void begin_line(struct Con *c)
     c->y0 = term_cursor_y(c->user);
 }
 
+/* The window changed size: the emulator moved the text (and the line
+ * being typed with it), so where the line starts is found again from the
+ * cursor, which sits lcur letters into it - not kept from before, or the
+ * Shell's answer lands rows away from the line. */
+void con_resized(struct Con *c)
+{
+    int cols, p;
+    if (!c || !c->editing)
+        return;
+    cols = term_cols(c->user);
+    p = term_cursor_y(c->user) * cols + term_cursor_x(c->user) - c->lcur;
+    if (p < 0)
+        p = 0;
+    c->y0 = p / cols;
+    c->x0 = p % cols;
+}
+
 /* Draw the line from where it starts, and put the cursor at lcur. */
 static void redraw_line(struct Con *c)
 {
