@@ -655,7 +655,7 @@ call that uses ~0.5 KB (the Shell itself is a process of its own).
 
 | | 0.3b7 | 0.3b8 | 0.3b12 | 0.3b13 |
 |---|---|---|---|---|
-| CTerm (bytes) | 220,024 | 227,812 | 251,788 | 198,556 |
+| CTerm (bytes) | 202,960 | 231,176 | 251,788 | 198,556 |
 | free, CTerm idle, stock A1200 (2 MB chip) | 85,752 | 60,056 | 39,960 | 119,408 |
 | free, CTerm idle, A1200 + 8 MB fast | | | 8,413,512 | 8,496,696 |
 | conbench, stock A1200 | 30.3 s | 96.4 s | fails/91-118 s | 30.7 s (now refused) |
