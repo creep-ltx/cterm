@@ -2324,10 +2324,11 @@ void planes_restore(void)
 
 /* ---- layout ------------------------------------------------------------ */
 
-/* The tab bar: a row of names above the text, while there are tabs. */
+/* The tab bar: a row of names above the text, while there are tabs -
+ * not with panes (the user: in pane mode the tabs are on show already) */
 int tabbar_h(void)
 {
-    return ntabs > 1 && font ? font->tf_YSize + 4 : 0;
+    return ntabs > 1 && npanes < 2 && font ? font->tf_YSize + 4 : 0;
 }
 
 void layout_and_resize(void)
