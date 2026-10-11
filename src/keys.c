@@ -168,11 +168,21 @@ BOOL key(struct IntuiMessage *m)
     }
     if (code & IECODE_UP_PREFIX)
         return TRUE;
-    if ((a = keys_find(KC_WINDOW, k)))
-        return window_key(a);           /* CTerm's own, in every tab */
+    if ((a = keys_find(KC_WINDOW, k)) &&
+        !(vt_alt_screen(vt) && a >= KA_PAGEUP && a <= KA_HISTEND))
+        return window_key(a);           /* CTerm's own, in every tab; the
+                                         * history's not while a program
+                                         * has its own screen (no history
+                                         * there): Shift+arrows are its */
     if (local) {
         /* the Amiga Shell: its line editor's keys ([shell]) while it
          * edits a line; else the keymap's own bytes, as CON: gives them */
+        if ((code == 0x7A || code == 0x7B) && mouse_to_host(0) && !back) {
+            int r, c;                   /* a program that asked for the mouse */
+            mouse_cell(win->MouseX, win->MouseY, &r, &c);
+            mouse_send(code == 0x7A ? 64 : 65, r, c, FALSE, q);
+            return TRUE;
+        }
         if (code == 0x7A) { scroll_view(back + 3); return TRUE; }
         if (code == 0x7B) { scroll_view(back - 3); return TRUE; }
         if (T->con && !con_raw(T->con) && (a = keys_find(KC_SHELL, k))) {
@@ -362,8 +372,19 @@ static BOOL mreporting;                 /* ReportMouse is on */
 BOOL mouse_to_host(UWORD q)
 {
     int sgr;
-    return !local && linked && vt_mouse(vt, &sgr) &&
+    /* a Shell tab's program too (Ahiru inside the terminal), while it
+     * has the console raw: a Shell left with the mode on gets nothing */
+    return (local ? con_raw(T->con) : linked) && vt_mouse(vt, &sgr) &&
            !(q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT));
+}
+
+/* A report to the tab's program: its host, or the Shell tab's reader. */
+static void mouse_out(const UBYTE *b, LONG n)
+{
+    if (local)
+        con_reply(T->con, b, n);
+    else
+        send_data((UBYTE *)b, n);
 }
 
 /* b: 0 left, 1 middle, 2 right, 3 release (old form), +32 motion, 64/65
@@ -388,7 +409,7 @@ void mouse_send(int b, int r, int c, BOOL release, UWORD q)
         strcat(out, ";");
         numstr_cat(out, r + 1);
         strcat(out, release ? "m" : "M");
-        send_data((UBYTE *)out, strlen(out));
+        mouse_out((UBYTE *)out, strlen(out));
     } else {
         UBYTE o[6];
         if (c + 1 + 32 > 255 || r + 1 + 32 > 255)
@@ -397,7 +418,7 @@ void mouse_send(int b, int r, int c, BOOL release, UWORD q)
         o[3] = 32 + (release && !(b & 64) ? 3 | (b & ~3) : b);
         o[4] = 32 + c + 1;
         o[5] = 32 + r + 1;
-        send_data(o, 6);
+        mouse_out(o, 6);
     }
 }
 

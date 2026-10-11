@@ -90,6 +90,16 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    Verified in FS-UAE with topaz 8 (own 8-bit screen) and Noto Sans Mono
    12 (Workbench window): all 256 patterns and a btop-style graph; on
    the A1200 too (RTG 24-bit, Noto Sans Mono 16, 2-pixel dots).
+1f. **For programs inside the terminal (0.3b28, with Ahiru 0.3b1's
+   terminal mode):** a Shell tab's raw program gets xterm mouse reports
+   (mouse_to_host: local tabs while con_raw; mouse_out -> con_reply),
+   the wheel as reports too; Shift+arrows and the other history keys go
+   to the program while it is on the alternate screen (no history
+   there); CSI 14/16/18 t are answered in Shell tabs (the Amiga's page
+   length meaning was ignored anyway). Key bytes in a Shell tab (seen
+   with a raw reader): arrows 9B A-D, Shift+Left 9B 20 41, F1-F10
+   9B 0~ - 9B 9~, Help 9B ?~, Esc 1B, Backspace 08, Del 7F. Verified in
+   FS-UAE with Ahiru inside CTerm (keys, clicks, wheel, panes, sixel).
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).

@@ -1119,7 +1119,12 @@ static void csi(Vt *v, int final)
                 }
             return;
         }
-        if (!v->inter && !v->priv &&
+        if (!v->inter && !v->priv && final == 't' &&
+            (P(0, 0) == 14 || P(0, 0) == 16 || P(0, 0) == 18))
+            ;                   /* xterm's size questions (the terminal
+                                 * programs ask them): answered below -
+                                 * as page lengths they would be ignored */
+        else if (!v->inter && !v->priv &&
             (final == 't' || final == 'u' || final == 'x' || final == 'y'))
             return;             /* page/line length, offsets: the window's */
         if (!v->priv && final == 'n' && P(0, 0) == 6) {
