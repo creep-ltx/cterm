@@ -88,7 +88,8 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    square dots on the cell grid (dot = min(cw/4, ch/8), at least 1 px),
    in the planar special path and make_cell (RTG and planar painters).
    Verified in FS-UAE with topaz 8 (own 8-bit screen) and Noto Sans Mono
-   12 (Workbench window): all 256 patterns and a btop-style graph.
+   12 (Workbench window): all 256 patterns and a btop-style graph; on
+   the A1200 too (RTG 24-bit, Noto Sans Mono 16, 2-pixel dots).
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).
