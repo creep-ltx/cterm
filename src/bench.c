@@ -1,5 +1,6 @@
 /*
- * bench - the speed test in the Project menu.
+ * bench - the speed test in the Project menu. A part of its own
+ * (PROGDIR:Parts/SpeedTest): loaded for the test, gone after it.
  */
 #include "cterm.h"
 
@@ -113,7 +114,7 @@ static void bench_primitives(void)
 }
 
 /* Full redraws of a busy screen, timed: how fast this font draws here. */
-void speed_test(void)
+static void bench_run(void)
 {
     struct DateStamp a, b;
     LONG ticks, i, r;
@@ -157,4 +158,10 @@ void speed_test(void)
     (void)num;
     say(line);
     bench_primitives();
+}
+
+APTR part_main(void)
+{
+    static struct SpeedPart p = { bench_run };
+    return &p;
 }

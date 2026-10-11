@@ -109,11 +109,21 @@ static int pick(const char *const *names, int n, const char *v)
     return 0;
 }
 
+/* The book from its file the first time something needs it (not at
+ * CTerm's start: a person who never calls pays nothing). */
+static BOOL loaded;
+void book_use(void)
+{
+    if (!loaded)
+        book_load();
+}
+
 void book_load(void)
 {
     BPTR f = Open((STRPTR)BOOK_FILE, MODE_OLDFILE);
     char line[300];
     BookEntry *e = NULL;
+    loaded = TRUE;
     nbook = 0;
     if (!f)
         return;
@@ -249,6 +259,7 @@ BOOL book_save(void)
 int book_find(const char *name)
 {
     int i;
+    book_use();
     for (i = 0; i < nbook; i++)
         if (!stricmp(book[i].name, (char *)name))
             return i;

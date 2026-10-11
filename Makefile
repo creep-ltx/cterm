@@ -4,7 +4,7 @@
 CC      = $(HOME)/opt/amiga/bin/m68k-amigaos-gcc
 CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -Wall -Wno-pointer-sign -Iinclude
 
-all: CTerm CTermSSH protocols test
+all: CTerm CTermSSH protocols parts test
 
 ifdef PROFILE
 CFLAGS += -DPROFILE
@@ -17,8 +17,8 @@ TP = third_party
 SSHINC = -I$(TP)/amiga -I$(TP)/AmiSSL/Developer/include -I$(TP)/libssh2-1.11.1/include
 SSHLIB = $(TP)/lib/libssh2.a -L$(TP)/AmiSSL/Developer/lib/AmigaOS3 -lamisslstubs -lm
 
-SRC = src/main.c src/hide.c src/pane.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c src/bookwin.c src/serial.c src/serwin.c src/rexx.c
-HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h src/serial.h src/sermod.h
+SRC = src/main.c src/hide.c src/pane.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c src/serial.c src/classes.c src/parts.c
+HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h src/serial.h src/sermod.h src/part.h src/partlist.h src/partuse.h
 
 # CTerm: everything but ssh (small enough for a stock A1200)
 # -flto: the parts (split into files) inlined across files again - the
@@ -70,7 +70,38 @@ Protocols/Serial: src/sermod.c src/sermod.h src/serial.h
 	mkdir -p Protocols
 	$(CC) $(MODFLAGS) -Wall src/sermod.c -o $@
 
-deploy: CTerm CTermSSH CTermTour protocols
+# The parts (part.h): windows and features loaded when used, from
+# PROGDIR:Parts/, gone when done with. A part is CTerm's own source built
+# with -DPART: it reaches CTerm only through partlist.h's names
+# (partuse.h, made from it here). No C start-up: partstart.c is the way
+# in. A part must not get a library base of its own from libnix (it
+# would be NULL: nothing opens it): checked after the link.
+NM = $(HOME)/opt/amiga/bin/m68k-amigaos-nm
+PARTFLAGS = -Os -m68020 -noixemul -nostartfiles -fomit-frame-pointer -Wall -Wno-pointer-sign -Iinclude -DPART
+PARTHDR = src/cterm.h src/part.h src/partlist.h src/partuse.h src/vt.h src/serial.h src/book.h
+PARTS = Parts/Settings Parts/PhoneBook Parts/ARexx Parts/Call Parts/Transfers Parts/SpeedTest
+parts: $(PARTS)
+src/partuse.h: src/partlist.h
+	sed -n -e 's/^V(\(.*\))$$/#define \1 (*penv->\1)/p' -e 's/^A(\(.*\))$$/#define \1 (penv->\1)/p' -e 's/^F(\(.*\))$$/#define \1 (penv->\1)/p' $< > $@
+define partlink
+	mkdir -p Parts
+	$(CC) $(PARTFLAGS) src/partstart.c $(1) -o $@
+	@if $(NM) $@ | grep -E ' D _[A-Za-z]+Base$$'; then echo "$@: libnix's library base (above)"; rm -f $@; false; fi
+endef
+Parts/Settings: src/partstart.c src/setwin.c src/serwin.c $(PARTHDR)
+	$(call partlink,src/setwin.c src/serwin.c)
+Parts/PhoneBook: src/partstart.c src/bookwin.c src/serwin.c $(PARTHDR)
+	$(call partlink,src/bookwin.c src/serwin.c)
+Parts/ARexx: src/partstart.c src/rexx.c $(PARTHDR)
+	$(call partlink,src/rexx.c)
+Parts/Call: src/partstart.c src/callwin.c $(PARTHDR)
+	$(call partlink,src/callwin.c)
+Parts/Transfers: src/partstart.c src/xwin.c $(PARTHDR)
+	$(call partlink,src/xwin.c)
+Parts/SpeedTest: src/partstart.c src/bench.c $(PARTHDR)
+	$(call partlink,src/bench.c)
+
+deploy: CTerm CTermSSH CTermTour protocols parts
 	wasabi mkdir Work:Utils/CTerm 2>/dev/null || true
 	wasabi put CTerm Work:Utils/CTerm/CTerm
 	wasabi put CTermTour Work:Utils/CTerm/CTermTour
@@ -80,6 +111,8 @@ deploy: CTerm CTermSSH CTermTour protocols
 	wasabi put Protocols/XYmodem Work:Utils/CTerm/Protocols/XYmodem
 	wasabi put Protocols/Hydra Work:Utils/CTerm/Protocols/Hydra
 	wasabi put Protocols/Serial Work:Utils/CTerm/Protocols/Serial
+	wasabi mkdir Work:Utils/CTerm/Parts 2>/dev/null || true
+	for p in $(PARTS); do wasabi put $$p Work:Utils/CTerm/$$p || exit 1; done
 	wasabi mkdir Work:Utils/CTerm/Rexx 2>/dev/null || true
 	wasabi put rexx/bbs-login.rexx Work:Utils/CTerm/Rexx/bbs-login.rexx
 	wasabi put rexx/info.rexx Work:Utils/CTerm/Rexx/info.rexx
@@ -105,7 +138,7 @@ tests/shadow_test: tests/shadow_test.c src/vt.c src/vt.h
 	gcc -O2 -Wall -o tests/shadow_test tests/shadow_test.c src/vt.c
 
 clean:
-	rm -f tests/vtdump CTerm CTermSSH src/*.o
+	rm -f tests/vtdump CTerm CTermSSH src/*.o $(PARTS)
 
 # Zmodem against lrzsz on the PC (build lrzsz first: tests/zmodem_test.c)
 tests/zmodem_test: tests/zmodem_test.c src/zmodem.c src/xymodem.c src/xfer.h

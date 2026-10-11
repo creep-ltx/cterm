@@ -1,5 +1,8 @@
 /*
- * setwin - the settings window (OS 3.2's ReAction classes, in tabs).
+ * setwin - the settings window (OS 3.2's ReAction classes, in tabs). A
+ * part of its own (PROGDIR:Parts/Settings, with serwin.c): loaded when
+ * the window opens, gone when it closes. The tab last shown is CTerm's
+ * (set_page), kept for the next time.
  */
 #include "cterm.h"
 
@@ -7,6 +10,7 @@ static void open_settings_(void);
 static void close_settings_(void);
 static void settings_events_(void);
 
+static void set_close(void);
 static void set_attr(int id, ULONG tag, ULONG val);
 static ULONG get_attr(int id, ULONG tag);
 static Object *r_label(const char *t);
@@ -41,16 +45,6 @@ static void finish_settings(int how);
 static void finish_settings_(int how);
 static int settings_gadget(int id);
 
-__attribute__((noinline)) __stdargs APTR RNewObject(struct IClass *c,
-                                                    CONST_STRPTR id,
-                                                    ULONG tag1, ...)
-{
-    return NewObjectA(c, id, (struct TagItem *)&tag1);
-}
-__attribute__((noinline)) __stdargs ULONG RSetAttrs(APTR o, ULONG tag1, ...)
-{
-    return SetAttrsA(o, (struct TagItem *)&tag1);
-}
 /* ======================================================================
  * Settings: one window for the screen, the letters and the colours
  *
@@ -61,20 +55,11 @@ __attribute__((noinline)) __stdargs ULONG RSetAttrs(APTR o, ULONG tag1, ...)
  * ==================================================================== */
 
 
-/* OS 3.2's window classes: opened the first time the window opens. Given
- * a value, so libnix does not try to open them itself (by wrong names). */
-struct Library *WindowBase = NULL, *LayoutBase = NULL, *ClickTabBase = NULL,
-    *ChooserBase = NULL, *CheckBoxBase = NULL, *SliderBase = NULL,
-    *ButtonBase = NULL, *GetFileBase = NULL, *GetFontBase = NULL,
-    *GetScreenModeBase = NULL, *LabelBase = NULL, *ListBrowserBase = NULL,
-    *StringBase = NULL, *IntegerBase = NULL;
-
-Object *setobj, *sg[S_N];        /* the window object, its gadgets */
+static Object *setobj, *sg[S_N];        /* the window object, its gadgets */
 static Object *setlayout;               /* its top layout */
 static struct List settabs;             /* the tabs' names */
 static struct TextAttr setfont;         /* what the font button shows */
 static int setpart;                     /* 0 the text, 1 the background */
-static int setpage;                     /* the tab last shown */
 static int pend_mode, pend_depth;
 static ULONG pend_id;
 static LONG pend_w, pend_h;
@@ -84,14 +69,14 @@ static LONG like_w, like_h;             /* the Workbench's mode, size and */
 static int like_depth;                  /* colours (24 for a card's 32) */
 
 static struct {                         /* what Cancel goes back to */
-    int theme, ttsize, fontsize, linespace, bgsee;
-    char bgfile[256];
-    BOOL ownfg, ownbg, usett, s_utf8, pc, pcfont, altmeta;
-    ULONG myfg, mybg;
-    char ttfile[160], fontname[48];
-    char userkey[2], passkey[2], dldir[160], uldir[160];
-    SerLine serdef;
-    Modem modem;
+    int k_theme, k_ttsize, k_fontsize, k_linespace, k_bgsee;
+    char k_bgfile[256];
+    BOOL k_ownfg, k_ownbg, k_usett, k_s_utf8, k_pc, k_pcfont, k_altmeta;
+    ULONG k_myfg, k_mybg;
+    char k_ttfile[160], k_fontname[48];
+    char k_userkey[2], k_passkey[2], k_dldir[160], k_uldir[160];
+    SerLine k_serdef;
+    Modem k_modem;
 } snap;
 
 static STRPTR wherelabels[] = { (STRPTR)"Workbench window",
@@ -112,41 +97,6 @@ static STRPTR hlabels[] = { (STRPTR)"+++, command, DTR",
                             (STRPTR)"Dropping DTR", NULL };
 static char linetext[100];              /* what the Line button shows */
 static STRPTR themelabels[NTHEMES + 1];
-
-BOOL reaction_open(void)
-{
-    static const char *const name[] = {
-        "window.class", "gadgets/layout.gadget", "gadgets/clicktab.gadget",
-        "gadgets/chooser.gadget", "gadgets/checkbox.gadget",
-        "gadgets/slider.gadget", "gadgets/button.gadget",
-        "gadgets/getfile.gadget", "gadgets/getfont.gadget",
-        "gadgets/getscreenmode.gadget", "images/label.image",
-        "gadgets/listbrowser.gadget", "gadgets/string.gadget",
-        "gadgets/integer.gadget" };
-    struct Library **base[] = { &WindowBase, &LayoutBase, &ClickTabBase,
-        &ChooserBase, &CheckBoxBase, &SliderBase, &ButtonBase, &GetFileBase,
-        &GetFontBase, &GetScreenModeBase, &LabelBase, &ListBrowserBase,
-        &StringBase, &IntegerBase };
-    int i;
-    for (i = 0; i < 14; i++)
-        if (!*base[i] && !(*base[i] = OpenLibrary((STRPTR)name[i], 45)))
-            return FALSE;
-    return TRUE;
-}
-
-void reaction_close(void)
-{
-    struct Library **base[] = { &WindowBase, &LayoutBase, &ClickTabBase,
-        &ChooserBase, &CheckBoxBase, &SliderBase, &ButtonBase, &GetFileBase,
-        &GetFontBase, &GetScreenModeBase, &LabelBase, &ListBrowserBase,
-        &StringBase, &IntegerBase };
-    int i;
-    for (i = 0; i < 14; i++)
-        if (*base[i]) {
-            CloseLibrary(*base[i]);
-            *base[i] = NULL;
-        }
-}
 
 /* A gadget's attribute, changed in the open window / read. */
 static void set_attr(int id, ULONG tag, ULONG val)
@@ -408,7 +358,7 @@ static void close_settings_(void)
     struct Node *n;
     if (setobj) {
         if (sg[S_TABS])
-            setpage = get_attr(S_TABS, CLICKTAB_Current);
+            set_page = get_attr(S_TABS, CLICKTAB_Current);
         DisposeObject(setobj);          /* the window and every gadget */
         setobj = NULL;
     }
@@ -561,25 +511,25 @@ static void open_settings_(void)
     themelabels[NTHEMES] = NULL;
 
     tab_letters(FALSE);                     /* the controls show the person's */
-    snap.pcfont = pcfont;
-    snap.altmeta = altmeta;
-    snap.theme = theme;
-    snap.ownfg = ownfg; snap.ownbg = ownbg;
-    snap.myfg = myfg; snap.mybg = mybg;
-    snap.usett = usett; snap.ttsize = ttsize;
-    strcpy(snap.ttfile, ttfile);
-    strcpy(snap.fontname, fontname);
-    snap.fontsize = fontsize;
-    snap.linespace = linespace;
-    snap.s_utf8 = utf8; snap.pc = pcmode;
-    snap.bgsee = bgsee;
-    strcpy(snap.bgfile, bgfile);
-    strcpy(snap.userkey, userkey);
-    strcpy(snap.passkey, passkey);
-    strcpy(snap.dldir, dldir);
-    strcpy(snap.uldir, uldir);
-    snap.serdef = serdef;
-    snap.modem = modem;
+    snap.k_pcfont = pcfont;
+    snap.k_altmeta = altmeta;
+    snap.k_theme = theme;
+    snap.k_ownfg = ownfg; snap.k_ownbg = ownbg;
+    snap.k_myfg = myfg; snap.k_mybg = mybg;
+    snap.k_usett = usett; snap.k_ttsize = ttsize;
+    strcpy(snap.k_ttfile, ttfile);
+    strcpy(snap.k_fontname, fontname);
+    snap.k_fontsize = fontsize;
+    snap.k_linespace = linespace;
+    snap.k_s_utf8 = utf8; snap.k_pc = pcmode;
+    snap.k_bgsee = bgsee;
+    strcpy(snap.k_bgfile, bgfile);
+    strcpy(snap.k_userkey, userkey);
+    strcpy(snap.k_passkey, passkey);
+    strcpy(snap.k_dldir, dldir);
+    strcpy(snap.k_uldir, uldir);
+    snap.k_serdef = serdef;
+    snap.k_modem = modem;
     pend_mode = scrmode;
     pend_depth = owndepth;
     pend_id = ownmode;
@@ -598,7 +548,7 @@ static void open_settings_(void)
     pages = PageObject, PAGE_Add, (ULONG)page_screen(),
         PAGE_Add, (ULONG)page_text(), PAGE_Add, (ULONG)page_colours(),
         PAGE_Add, (ULONG)page_keys(), PAGE_Add, (ULONG)page_files(),
-        PAGE_Add, (ULONG)page_modem(), PAGE_Current, setpage, End;
+        PAGE_Add, (ULONG)page_modem(), PAGE_Current, set_page, End;
     buttons = HLayoutObject, LAYOUT_EvenSize, TRUE, End;
     r_add(buttons, r_button(S_SAVE, "_Save"), NULL);
     r_add(buttons, r_button(S_USE, "_Use"), NULL);
@@ -606,7 +556,7 @@ static void open_settings_(void)
     root = setlayout = VLayoutObject, LAYOUT_SpaceOuter, TRUE,
         LAYOUT_DeferLayout, TRUE, End;
     sg[S_TABS] = ClickTabObject, GA_ID, S_TABS, CLICKTAB_Labels,
-        (ULONG)&settabs, CLICKTAB_Current, setpage,
+        (ULONG)&settabs, CLICKTAB_Current, set_page,
         CLICKTAB_PageGroup, (ULONG)pages, End;
     if (root && sg[S_TABS]) {
         /* wide enough for every tab's name (the pages don't all say
@@ -636,7 +586,7 @@ static void open_settings_(void)
         if (root)
             DisposeObject(root);
         memset(sg, 0, sizeof sg);
-        close_settings();
+        set_close();
         return;
     }
     setobj = WindowObject, WA_Title, (ULONG)"CTerm Settings",
@@ -647,12 +597,12 @@ static void open_settings_(void)
     if (!setobj) {
         DisposeObject(root);
         memset(sg, 0, sizeof sg);
-        close_settings();
+        set_close();
         return;
     }
     setwin = (struct Window *)DoMethod(setobj, WM_OPEN);
     if (!setwin)
-        close_settings();
+        set_close();
 }
 
 /* Use (1), Save (2) or Cancel (3). */
@@ -695,36 +645,36 @@ static void finish_settings_(int how)
         modem.pause = get_attr(S_MPAUSE, INTEGER_Number);
         modem.answer = get_attr(S_MANSWER, GA_Selected) != 0;
     }
-    close_settings();
+    set_close();
     if (how == 3) {
-        BOOL letters = snap.usett != usett || snap.ttsize != ttsize ||
-                       strcmp(snap.ttfile, ttfile) ||
-                       strcmp(snap.fontname, fontname) ||
-                       snap.fontsize != fontsize ||
-                       snap.linespace != linespace;
-        theme = snap.theme;
-        serdef = snap.serdef;
-        modem = snap.modem;
-        pcfont = snap.pcfont;
-        altmeta = snap.altmeta;
-        ownfg = snap.ownfg; ownbg = snap.ownbg;
-        myfg = snap.myfg; mybg = snap.mybg;
-        if (snap.bgsee != bgsee || strcmp(snap.bgfile, bgfile)) {
-            BOOL other = strcmp(snap.bgfile, bgfile) != 0;
-            bgsee = snap.bgsee;
-            strcpy(bgfile, snap.bgfile);
+        BOOL letters = snap.k_usett != usett || snap.k_ttsize != ttsize ||
+                       strcmp(snap.k_ttfile, ttfile) ||
+                       strcmp(snap.k_fontname, fontname) ||
+                       snap.k_fontsize != fontsize ||
+                       snap.k_linespace != linespace;
+        theme = snap.k_theme;
+        serdef = snap.k_serdef;
+        modem = snap.k_modem;
+        pcfont = snap.k_pcfont;
+        altmeta = snap.k_altmeta;
+        ownfg = snap.k_ownfg; ownbg = snap.k_ownbg;
+        myfg = snap.k_myfg; mybg = snap.k_mybg;
+        if (snap.k_bgsee != bgsee || strcmp(snap.k_bgfile, bgfile)) {
+            BOOL other = strcmp(snap.k_bgfile, bgfile) != 0;
+            bgsee = snap.k_bgsee;
+            strcpy(bgfile, snap.k_bgfile);
             if (other)
                 picture_changed();      /* colours_changed draws it */
         }
-        if (snap.s_utf8 != utf8 || snap.pc != pcmode)
-            set_chars(snap.pc ? 2 : snap.s_utf8 ? 0 : 1);
+        if (snap.k_s_utf8 != utf8 || snap.k_pc != pcmode)
+            set_chars(snap.k_pc ? 2 : snap.k_s_utf8 ? 0 : 1);
         if (letters) {
-            usett = snap.usett;
-            ttsize = snap.ttsize;
-            strcpy(ttfile, snap.ttfile);
-            strcpy(fontname, snap.fontname);
-            fontsize = snap.fontsize;
-            linespace = snap.linespace;
+            usett = snap.k_usett;
+            ttsize = snap.k_ttsize;
+            strcpy(ttfile, snap.k_ttfile);
+            strcpy(fontname, snap.k_fontname);
+            fontsize = snap.k_fontsize;
+            linespace = snap.k_linespace;
             load_font();
             letters_changed();
         }
@@ -1005,9 +955,9 @@ static void settings_events_(void)
 
 /* The settings window's work on a deep stack: OS 3.2's classes want one,
  * and CTerm's own stays small for a stock A1200 (see deep_call). */
-void open_settings(void) { deep_call(open_settings_); }
-void close_settings(void) { deep_call(close_settings_); }
-void settings_events(void) { deep_call(settings_events_); }
+static void set_open(void) { deep_call(open_settings_); }
+static void set_close(void) { deep_call(close_settings_); }
+static void set_events(void) { deep_call(settings_events_); }
 
 /* CTerm ends with the window open: as its close gadget, Cancel - so the
  * prefs are saved (save_prefs waits while it is open) as they were. */
@@ -1016,4 +966,11 @@ static void settings_cancel_(void)
     if (setobj)
         finish_settings(3);
 }
-void settings_cancel(void) { deep_call(settings_cancel_); }
+static void set_cancel(void) { deep_call(settings_cancel_); }
+
+APTR part_main(void)
+{
+    static struct SetPart p = { set_open, set_close,
+                                set_events, set_cancel };
+    return &p;
+}

@@ -15,14 +15,22 @@
  *   net.c      telnet, calling out, the Call window, phone book calls
  *   serial.c   serial lines: the settings and tabs; the line's own code
  *              is sermod.c, a file loaded when a line opens
- *   serwin.c   a serial line's settings, a window of their own
  *   ssh.c      ssh (libssh2 on AmiSSL), in CTermSSH only
  *   clip.c     copy and paste, and the log
- *   setwin.c   the settings window (ReAction, in tabs)
- *   rexx.c     the ARexx port: commands, WAITFOR, starting scripts
  *   book.c     the phone book's file
- *   bench.c    the speed test in the Project menu
+ *   classes.c  OS 3.2's window classes, for the windows made of them
+ *   parts.c    the parts: files of their own in PROGDIR:Parts/, loaded
+ *              when used (part.h), and the ARexx port
  *   cterm.h    what they share
+ *
+ * The parts (each CTerm's own source, built with -DPART):
+ *   setwin.c   the settings window (ReAction, in tabs)   Parts/Settings
+ *   bookwin.c  the phone book's window                   Parts/PhoneBook
+ *   serwin.c   a serial line's settings (in both of those)
+ *   rexx.c     ARexx's commands, WAITFOR, starting scripts  Parts/ARexx
+ *   callwin.c  the Call window                           Parts/Call
+ *   xwin.c     the Transfers window                      Parts/Transfers
+ *   bench.c    the speed test in the Project menu        Parts/SpeedTest
  */
 #include "cterm.h"
 
@@ -1236,7 +1244,7 @@ static int arg_book = -1;
  * low-memory handlers on every allocation that fails, many times slower
  * (a stock A1200's conbench: 30 s became 96 s when the history ate the
  * last 20 KB). */
-#define RESERVE_CHIP (96 * 1024)
+#define RESERVE_CHIP (64 * 1024)
 #define RESERVE_FAST (512 * 1024)
 
 static ULONG reserve(void)
@@ -1497,8 +1505,6 @@ static int cterm_main(int argc, char **argv)
         utf8 = FALSE;
     if (arg_book >= 0)                  /* the prefs set these: again */
         tab_from_book(&book[arg_book]);
-    else
-        book_load();
     if (arg_serial)
         serial_tab_setup(arg_dev[0] ? arg_dev : NULL,
                          arg_hasunit ? &arg_unit : NULL, &arg_baud);

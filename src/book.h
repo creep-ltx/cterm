@@ -37,6 +37,7 @@ int book_need(void);                    /* room for one more entry */
 int book_room(void);                    /* the room there is */
 void book_free(void);
 void book_load(void);
+void book_use(void);                    /* loaded, the first time */
 BOOL book_save(void);
 int book_find(const char *name);        /* -1: none */
 /* A URL in host (telnet://, ssh://user@host:port/) into its fields. */

@@ -29,6 +29,7 @@
 #include <proto/intuition.h>
 #include <proto/graphics.h>
 #include <proto/keymap.h>
+#include <proto/utility.h>
 #include <proto/gadtools.h>
 #include <proto/asl.h>
 #include <proto/diskfont.h>
@@ -339,7 +340,6 @@ extern struct Window *setwin;
 extern BOOL envonly;
 extern BOOL used_only;
 extern BOOL saved_pc;
-extern Object *setobj, *sg[S_N];
 extern BOOL title_force;
 
 /* ---- the parts' calls ---- */
@@ -552,5 +552,18 @@ void hide_show(void);                   /* at a round's end: what was asked */
 void cx_open(void);
 void cx_close(void);
 void hide_free(void);
+/* parts.c, classes.c: the parts (part.h) and what they keep in CTerm
+ * between loads */
+void reaction_drop(void);               /* no ReAction window: classes go */
+void parts_free(void);
+extern struct MsgPort *rxport;          /* the ARexx port (parts.c) */
+extern char rxpname[12];                /* its name */
+extern struct RxsLib *RexxSysBase;
+extern BOOL call_newtab;                /* the Call window's "new tab" */
+extern BOOL has_ssh;                    /* CTermSSH: ssh in its tabs */
+extern WORD xwleft, xwtop;              /* where the Transfers window was */
+extern WORD bwleft, bwtop;              /* ... the phone book's */
+extern int set_page;                    /* the settings' tab last shown */
+#include "part.h"
 
 #endif

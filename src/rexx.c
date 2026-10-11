@@ -4,9 +4,10 @@
  * Project menu, a phone book place's login script).
  *
  * The port is "CTERM" for the first CTerm, "CTERM.2", "CTERM.3"... for
- * more; it is made at the start (cheap: a port and a name).
- * rexxsyslib.library is opened only when the first ARexx message comes
- * or a script is started.
+ * more; it is made at the start (cheap: a port and a name: parts.c).
+ * This file is a part of its own (PROGDIR:Parts/ARexx), loaded when the
+ * first ARexx message comes or a script is started, and so is
+ * rexxsyslib.library.
  *
  * When commands run (re-entrancy): CTerm waits in many places - its main
  * round, a call being made, a transfer, a modem dialling - and each of
@@ -17,20 +18,22 @@
  * would pull the ground from under it. So the port is only *read* in
  * those waits: what is safe anywhere (reading the screen, VERSION, TAB
  * COUNT, registering a WAITFOR) is answered at once; the rest is queued
- * and run by run() between rounds (rexx_run), where nothing else is half
+ * and run by run() between rounds (rx_run), where nothing else is half
  * done. A WAITFOR is answered when its text arrives - from wherever the
  * text came in - by ReplyMsg alone, which is safe anywhere: the script's
  * next command comes through the port again, and is queued if it must.
  */
-#include "cterm.h"
-#pragma GCC optimize("Os")              /* called rarely: small before quick */
 #include <rexx/storage.h>
 #include <rexx/errors.h>
 #include <rexx/rxslib.h>
 #include <proto/rexxsyslib.h>
 #include <devices/timer.h>
+#include "cterm.h"
 
-struct RxsLib *RexxSysBase = NULL;
+static void rx_tab_gone(struct Tab *t);
+static BOOL rx_start(const char *path, struct Tab *t);
+static void rx_after_call(void);
+static void rx_watch(struct Tab *t);
 
 #define WATCH    2048                   /* a tab's text kept for WAITFOR */
 #define MAXTEXT  8                      /* WAITFOR's texts at most */
@@ -71,8 +74,6 @@ struct Script {
     char name[32];
 };
 
-static struct MsgPort *rxport;
-static char pname[12];                  /* "CTERM", "CTERM.2"... */
 static struct Pend *pend;               /* in order */
 static struct Script *scripts;
 static struct timerequest *tio;
@@ -80,47 +81,8 @@ static BOOL topen, ton;
 static struct Tab *rxtab;               /* the tab commands go to */
 static char *rbuf;                      /* a command's RESULT */
 static LONG rcap, rlen;
-static BOOL running;                    /* rexx_run is at work */
-static BOOL closing;                    /* rexx_close: nothing said */
-
-/* ---- the port ---- */
-
-const char *rexx_port(void)
-{
-    return rxport ? pname : "";
-}
-
-ULONG rexx_sigmask(void)
-{
-    return rxport ? 1UL << rxport->mp_SigBit : 0;
-}
-
-/* The port, at the start: the first free name. */
-void rexx_open(void)
-{
-    int n;
-    if (!(rxport = CreateMsgPort()))
-        return;
-    Forbid();
-    for (n = 1; n < 100; n++) {
-        strcpy(pname, "CTERM");
-        if (n > 1) {
-            strcat(pname, ".");
-            numstr_cat(pname, n);
-        }
-        if (!FindPort((STRPTR)pname))
-            break;
-    }
-    rxport->mp_Node.ln_Name = pname;
-    rxport->mp_Node.ln_Pri = 0;
-    if (n < 100)
-        AddPort(rxport);
-    Permit();
-    if (n >= 100) {
-        DeleteMsgPort(rxport);
-        rxport = NULL;
-    }
-}
+static BOOL running;                    /* rx_run is at work */
+static BOOL closing;                    /* rx_close: nothing said */
 
 static BOOL lib_open(void)
 {
@@ -269,7 +231,7 @@ static int tab_no(struct Tab *t)
 }
 
 /* Text from t's host is kept for WAITFOR from now on. */
-void rexx_watch(struct Tab *t)
+static void rx_watch(struct Tab *t)
 {
     if (t && !t->t_watch)
         t->t_watch = AllocVec(sizeof(struct Watch), MEMF_ANY | MEMF_CLEAR);
@@ -327,7 +289,7 @@ static BOOL try_wait(struct Pend *p, LONG from)
 }
 
 /* Bytes from t's host (as they are logged): kept for WAITFOR. */
-void rexx_feed(struct Tab *t, const UBYTE *b, LONG n)
+static void rx_feed(struct Tab *t, const UBYTE *b, LONG n)
 {
     struct Watch *w = t->t_watch;
     struct Pend *p, *nx;
@@ -497,7 +459,7 @@ static LONG c_waitfor(struct RexxMsg *rm, LONG *a, BOOL top)
             p->maxlen = k;
     }
     p->ntext = n;
-    rexx_watch(tab);
+    rx_watch(tab);
     if (try_wait(p, 0))
         return HELD;                    /* there already: answered */
     if (!tab->t_local && tab->t_sock < 0 && !tab->t_st.ser &&
@@ -547,7 +509,7 @@ static LONG c_send(struct RexxMsg *rm, LONG *a, BOOL top)
     }
     n = raw ? (LONG)strlen(s) : unescape(s);
     T = target();
-    rexx_watch(T);
+    rx_watch(T);
     if (T->t_watch)
         ((struct Watch *)T->t_watch)->n = 0;    /* what came before is old */
     T->t_rxdone = FALSE;
@@ -578,7 +540,7 @@ static LONG c_call(struct RexxMsg *rm, LONG *a, BOOL top)
     if (t) {
         rxtab = t;
         if (!a[1] && rc == 0)
-            rexx_after_call();          /* its login script */
+            rx_after_call();          /* its login script */
     }
     T = shown;
     res_num(t ? tab_no(t) : 0);
@@ -851,7 +813,7 @@ static LONG c_upload(struct RexxMsg *rm, LONG *a, BOOL top)
 /* A Zmodem upload the host asked for (its ZRINIT came) while an UPLOAD
  * for the tab waits in the queue: that UPLOAD's files, and it is
  * answered when the transfer ends. 0: none waits. */
-int rexx_uploads(struct Tab *t, char (*store)[256], const char **paths,
+static int rx_uploads(struct Tab *t, char (*store)[256], const char **paths,
                  int max)
 {
     struct Pend *p;
@@ -901,7 +863,7 @@ int rexx_uploads(struct Tab *t, char (*store)[256], const char **paths,
 
 /* A transfer in t has ended (got: files, -1 failed): a DOWNLOAD or
  * UPLOAD waiting for it is answered; else it is kept for the next. */
-void rexx_xfer_done(struct Tab *t, int got)
+static void rx_xfer_done(struct Tab *t, int got)
 {
     struct Pend *p;
     for (p = pend; p; p = p->next)
@@ -999,6 +961,7 @@ static LONG c_phonebook(struct RexxMsg *rm, LONG *a, BOOL top)
     int i;
     (void)rm; (void)a; (void)top;
     rlen = 0;
+    book_use();
     if (!res_room(nbook * 52 + 1))
         return RC_FATAL;
     for (i = 0; i < nbook; i++) {
@@ -1158,8 +1121,8 @@ static void script_back(struct RexxMsg *rm)
 }
 
 /* What came to the port: answered, queued or kept. Safe anywhere: what
- * would change things waits for rexx_run (see the top). */
-void rexx_serve(void)
+ * would change things waits for rx_run (see the top). */
+static void rx_serve(void)
 {
     struct Message *m;
     if (!rxport)
@@ -1180,7 +1143,7 @@ void rexx_serve(void)
 /* The queued commands, run where nothing is half done (run(), between
  * rounds). Commands that come meanwhile (their waits read the port)
  * join the queue and run here too. */
-void rexx_run(void)
+static void rx_run(void)
 {
     struct Pend *p;
     if (running)
@@ -1207,7 +1170,7 @@ void rexx_run(void)
 /* cmd to the port called name, its answer waited for (5 s at most): its
  * RC, -1 no such port, -2 no answer. res: its RESULT (out, max bytes).
  * An answer that never came would land in freed memory: then the port
- * and message are left behind, ignored (as rexx_close does), and *me
+ * and message are left behind, ignored (as rx_close does), and *me
  * is NULL - no more asking. */
 static LONG ask_port(struct MsgPort **me, const char *name, const char *cmd,
                      char *res, int max)
@@ -1265,13 +1228,26 @@ static LONG ask_port(struct MsgPort **me, const char *name, const char *cmd,
 /* At the start: a hidden CTerm (CTERM, CTERM.2...) is asked to show
  * itself - TRUE, this one need not open. any: else the first CTerm there
  * is comes to the front. */
-BOOL rexx_wake(BOOL any)
+static BOOL rx_wake(BOOL any)
 {
     struct MsgPort *me;
     char name[12], res[16], first[12];
     int n;
     BOOL done = FALSE;
-    if (!lib_open())
+    /* no CTerm port at all: nobody to ask, and rexxsyslib stays on
+     * the disk */
+    me = NULL;
+    Forbid();
+    for (n = 1; n < 100 && !me; n++) {
+        strcpy(name, "CTERM");
+        if (n > 1) {
+            strcat(name, ".");
+            numstr_cat(name, n);
+        }
+        me = FindPort((STRPTR)name);
+    }
+    Permit();
+    if (!me || !lib_open())
         return FALSE;
     if (!(me = CreateMsgPort()))
         return FALSE;
@@ -1302,10 +1278,10 @@ BOOL rexx_wake(BOOL any)
 
 /* A script, with ADDRESS set to CTerm's port and the port's name as its
  * argument; t: the tab it works in (its commands go there). */
-BOOL rexx_start(const char *path, struct Tab *t)
+static BOOL rx_start(const char *path, struct Tab *t)
 {
     struct RexxMsg *rm;
-    struct MsgPort *rp;
+    struct MsgPort *rport;
     struct Script *s;
     char cmd[300];
     BOOL spaced;
@@ -1331,16 +1307,16 @@ BOOL rexx_start(const char *path, struct Tab *t)
         }
         cmd[k] = 0;
         strcat(cmd, "' '");
-        strcat(cmd, pname);
+        strcat(cmd, rxpname);
         strcat(cmd, "'");
     } else {
         strncpy(cmd, path, sizeof cmd - 20);
         cmd[sizeof cmd - 20] = 0;
         strcat(cmd, " ");
-        strcat(cmd, pname);
+        strcat(cmd, rxpname);
     }
     s = AllocVec(sizeof *s, MEMF_ANY | MEMF_CLEAR);
-    rm = CreateRexxMsg(rxport, (STRPTR)"rexx", (STRPTR)pname);
+    rm = CreateRexxMsg(rxport, (STRPTR)"rexx", (STRPTR)rxpname);
     if (!s || !rm ||
         !(rm->rm_Args[0] = (STRPTR)CreateArgstring((STRPTR)cmd,
                                                     strlen(cmd)))) {
@@ -1353,10 +1329,10 @@ BOOL rexx_start(const char *path, struct Tab *t)
     }
     rm->rm_Action = RXCOMM | (spaced ? RXFF_STRING : 0);
     Forbid();
-    if ((rp = FindPort((STRPTR)RXSDIR)))
-        PutMsg(rp, (struct Message *)rm);
+    if ((rport = FindPort((STRPTR)RXSDIR)))
+        PutMsg(rport, (struct Message *)rm);
     Permit();
-    if (!rp) {
+    if (!rport) {
         DeleteArgstring((UBYTE *)rm->rm_Args[0]);
         DeleteRexxMsg(rm);
         FreeVec(s);
@@ -1372,20 +1348,20 @@ BOOL rexx_start(const char *path, struct Tab *t)
     s->next = scripts;
     scripts = s;
     rxtab = T;
-    rexx_watch(T);
+    rx_watch(T);
     T = keep;
     return TRUE;
 }
 
 /* A call has connected in T: its phone book place's login script. */
-void rexx_after_call(void)
+static void rx_after_call(void)
 {
     if (T->t_script[0])
-        rexx_start(T->t_script, T);
+        rx_start(T->t_script, T);
 }
 
 /* Project/Run ARexx script...: chosen in REXX:. */
-void rexx_menu(void)
+static void rx_menu(void)
 {
     struct FileRequester *req;
     char path[256];
@@ -1403,7 +1379,7 @@ void rexx_menu(void)
         strncpy(path, (char *)req->fr_Drawer, sizeof path - 1);
         path[sizeof path - 1] = 0;
         AddPart((STRPTR)path, req->fr_File, sizeof path);
-        rexx_start(path, T);
+        rx_start(path, T);
     }
     FreeAslRequest(req);
     redraw_all();                       /* where the requester was */
@@ -1412,7 +1388,7 @@ void rexx_menu(void)
 /* ---- tabs going, the end ---- */
 
 /* t goes: what waits for it is answered (RC 10), its text freed. */
-void rexx_tab_gone(struct Tab *t)
+static void rx_tab_gone(struct Tab *t)
 {
     struct Pend *p, *nx;
     struct Script *s;
@@ -1435,7 +1411,7 @@ void rexx_tab_gone(struct Tab *t)
 }
 
 /* t's connection has ended: a WAITFOR for its text will not see it. */
-void rexx_tab_over(struct Tab *t)
+static void rx_tab_over(struct Tab *t)
 {
     struct Pend *p, *nx;
     for (p = pend; p; p = nx) {
@@ -1470,7 +1446,7 @@ static void drain(void)
  * started are waited for a little (their end comes back to the port);
  * one still running after that gets a port that ignores it, left in
  * memory, rather than a reply into freed memory. */
-void rexx_close(void)
+static void rx_close(void)
 {
     int i;
     if (!rxport)
@@ -1500,7 +1476,7 @@ void rexx_close(void)
         drain();
     }
     for (i = 0; i < ntabs; i++)
-        rexx_tab_gone(tabs[i]);
+        rx_tab_gone(tabs[i]);
     if (scripts) {
         Forbid();
         rxport->mp_Flags = PA_IGNORE;     /* its replies just lie there */
@@ -1516,4 +1492,17 @@ void rexx_close(void)
     rcap = 0;
     if (RexxSysBase && !scripts)
         CloseLibrary((struct Library *)RexxSysBase);
+}
+
+/* What CTerm calls (parts.c): the port itself, its name and
+ * rexxsyslib's base are CTerm's, so a CTerm that never sees an ARexx
+ * message never loads this. Once loaded it stays until the end: scripts
+ * may be waiting in it. */
+APTR part_main(void)
+{
+    static struct RexxPart p = { rx_serve, rx_run, rx_feed, rx_tab_gone,
+                                 rx_tab_over, rx_xfer_done, rx_uploads,
+                                 rx_start, rx_after_call, rx_menu, rx_wake,
+                                 rx_close, rx_watch };
+    return &p;
 }

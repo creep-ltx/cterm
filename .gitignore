@@ -29,3 +29,5 @@ tests/fuzz/fz
 tests/pptest
 demo/
 CTermTour
+Parts/
+src/partuse.h

@@ -2,7 +2,10 @@
  * bookwin - the phone book, a window of its own (Project/Phone book...):
  * the places on the left, the one chosen on the right, Call and Close.
  * What is typed counts at once; the book is saved when the window closes
- * or calls. OS 3.2's ReAction classes, as the settings window.
+ * or calls. OS 3.2's ReAction classes, as the settings window. A part
+ * of its own (PROGDIR:Parts/PhoneBook, with serwin.c): loaded when the
+ * window opens, gone when it closes; where it was is CTerm's (bwleft,
+ * bwtop).
  */
 #include "cterm.h"
 
@@ -14,7 +17,6 @@ static Object *bwobj, *bg[B_N], *bwlayout;
 static struct Window *bwwin;
 static struct List bwlist;              /* the places' names */
 static int bcur = -1;                   /* the entry shown: -1 none */
-static WORD bwleft = -1, bwtop;         /* where it was */
 
 static STRPTR kindlabels[] = { (STRPTR)"telnet", (STRPTR)"ssh",
                                (STRPTR)"serial", NULL };
@@ -29,7 +31,7 @@ static const int entry_ids[] = { B_NAME, B_HOST, B_PORT, B_KIND, B_USER,
     B_LINE, B_SCRIPT };
 #define NENTRY ((int)(sizeof entry_ids / sizeof entry_ids[0]))
 
-ULONG bookwin_sigmask(void)
+static ULONG bw_sigmask(void)
 {
     return bwwin ? 1UL << bwwin->UserPort->mp_SigBit : 0;
 }
@@ -231,6 +233,7 @@ static void bookwin_open_(void)
         ActivateWindow(bwwin);
         return;
     }
+    book_use();
     if (!reaction_open() || (!book && (book_need(), !book))) {
         beep();
         return;
@@ -487,7 +490,14 @@ static void bookwin_events_(void)
 }
 
 /* Its work on a deep stack, as the settings window's (see deep_call). */
-void bookwin_open(void) { deep_call(bookwin_open_); }
-void bookwin_events(void) { deep_call(bookwin_events_); }
+static void bw_open(void) { deep_call(bookwin_open_); }
+static void bw_events(void) { deep_call(bookwin_events_); }
 /* Before the screen goes, and at the end: closed, the book saved. */
-void bookwin_close(void) { deep_call(bookwin_close_); }
+static void bw_close(void) { deep_call(bookwin_close_); }
+
+APTR part_main(void)
+{
+    static struct BookPart p = { bw_open, bw_events,
+                                 bw_close, bw_sigmask };
+    return &p;
+}
