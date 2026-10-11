@@ -732,6 +732,8 @@ static LONG x_read(struct RConn *c, UBYTE *b, LONG n)
         if (!ready_now(c->dfd, FALSE))
             return AGAIN;
         k = recv(c->dfd, b, n, 0);
+        if (WOULDBLOCK(k))
+            return AGAIN;
         return k >= 0 ? k : -1;
     }
     k = OPS->sf_read(c->sfh, b, n);
@@ -749,6 +751,8 @@ static LONG x_write(struct RConn *c, const UBYTE *b, LONG n)
         if (!ready_now(c->dfd, TRUE))
             return AGAIN;
         k = send(c->dfd, (APTR)b, n < 2048 ? n : 2048, 0);
+        if (WOULDBLOCK(k))
+            return AGAIN;
         return k > 0 ? k : -1;
     }
     k = OPS->sf_write(c->sfh, b, n);
@@ -1131,6 +1135,20 @@ static int get_one(struct RConn *c, const char *rname, ULONG size,
     x->bdone += have;
     for (;;) {
         k = x_read(c, buf, BUFSZ);
+        /* All the bytes the host said there are: the A1200's stack
+         * (lwip) did not say "readable" for the end of FTP's data, so
+         * the file hung at 100% and CTerm spun round the wait (wasabid
+         * was starved). Two seconds for more (the file may have grown
+         * since the listing), then it is the end. */
+        if (k == AGAIN && c->kind == FK_FTP && size && got >= size) {
+            ULONG until = ticks50() + 100;
+            while (k == AGAIN && ticks50() < until && !given_up(c)) {
+                loop_round(-1, 200);
+                k = x_read(c, buf, BUFSZ);
+            }
+            if (k == AGAIN)
+                k = 0;
+        }
         if (k > 0) {
             if (Write(f, buf, k) != k) {
                 tsay(c, "\x1b[1;31m[could not write ", part,
@@ -1146,8 +1164,12 @@ static int get_one(struct RConn *c, const char *rname, ULONG size,
                 break;
             continue;
         }
-        if (k == AGAIN && x_wait(c, FALSE))
+        if (k == AGAIN && x_wait(c, FALSE)) {
+            /* "ready" by the wait, "not yet" by the look: no spinning */
+            if (c->kind == FK_FTP && !ready_now(c->dfd, FALSE))
+                Delay(1);
             continue;
+        }
         ok = k == 0;
         break;
     }

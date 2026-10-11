@@ -11,6 +11,13 @@
 #include "files.h"
 #pragma GCC optimize("Os")              /* called rarely: small before quick */
 
+void sock_nonblock(LONG s)
+{
+    LONG on = 1;
+    if (s >= 0)
+        IoctlSocket(s, NB_FIONBIO, (APTR)&on);
+}
+
 static void lost(struct RConn *c)
 {
     if (c->cfd >= 0)
@@ -42,6 +49,8 @@ static BOOL put_cmd(struct RConn *c, const char *cmd, const char *arg)
             return FALSE;
         }
         k = send(c->cfd, line + done, n - done, 0);
+        if (WOULDBLOCK(k))
+            continue;                   /* no room after all: wait again */
         if (k <= 0) {
             lost(c);
             return FALSE;
@@ -79,6 +88,8 @@ static BOOL get_line(struct RConn *c, char *out, int max, LONG secs)
             return FALSE;
         }
         k = recv(c->cfd, c->in + c->inlen, sizeof c->in - c->inlen, 0);
+        if (WOULDBLOCK(k))
+            continue;                   /* "readable", yet nothing: wait */
         if (k <= 0) {
             lost(c);
             return FALSE;
@@ -173,6 +184,7 @@ BOOL ftp_open(struct RConn *c)
     }
     T = c->tab;
     c->cfd = net_connect(host, port, say);
+    sock_nonblock(c->cfd);
     if (c->cfd < 0)
         return FALSE;
     c->peer[0] = 0;
@@ -290,7 +302,11 @@ static LONG data_open(struct RConn *c)
         port = h[4] * 256 + h[5];
     }
     T = c->tab;
-    return net_connect(c->peer, port, say);
+    {
+        LONG d = net_connect(c->peer, port, say);
+        sock_nonblock(d);
+        return d;
+    }
 }
 
 /* ---- listings ---- */
@@ -483,6 +499,8 @@ BOOL ftp_list(struct RConn *c)
             }
             if ((k = recv(d, b, sizeof b, 0)) == 0)
                 break;
+            if (WOULDBLOCK(k))
+                continue;
             if (k < 0) {
                 ok = FALSE;
                 break;

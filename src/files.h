@@ -8,6 +8,13 @@
 #define FILES_H
 
 #define AGAIN (-2)                      /* a read or write would wait */
+/* FTP's sockets do not block: on the A1200's lwip a read that blocked
+ * after WaitSelect said "readable" held the stack - every other
+ * program's network (wasabid) stood still, and once never came back */
+#define NB_FIONBIO 0x8004667EUL
+#define EWOULDBLOCK_ 35
+#define WOULDBLOCK(k) ((k) < 0 && Errno() == EWOULDBLOCK_)
+void sock_nonblock(LONG s);
 
 /* An entry of the listing: its name as the host has it (UTF-8, most
  * likely), in the pool at noff */
