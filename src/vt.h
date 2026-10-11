@@ -54,6 +54,9 @@ typedef struct {
 } VtChanges;
 
 Vt *vt_new(int cols, int rows, int scrollback);
+/* Set by the host: may the history take n more bytes for a new line?
+ * 0: it stops growing there (until a clear). NULL: always. */
+extern int (*vt_room)(long n);
 void vt_free(Vt *vt);
 void vt_resize(Vt *vt, int cols, int rows);
 

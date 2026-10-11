@@ -206,6 +206,8 @@ struct Tab {
     UBYTE *t_pend;                      /* a Shell's writes taken, not yet
                                            parsed (term_take, term_sync) */
     LONG t_plen;
+    BOOL t_pendno;                      /* no memory for t_pend: not asked
+                                           again */
     struct Xfer *t_xfer;                /* a transfer in it, or NULL */
     BOOL t_serial;                      /* a serial line, not TCP */
     SerTab t_st;                        /* its line, number, device */

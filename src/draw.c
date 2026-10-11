@@ -2255,7 +2255,7 @@ void draw_tabbar(void)
 
 /* ---- a picture behind the text --------------------------------------- */
 
-struct Library *DataTypesBase;
+struct Library *DataTypesBase = NULL;
 static ULONG *ld_buf;                   /* the loader's result */
 static ULONG bggen;                     /* counts pictures loaded */
 static LONG ld_w, ld_h;

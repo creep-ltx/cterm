@@ -57,10 +57,48 @@ void memlog(const char *what)
                        last ? (long)a - (long)last : 0L);
     last = a;
 }
+/* Who asked for memory that was not there: exec calls the low-memory
+ * handlers on every failed allocation (counted per task, with the last
+ * size asked). */
+static struct { char name[16]; ULONG n, size, flags; } mh[8];
+static struct Interrupt mhint;
+static LONG memh(register struct MemHandlerData *d __asm("a0"),
+                 register APTR data __asm("a1"))
+{
+    struct Task *t = FindTask(NULL);
+    const char *nm = t->tc_Node.ln_Name ? t->tc_Node.ln_Name : "?";
+    int i;
+    (void)data;
+    for (i = 0; i < 8 && mh[i].n && strncmp(mh[i].name, nm, 15); i++)
+        ;
+    if (i < 8) {
+        if (!mh[i].n)
+            strncpy(mh[i].name, nm, 15);
+        mh[i].n++;
+        mh[i].size = d->memh_RequestSize;
+        mh[i].flags = d->memh_RequestFlags;
+    }
+    return MEM_DID_NOTHING;
+}
+static void memh_on(void)
+{
+    mhint.is_Node.ln_Type = NT_INTERRUPT;
+    mhint.is_Node.ln_Pri = 100;
+    mhint.is_Node.ln_Name = (char *)"CTerm memlog";
+    mhint.is_Code = (void (*)())memh;
+    AddMemHandler(&mhint);
+}
 static void memlog_save(void)
 {
     BPTR f = Open((STRPTR)"SYS:T/ctmem.txt", MODE_NEWFILE);
-    if (f) { Write(f, mlbuf, mll); Close(f); }
+    int i;
+    if (f) {
+        Write(f, mlbuf, mll);
+        for (i = 0; i < 8 && mh[i].n; i++)
+            FPrintf(f, (STRPTR)"failed alloc: %-15s %6ld times, last %ld bytes flags %lx\n",
+                    (LONG)mh[i].name, mh[i].n, mh[i].size, mh[i].flags);
+        Close(f);
+    }
 }
 #define ML(x) memlog(x)
 #else
@@ -79,15 +117,15 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b12 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b13 (11.10.2026)";
 
-struct Library *SocketBase;
-struct Library *KeymapBase;
-struct Library *GadToolsBase;
-struct Library *AslBase;
-struct Library *DiskfontBase;
-struct Library *TTEngineBase;
-struct Library *CyberGfxBase;
+struct Library *SocketBase = NULL;
+struct Library *KeymapBase = NULL;
+struct Library *GadToolsBase = NULL;
+struct Library *AslBase = NULL;
+struct Library *DiskfontBase = NULL;
+struct Library *TTEngineBase = NULL;
+struct Library *CyberGfxBase = NULL;
 
 void __chkabort(void) {}
 #define SCROLLBACK   2000
@@ -154,8 +192,12 @@ void term_take(void *t, const UBYTE *b, LONG n)
 #endif
     if (tb->t_watch)
         rexx_feed(tb, b, n);            /* an ARexx WAITFOR looks */
-    if (!tb->t_pend)
+    if (!tb->t_pend && !tb->t_pendno) {
+        /* once: when memory is short it is parsed at once instead, and
+         * not asked for again on every write */
         tb->t_pend = AllocVec(PENDMAX, MEMF_ANY);
+        tb->t_pendno = !tb->t_pend;
+    }
     if (tb->t_pend && n <= PENDMAX - tb->t_plen) {
         CopyMem((APTR)b, tb->t_pend + tb->t_plen, n);
         tb->t_plen += n;
@@ -341,18 +383,29 @@ BOOL envonly;                    /* Use: until a reboot, not saved */
 BOOL used_only;                  /* the settings were Used, not Saved */
 BOOL saved_pc;                   /* the setting; pcmode may be PC's */
 
+/* the settings' text: made for a load or save, not kept */
+#define PREFS_MAX 3600
+static void load_prefs_(char *buf);
 static void load_prefs(void)
 {
-    static char buf[3600];
+    char *b = AllocVec(PREFS_MAX, MEMF_ANY);
+    if (b) {
+        load_prefs_(b);
+        FreeVec(b);
+    }
+}
+
+static void load_prefs_(char *buf)
+{
     char *p = buf;
     /* the whole file: without GVF_BINARY_VAR, GetVar stops at the first
      * line break (every setting after "truetype" was lost) */
-    LONG n = GetVar(PREFS_VAR, buf, sizeof buf,
+    LONG n = GetVar(PREFS_VAR, buf, PREFS_MAX,
                     GVF_GLOBAL_ONLY | GVF_BINARY_VAR);
     if (n <= 0)
         return;
-    if (n >= (LONG)sizeof buf)
-        n = sizeof buf - 1;
+    if (n >= PREFS_MAX)
+        n = PREFS_MAX - 1;
     buf[n] = 0;
     hadprefs = TRUE;
     while (*p) {
@@ -454,11 +507,20 @@ static void load_prefs(void)
         ttsize = 14;
 }
 
+static void save_prefs_(char *buf);
 void save_prefs(void)
 {
+    char *b;
     if (setwin)
         return;                         /* the settings window decides */
-    static char buf[3600];
+    if ((b = AllocVec(PREFS_MAX, MEMF_ANY))) {
+        save_prefs_(b);
+        FreeVec(b);
+    }
+}
+
+static void save_prefs_(char *buf)
+{
     buf[0] = 0;
     strcat(buf, "truetype=");
     strcat(buf, (fontover ? keepfont.usett : usett) ? "1" : "0");
@@ -899,6 +961,9 @@ static void run(void)
             UnLock(l);
         T->con = con_start(l ? script : NULL, T);
         ML("shell");
+#ifdef MEMLOG
+        memlog_save();                  /* the marks so far, CTerm idle */
+#endif
         if (!T->con) {
             /* no Shell: say so and wait for the window to be closed -
              * never fall into the network loop, there is no network */
@@ -961,6 +1026,22 @@ static void run(void)
 }
 
 static UBYTE *hostbuf;                  /* a host's bytes: made at the first */
+
+/* hostbuf, and its size: 16 KB, made once; when there was no memory for
+ * it, a small one of its own - never asked again on every read */
+static UBYTE hostsmall[1024];
+static LONG host_buf(void)
+{
+    static BOOL tried;
+    if (!hostbuf && !tried) {
+        tried = TRUE;
+        hostbuf = AllocVec(16384, MEMF_ANY);
+    }
+    if (hostbuf && hostbuf != hostsmall)
+        return 16384;
+    hostbuf = hostsmall;
+    return sizeof hostsmall;
+}
 
 /* The Shells' packets alone (loop_round's short way): FALSE when
  * something needs the whole round - a Shell that ended. */
@@ -1108,17 +1189,17 @@ BOOL loop_round(LONG xfd, LONG ms)
             if (!con_alive(T->con))
                 T->ended = TRUE;    /* the Shell ended */
         }
-        if (T->t_st.ser && !T->t_xfer && serial_due() &&
-            (hostbuf || (hostbuf = AllocVec(16384, MEMF_ANY)))) {
-            serial_input(hostbuf, 16384);
+        if (T->t_st.ser && !T->t_xfer && serial_due()) {
+            LONG hn = host_buf();
+            serial_input(hostbuf, hn);
             if (pane_of(T))
                 hostdata = TRUE;
         }
         if (n > 0 && !T->t_xfer) {
             LONG fd = sock >= 0 ? sock : lfd;
-            if (fd >= 0 && FD_ISSET(fd, &rd) &&
-                (hostbuf || (hostbuf = AllocVec(16384, MEMF_ANY)))) {
-                host_input(hostbuf, 16384);
+            if (fd >= 0 && FD_ISSET(fd, &rd)) {
+                LONG hn = host_buf();
+                host_input(hostbuf, hn);
                 if (pane_of(T))
                     hostdata = TRUE;
             }
@@ -1149,14 +1230,37 @@ static int arg_book = -1;
 /* asl.library and diskfont.library come from disk and take some 100 KB:
  * opened the first time a requester or a disk font is wanted, so a stock
  * A1200 keeps the memory until then. */
-/* How many 80-column lines of history a tab may keep: a quarter of free
- * memory, an eighth on an Amiga with only chip memory (a stock A1200
- * needs the rest to run things). */
+/* Memory the history leaves free for everything else: on a chip-only
+ * Amiga programs started in the Shell need it (conbench alone wants 36
+ * KB, 32 KB of it in one piece); a full machine also runs exec's
+ * low-memory handlers on every allocation that fails, many times slower
+ * (a stock A1200's conbench: 30 s became 96 s when the history ate the
+ * last 20 KB). */
+#define RESERVE_CHIP (96 * 1024)
+#define RESERVE_FAST (512 * 1024)
+
+static ULONG reserve(void)
+{
+    return AvailMem(MEMF_FAST) ? RESERVE_FAST : RESERVE_CHIP;
+}
+
+/* How many 80-column lines of history a tab may keep at most: what is
+ * free beyond the reserve (a quarter of it with fast memory). The lines
+ * are made as the text scrolls, and only while the reserve stays free
+ * (hist_room), so this is a ceiling, not memory taken. */
 ULONG history_lines(void)
 {
-    ULONG avail = AvailMem(MEMF_ANY);
-    ULONG part = AvailMem(MEMF_FAST) ? avail / 4 : avail / 8;
-    return part / (80 * sizeof(VtCell));
+    ULONG avail = AvailMem(MEMF_ANY), keep = reserve();
+    ULONG part = avail <= keep ? 0 : AvailMem(MEMF_FAST)
+                 ? (avail - keep) / 4 : avail - keep;
+    return part / (82 * sizeof(VtCell));
+}
+
+/* The emulator's question before each new history line (only while a
+ * history grows, at most its length per tab). */
+static int hist_room(long n)
+{
+    return AvailMem(MEMF_ANY) >= reserve() + (ULONG)n;
 }
 
 BOOL asl_open(void)
@@ -1238,6 +1342,10 @@ int main(int argc, char **argv)
     LONG have = (char *)me->tc_SPUpper - (char *)me->tc_SPLower;
     static struct StackSwapStruct sss;
     UBYTE *stk;
+#ifdef MEMLOG
+    memh_on();
+#endif
+    ML("main");
     m_argc = argc;
     m_argv = argv;
     if (have >= 3000 || !(stk = AllocVec(8192, MEMF_ANY)))
@@ -1399,10 +1507,12 @@ static int cterm_main(int argc, char **argv)
         usett = tt_installed() && file_exists(ttfile);
     ML("book");
     con_timer_init();
+    vt_room = hist_room;
     ML("timer");
     {
-        /* history takes at most a quarter of free memory (a line of 80
-         * cells is 1280 bytes): a stock A1200 keeps room to run things */
+        /* the history's ceiling; its lines (80 cells: 492 bytes) only
+         * while a reserve stays free: a stock A1200 keeps room to run
+         * things */
         ULONG lines = history_lines();
         vt = vt_new(80, 25, lines < SCROLLBACK ? (int)lines : SCROLLBACK);
     }
@@ -1431,7 +1541,9 @@ static int cterm_main(int argc, char **argv)
             tab_letters(TRUE);
         ML("display");
         rexx_open();
+        ML("rexx");
         cx_open();                      /* Exchange's Show, Hide, Remove */
+        ML("cx");
         run();
     }
     rexx_close();                       /* before the tabs go: no command
@@ -1439,6 +1551,7 @@ static int cterm_main(int argc, char **argv)
 #ifdef MEMLOG
     ML("quit");
     memlog_save();
+    RemMemHandler(&mhint);
 #endif
     settings_cancel();                  /* else save_prefs would not save */
     if (win) {
@@ -1490,7 +1603,7 @@ static int cterm_main(int argc, char **argv)
     if (DataTypesBase) CloseLibrary(DataTypesBase);
     book_free();
     transfer_free();
-    if (hostbuf)
+    if (hostbuf && hostbuf != hostsmall)
         FreeVec(hostbuf);
     close_tt();
     if (TTEngineBase) CloseLibrary(TTEngineBase);

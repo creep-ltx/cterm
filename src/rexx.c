@@ -30,7 +30,7 @@
 #include <proto/rexxsyslib.h>
 #include <devices/timer.h>
 
-struct RxsLib *RexxSysBase;
+struct RxsLib *RexxSysBase = NULL;
 
 #define WATCH    2048                   /* a tab's text kept for WAITFOR */
 #define MAXTEXT  8                      /* WAITFOR's texts at most */

@@ -23,7 +23,7 @@
 #include <proto/icon.h>
 #include <proto/commodities.h>
 
-struct Library *WorkbenchBase, *IconBase, *CxBase;
+struct Library *WorkbenchBase = NULL, *IconBase = NULL, *CxBase = NULL;
 
 BOOL hidden;                            /* the window is put away */
 static BOOL want_hide, want_show;       /* asked for: done at a round's end */

@@ -108,6 +108,7 @@ static void lay(int n, int x0, int y0, int x1, int y1)
         p->rows = (y1 - y0 + 1 - 2) / ch;
         if (p->cols < minc) p->cols = minc;
         if (p->rows < minr) p->rows = minr;
+        if (p->rows > PROWS) p->rows = PROWS;   /* the rows' marks */
         /* what a row's fills cover: the pane, but its frame (split) */
         p->fx0 = x0 + edge;
         p->fx1 = x1 - edge;

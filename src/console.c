@@ -38,7 +38,7 @@
 #include "console.h"
 #include "dbg.h"
 
-struct Device *TimerBase;
+struct Device *TimerBase = NULL;
 
 #define INMAX   4096
 #define LINEMAX 1024

@@ -37,6 +37,8 @@ struct Vt {
     VtCell **hist;
     int *hist_w;
     int hist_cap, hist_len, hist_head;   /* head: the oldest line */
+    int hist_max;                   /* hist's slots: the cap it may grow
+                                       back to after a clear */
 
     int x, y, pending;              /* pending: at the last column, the
                                        next character wraps first */
@@ -49,6 +51,8 @@ struct Vt {
      * hash (0: free), open addressing */
     VtPen *pens;
     int npens, pcap;
+    int pen_nomem;                  /* the table could not grow: new looks
+                                       are the default, not asked again */
     uint16_t *phash;
     int top, bot;                   /* the scroll region, inclusive */
     int autowrap, origin, insert, lnm, cursor_on, app_cursor, app_keypad;
@@ -124,8 +128,10 @@ static uint16_t intern(Vt *v, const VtPen *p)
             v->phash[h] = (uint16_t)(v->npens + 1);
             return (uint16_t)v->npens++;
         }
-        if (!pen_gc(v))
+        if (v->pen_nomem || !pen_gc(v)) {
+            v->pen_nomem = 1;
             return 0;
+        }
     }
 }
 
@@ -306,6 +312,29 @@ static const uint16_t decgfx[31] = {
 
 /* ---- scrolling --------------------------------------------------------- */
 
+/* The host's word on memory: may the history take n more bytes? (CTerm:
+ * only while a reserve stays free.) NULL: always. */
+int (*vt_room)(long n);
+
+/* No memory for another history line: the history stops growing where
+ * it is (it is a ring from slot 0 while it grows) - no allocation tried
+ * again on every new line, which on a full Amiga runs the low-memory
+ * handlers each time. A clear lets it grow again. */
+static void hist_stop(Vt *v)
+{
+    if (v->hist_len < v->hist_cap && v->hist_head == 0)
+        v->hist_cap = v->hist_len;
+}
+
+static VtCell *hist_row(Vt *v, VtCell *old, int cols)
+{
+    if (old && (int)RCAP(old) >= cols)
+        return old;
+    if (!old && vt_room && !vt_room((long)(cols + 2) * sizeof(VtCell)))
+        return NULL;
+    return row_new(cols);
+}
+
 /* The row leaving the top becomes the newest history line, and the
  * oldest history line's buffer (when it fits) becomes the new row: no
  * copy, no allocation. FALSE: no history - the row is simply reused. */
@@ -322,9 +351,11 @@ static int swap_into_history(Vt *v, VtCell **pline)
     } else
         slot = v->hist_head;
     old = v->hist[slot];
-    fresh = old && (int)RCAP(old) >= v->cols ? old : row_new(v->cols);
-    if (!fresh)
+    fresh = hist_row(v, old, v->cols);
+    if (!fresh) {
+        hist_stop(v);
         return 0;
+    }
     if (fresh != old)
         row_free(old);
     if (v->hist_len < v->hist_cap)
@@ -345,6 +376,12 @@ static void push_history(Vt *v, const VtCell *line)
     VtCell *copy;
     if (v->hist_cap <= 0)
         return;
+    if (v->hist_len < v->hist_cap && !v->hist[v->hist_len] &&
+        vt_room && !vt_room((long)(RLEN(line) + 2) * sizeof(VtCell))) {
+        hist_stop(v);                   /* growing (head 0): no room */
+        if (v->hist_cap <= 0)
+            return;
+    }
     if (v->hist_len < v->hist_cap) {
         slot = (v->hist_head + v->hist_len) % v->hist_cap;
         v->hist_len++;
@@ -688,6 +725,7 @@ static void erase_display(Vt *v, int how)
     } else if (how == 2) {
         for (y = 0; y < v->rows; y++)
             erase(v, y, 0, v->cols);
+        v->pen_nomem = 0;               /* looks may have gone: try again */
     } else if (how == 3) {                  /* the scrollback too */
         int i;
         for (i = 0; i < v->hist_cap; i++) {
@@ -696,6 +734,8 @@ static void erase_display(Vt *v, int how)
             v->hist_w[i] = 0;
         }
         v->hist_len = v->hist_head = 0;
+        v->hist_cap = v->hist_max;      /* may grow again */
+        v->pen_nomem = 0;
         dirty_all(v);
     }
 }
@@ -785,6 +825,7 @@ static void reset_tabs(Vt *v)
 static void full_reset(Vt *v)
 {
     int i;
+    v->pen_nomem = 0;
     reset_pen(v);
     use_alt(v, 0, 0);
     for (i = 0; i < 2; i++) {
@@ -1774,7 +1815,7 @@ Vt *vt_new(int cols, int rows, int scrollback)
     v->dirty = calloc(rows, 1);
     v->dx0 = calloc(rows, 2);
     v->dx1 = calloc(rows, 2);
-    v->hist_cap = scrollback;
+    v->hist_cap = v->hist_max = scrollback;
     if (scrollback > 0) {
         v->hist = calloc(scrollback, sizeof *v->hist);
         v->hist_w = calloc(scrollback, sizeof *v->hist_w);
@@ -2165,8 +2206,8 @@ void vt_cursor(const Vt *v, int *x, int *y, int *visible)
  * redraw_all and refresh) use them before calling again. */
 int vt_take_changes(Vt *v, VtChanges *ch)
 {
-    static uint8_t copy[1024];
-    static uint16_t c0[1024], c1s[1024];
+    static uint8_t copy[256];           /* rows: as panes' PROWS */
+    static uint16_t c0[256], c1s[256];
     int any = v->any_dirty;
     int n = v->rows < (int)sizeof copy ? v->rows : (int)sizeof copy;
     memcpy(copy, v->dirty, n);

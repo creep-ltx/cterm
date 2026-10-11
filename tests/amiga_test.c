@@ -16,6 +16,14 @@ static char at(Vt *v, int r, int c)
     return c < w && l[c].cp ? (char)l[c].cp : ' ';
 }
 
+static int room_left, room_asked;
+static int room(long n)
+{
+    (void)n;
+    room_asked++;
+    return room_left-- > 0;
+}
+
 int main(void)
 {
     Vt *v = vt_new(40, 10, 100);
@@ -399,6 +407,25 @@ int main(void)
         feed(t, "\x1b]99999999999;x\x07");
         vt_title(t, &ch);
         CHECK(!ch, "OSC 99999999999 is not OSC 0");
+        vt_free(t);
+    }
+    {   /* the history stops growing when the host says no room, and is
+         * not asked again for every line; a clear lets it grow again */
+        Vt *t = vt_new(20, 3, 100);
+        int i;
+        room_left = 5;
+        room_asked = 0;
+        vt_room = room;
+        for (i = 0; i < 50; i++)
+            feed(t, "x\r\n");
+        CHECK(vt_history(t) == 5, "history stops where memory ran short");
+        CHECK(room_asked == 6, "no room asked again after a no");
+        feed(t, "\x1b[3J");
+        room_left = 10;
+        for (i = 0; i < 50; i++)
+            feed(t, "y\r\n");
+        CHECK(vt_history(t) == 10, "after a clear it grows again");
+        vt_room = NULL;
         vt_free(t);
     }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
