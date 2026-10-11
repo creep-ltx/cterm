@@ -100,9 +100,13 @@ Parts/Transfers: src/partstart.c src/xwin.c $(PARTHDR)
 	$(call partlink,src/xwin.c)
 Parts/SpeedTest: src/partstart.c src/bench.c $(PARTHDR)
 	$(call partlink,src/bench.c)
-# the file browser: SFTP (CTermSSH's ssh.c, through sftp_ops) and FTP
-Parts/Files: src/partstart.c src/files.c src/ftp.c src/askwin.c src/files.h src/ssh.h $(PARTHDR)
-	$(call partlink,src/files.c src/ftp.c src/askwin.c)
+# the file browser: SFTP (CTermSSH's ssh.c, through sftp_ops) and FTP.
+# -fbbb=-: without bebbo's extra backend pass, which miscompiled the
+# panels (a post-increment, then the register used as if it had not
+# moved: p->top - p->path[] passed for p->cur - p->top)
+Parts/Files: PARTFLAGS += -fbbb=-
+Parts/Files: src/partstart.c src/files.c src/fileui.c src/ftp.c src/files.h src/ssh.h $(PARTHDR)
+	$(call partlink,src/files.c src/fileui.c src/ftp.c)
 
 deploy: CTerm CTermSSH CTermTour protocols parts
 	wasabi mkdir Work:Utils/CTerm 2>/dev/null || true

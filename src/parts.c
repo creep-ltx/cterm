@@ -258,16 +258,10 @@ void speed_test(void)
     part_unload(&pt);
 }
 
-/* ---- the file browser: there while a place is connected or its
- * window is open ---- */
+/* ---- the file browser: there while a place is connected ---- */
 
 static struct Slot pf = { "Files", "the file browser" };
 #define FP ((struct FilesPart *)pf.fns)
-
-ULONG files_sigmask(void)
-{
-    return pf.fns ? FP->sigmask() : 0;
-}
 
 static void files_done(void)
 {
@@ -295,12 +289,30 @@ void files_menu(void)
     files_done();
 }
 
-void files_events(void)
+void files_key(int k)
 {
     if (!pf.fns)
         return;
     pf.depth++;
-    FP->events();
+    FP->key(k);
+    files_done();
+}
+
+void files_mouse(int what, int r, int c, ULONG s, ULONG us)
+{
+    if (!pf.fns)
+        return;
+    pf.depth++;
+    FP->mouse(what, r, c, s, us);
+    files_done();
+}
+
+void files_resized(struct Tab *t)
+{
+    if (!pf.fns)
+        return;
+    pf.depth++;
+    FP->resized(t);
     files_done();
 }
 
@@ -313,14 +325,6 @@ void files_tab_gone(struct Tab *t)
     files_done();
 }
 
-void files_screen(BOOL again)
-{
-    if (!pf.fns)
-        return;
-    pf.depth++;
-    FP->screen(again);
-    files_done();
-}
 
 int files_rexx(int what, const char *const *names, int n, const char *to,
                char **res)

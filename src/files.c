@@ -1,20 +1,23 @@
 /*
  * files - the file browser for SFTP and FTP places (Parts/Files, with
- * ftp.c and askwin.c): a window listing the drawer the host is in
- * (directories first), with Parent, a path to type, Refresh, Download,
- * Upload..., New drawer..., Rename..., Delete and Stop.
+ * fileui.c and ftp.c): the connection, the two listings (the Amiga's
+ * drawer and the host's), the transfers, ARexx's commands. The panels
+ * themselves, drawn in the place's tab like a program in a terminal,
+ * are fileui.c's.
  *
- * Each place has a tab of its own, where its messages go (the host key
- * question, a password asked, the host's words); the window and the tab
- * are one thing: closing the window hangs up and closes the tab, closing
- * the tab closes the window. The part stays loaded while a place is
- * connected and leaves memory with the last one.
+ * Each place has a tab of its own. While the call is set up its
+ * messages go there as text (the host key question, a password asked,
+ * the host's words); once connected the panels come up on the tab's
+ * alternate screen, and later messages wait for the main screen (F9
+ * shows it) and show on the panels' message line. The part stays
+ * loaded while a place is connected and leaves memory with the last.
  *
  * Every wait (await) is CTerm's own round, loop_round: the other tabs,
  * the window and this one go on while a listing or a file comes. A
- * transfer shows as Zmodem's does (the tab's panel and name, the
- * Transfers window), Esc and Stop end it, one at a time in all of CTerm.
- * A download is made as name.part and renamed when whole; a later
+ * transfer shows as Zmodem's does (the tab's name, the Transfers
+ * window) and on the panels' message line; the stop key, Esc, and the
+ * Transfers window's Stop end it, one at a time in all of CTerm. A
+ * download is made as name.part and renamed when whole; a later
  * download of the same file goes on from the part (FTP's REST, a seek
  * in SFTP); a file there is never written over (a number is added); a
  * name from the host is made safe first (no ':' or '/' to climb out of
@@ -26,13 +29,14 @@
 
 #define BUFSZ  32768                    /* a transfer's bytes at a time */
 #define OPS    sftp_ops
+#define PLOG   4096                     /* messages kept for the main screen */
 
-struct Library *FuelGaugeBase = NULL;   /* the part's own */
 static struct RConn *conns;             /* every place connected */
 static int tidy;                        /* ending what was begun: a Stop
                                            does not stop it */
 static struct RConn *asking;            /* its password, for f_ask */
 static BOOL asked;
+static struct RConn *saying;            /* the place a call's words are for */
 
 /* ---- small things ---- */
 
@@ -44,50 +48,85 @@ static struct RConn *conn_of(struct Tab *t)
     return c;
 }
 
-/* Text in the place's tab (a, b, d: any may be NULL). */
-static void status(struct RConn *c, const char *a, const char *b);
-static void to_utf8(const char *in, char *out, int max);
-
 /* Text in the place's tab (a, b, d: any may be NULL; Latin-1, as UTF-8
- * for a UTF-8 tab); a failure (red) is in the window's status line too,
- * its colours and brackets off. */
+ * for a UTF-8 tab). With the panels up it waits for the main screen
+ * and shows on the message line, its colours and brackets off (a red
+ * one red). */
 void tsay(struct RConn *c, const char *a, const char *b, const char *d)
 {
     struct Tab *keep = T;
     const char *p[3];
-    char u[512];
+    char u[512], m[160], *q = m;
+    const char *s;
     int i;
-    T = c->tab;
     p[0] = a; p[1] = b; p[2] = d;
+    if (!c->ui || c->mode == U_LOG) {   /* the main screen is shown */
+        T = c->tab;
+        for (i = 0; i < 3; i++)
+            if (p[i]) {
+                if (T->t_utf8 && !T->t_pcmode) {
+                    to_utf8(p[i], u, sizeof u);
+                    say(u);
+                } else
+                    say(p[i]);
+            }
+        refresh();
+        T = keep;
+        return;
+    }
     for (i = 0; i < 3; i++)
         if (p[i]) {
-            if (T->t_utf8 && !T->t_pcmode) {
-                to_utf8(p[i], u, sizeof u);
-                say(u);
-            } else
-                say(p[i]);
-        }
-    refresh();
-    T = keep;
-    if (a && !strncmp(a, "\x1b[1;31m", 7)) {
-        char m[160], *q = m;
-        const char *p[3], *s;
-        int i;
-        p[0] = a; p[1] = b; p[2] = d;
-        for (i = 0; i < 3; i++)
-            for (s = p[i]; s && *s && q < m + sizeof m - 1; s++) {
+            LONG n;
+            to_utf8(p[i], u, sizeof u);
+            n = strlen(u);
+            if (c->plog && c->ploglen + n > PLOG) {
+                ui_stop(c);             /* full: written out now */
+                ui_start(c);
+            }
+            if (c->plog && c->ploglen + n <= PLOG) {
+                CopyMem(u, c->plog + c->ploglen, n);
+                c->ploglen += n;
+            }
+            for (s = p[i]; *s && q < m + sizeof m - 1; s++) {
                 if (*s == 0x1b) {       /* ESC [ ... m */
                     while (s[1] && *s != 'm')
                         s++;
                     continue;
                 }
-                if (*s >= ' ' && *s != '[' && *s != ']')
+                if ((UBYTE)*s >= ' ' && *s != '[' && *s != ']')
                     *q++ = *s;
             }
-        *q = 0;
-        c->failed = TRUE;
-        status(c, m, NULL);
-    }
+        }
+    *q = 0;
+    if (m[0])
+        ui_note(c, m, a && !strncmp(a, "\x1b[1;31m", 7));
+}
+
+/* A call's own words (connecting, the host key): in the place's tab. */
+void fsay(const char *text)
+{
+    struct RConn *c = saying ? saying : conn_of(T);
+    if (c)
+        tsay(c, text, NULL, NULL);
+    else
+        say(text);
+}
+
+/* A line asked in the tab (a password, yes or no to a host key): the
+ * panels make way for the question and come back after it. */
+BOOL ask_tab(struct RConn *c, const char *prompt, char *buf, int max,
+             BOOL echo)
+{
+    BOOL was = c->ui, ok;
+    struct Tab *keep = T;
+    if (was)
+        ui_stop(c);
+    T = c->tab;
+    ok = term_ask(prompt, buf, max, echo);
+    T = keep;
+    if (was)
+        ui_start(c);
+    return ok;
 }
 
 BOOL given_up(struct RConn *c)
@@ -146,9 +185,26 @@ LONG today(void)
     return y * 10000L + m * 100 + d;
 }
 
+/* "2026-10-11 07:50" from days since 1970 and minutes of the day */
+static void date_text(LONG days, int mi, char *date)
+{
+    int y, m, d;
+    ymd(days, &y, &m, &d);
+    date[0] = 0;
+    numstr_cat(date, y);
+    strcat(date, m < 10 ? "-0" : "-");
+    numstr_cat(date, m);
+    strcat(date, d < 10 ? "-0" : "-");
+    numstr_cat(date, d);
+    strcat(date, mi / 60 < 10 ? " 0" : " ");
+    numstr_cat(date, mi / 60);
+    strcat(date, mi % 60 < 10 ? ":0" : ":");
+    numstr_cat(date, mi % 60);
+}
+
 /* The host's UTF-8 as Latin-1, the Amiga's: what Latin-1 has not
  * becomes bad; bytes that are not UTF-8 are taken as Latin-1 already. */
-static void to_latin1(const char *in, int len, char *out, int max, char bad)
+void to_latin1(const char *in, int len, char *out, int max, char bad)
 {
     const UBYTE *p = (const UBYTE *)in;
     int k = 0;
@@ -187,7 +243,7 @@ static void tsay_name(struct RConn *c, const char *a, const char *name,
 }
 
 /* The Amiga's Latin-1 as UTF-8, for the host. */
-static void to_utf8(const char *in, char *out, int max)
+void to_utf8(const char *in, char *out, int max)
 {
     int k = 0;
     for (; *in && k < max - 2; in++) {
@@ -219,7 +275,7 @@ static void local_name(const char *rname, char *out)
         strcpy(out, "file");
 }
 
-static void size_text(ULONG n, char *o)
+void size_text(ULONG n, char *o)
 {
     o[0] = 0;
     if (n < 10000)
@@ -231,11 +287,6 @@ static void size_text(ULONG n, char *o)
         numstr_cat(o, (n + 524288) / 1048576);
         strcat(o, " MB");
     }
-}
-
-static const char *ename(struct RConn *c, int i)
-{
-    return c->pool + c->ent[i].noff;
 }
 
 /* A name in the drawer the host is in: its whole path (SFTP). */
@@ -269,7 +320,7 @@ static LONG fsize(const char *path)
 
 /* The drawer downloads go to: the place's own, the Files tab's, or
  * PROGDIR:Downloads (made when missing). */
-static void down_dir(struct RConn *c, char *dir)
+void down_dir(struct RConn *c, char *dir)
 {
     BPTR l;
     strcpy(dir, c->tab->t_down[0] ? c->tab->t_down : dldir[0] ? dldir
@@ -280,117 +331,208 @@ static void down_dir(struct RConn *c, char *dir)
         UnLock(l);
 }
 
-/* ---- the listing ---- */
+/* ---- the listings ---- */
+
+static void pan_clear(struct Panel *p)
+{
+    p->nent = 0;
+    p->plen = 0;
+}
+
+static BOOL pan_add(struct Panel *p, const char *name, int len, ULONG size,
+                    const char *date, int dir)
+{
+    struct REnt *e;
+    if (p->nent == p->capent) {
+        int cap = p->capent ? p->capent * 2 : 64;
+        struct REnt *n = AllocVec(cap * sizeof *n, MEMF_ANY);
+        if (!n)
+            return FALSE;
+        if (p->ent) {
+            CopyMem(p->ent, n, p->nent * sizeof *n);
+            FreeVec(p->ent);
+        }
+        p->ent = n;
+        p->capent = cap;
+    }
+    if (p->plen + len + 1 > p->pcap) {
+        LONG cap = p->pcap ? p->pcap * 2 : 4096;
+        char *n;
+        while (cap < p->plen + len + 1)
+            cap *= 2;
+        if (!(n = AllocVec(cap, MEMF_ANY)))
+            return FALSE;
+        if (p->pool) {
+            CopyMem(p->pool, n, p->plen);
+            FreeVec(p->pool);
+        }
+        p->pool = n;
+        p->pcap = cap;
+    }
+    e = &p->ent[p->nent++];
+    e->noff = p->plen;
+    memcpy(p->pool + p->plen, name, len);
+    p->pool[p->plen + len] = 0;
+    p->plen += len + 1;
+    e->size = size;
+    strncpy(e->date, date, sizeof e->date - 1);
+    e->date[sizeof e->date - 1] = 0;
+    e->dir = dir;
+    e->mark = 0;
+    return TRUE;
+}
+
+void pan_free(struct Panel *p)
+{
+    if (p->ent)
+        FreeVec(p->ent);
+    if (p->pool)
+        FreeVec(p->pool);
+    p->ent = NULL;
+    p->pool = NULL;
+    p->nent = p->capent = 0;
+    p->plen = p->pcap = 0;
+}
+
+const char *pname(struct Panel *p, int i)
+{
+    return p->pool + p->ent[i].noff;
+}
 
 void ent_clear(struct RConn *c)
 {
-    c->nent = 0;
-    c->plen = 0;
+    pan_clear(&c->pn[1]);
 }
 
 BOOL ent_add(struct RConn *c, const char *name, int len, ULONG size,
              const char *date, int dir)
 {
-    struct REnt *e;
-    if (c->nent == c->capent) {
-        int cap = c->capent ? c->capent * 2 : 64;
-        struct REnt *n = AllocVec(cap * sizeof *n, MEMF_ANY);
-        if (!n)
-            return FALSE;
-        if (c->ent) {
-            CopyMem(c->ent, n, c->nent * sizeof *n);
-            FreeVec(c->ent);
-        }
-        c->ent = n;
-        c->capent = cap;
-    }
-    if (c->plen + len + 1 > c->pcap) {
-        LONG cap = c->pcap ? c->pcap * 2 : 4096;
-        char *n;
-        while (cap < c->plen + len + 1)
-            cap *= 2;
-        if (!(n = AllocVec(cap, MEMF_ANY)))
-            return FALSE;
-        if (c->pool) {
-            CopyMem(c->pool, n, c->plen);
-            FreeVec(c->pool);
-        }
-        c->pool = n;
-        c->pcap = cap;
-    }
-    e = &c->ent[c->nent++];
-    e->noff = c->plen;
-    memcpy(c->pool + c->plen, name, len);
-    c->pool[c->plen + len] = 0;
-    c->plen += len + 1;
-    e->size = size;
-    strncpy(e->date, date, sizeof e->date - 1);
-    e->date[sizeof e->date - 1] = 0;
-    e->dir = dir;
-    return TRUE;
-}
-
-static void ent_free(struct RConn *c)
-{
-    if (c->ent)
-        FreeVec(c->ent);
-    if (c->pool)
-        FreeVec(c->pool);
-    c->ent = NULL;
-    c->pool = NULL;
-    c->nent = c->capent = 0;
-    c->plen = c->pcap = 0;
+    return pan_add(&c->pn[1], name, len, size, date, dir);
 }
 
 /* Drawers first, then by name (any case): a shell sort. */
-static int ent_cmp(struct RConn *c, const struct REnt *a,
+static int ent_cmp(struct Panel *p, const struct REnt *a,
                    const struct REnt *b)
 {
     if ((a->dir == 1) != (b->dir == 1))
         return a->dir == 1 ? -1 : 1;
-    return stricmp(c->pool + a->noff, c->pool + b->noff);
+    return stricmp(p->pool + a->noff, p->pool + b->noff);
 }
 
-static void ent_sort(struct RConn *c)
+static void pan_sort(struct Panel *p)
 {
     int gap, i, j;
-    for (gap = c->nent / 2; gap > 0; gap /= 2)
-        for (i = gap; i < c->nent; i++) {
-            struct REnt t = c->ent[i];
-            for (j = i; j >= gap && ent_cmp(c, &c->ent[j - gap], &t) > 0;
+    for (gap = p->nent / 2; gap > 0; gap /= 2)
+        for (i = gap; i < p->nent; i++) {
+            struct REnt t = p->ent[i];
+            for (j = i; j >= gap && ent_cmp(p, &p->ent[j - gap], &t) > 0;
                  j -= gap)
-                c->ent[j] = c->ent[j - gap];
-            c->ent[j] = t;
+                p->ent[j] = p->ent[j - gap];
+            p->ent[j] = t;
         }
 }
 
 /* The entry of this name (as the host has it, or as the Amiga shows
  * it), -1 none. */
-static int ent_find(struct RConn *c, const char *name)
+int pan_find(struct Panel *p, const char *name)
 {
     int i;
     char seen[256];
-    for (i = 0; i < c->nent; i++)
-        if (!strcmp(ename(c, i), name))
+    for (i = 0; i < p->nent; i++)
+        if (!strcmp(pname(p, i), name))
             return i;
-    for (i = 0; i < c->nent; i++) {
-        to_latin1(ename(c, i), strlen(ename(c, i)), seen, sizeof seen,
+    for (i = 0; i < p->nent; i++) {
+        to_latin1(pname(p, i), strlen(pname(p, i)), seen, sizeof seen,
                   '?');
-        if (!strcmp(seen, name))
+        if (!stricmp(seen, name))
             return i;
     }
     return -1;
 }
 
-/* A name the Amiga gave (a script, a requester), as the host has it. */
-static void host_name(struct RConn *c, const char *name, char *out, int max)
+/* The name under the bar ("" none), and the bar back on it after the
+ * listing is read again. */
+static void pan_keep(struct Panel *p, char *keep)
 {
-    int i = ent_find(c, name);
+    int i = p->cur - (p->up ? 1 : 0);
+    keep[0] = 0;
+    if (i >= 0 && i < p->nent) {
+        strncpy(keep, pname(p, i), 255);
+        keep[255] = 0;
+    }
+}
+
+void pan_seek(struct Panel *p, const char *name)
+{
+    int i = name[0] ? pan_find(p, name) : -1, n = p->nent + (p->up ? 1 : 0);
+    if (i >= 0)
+        p->cur = i + (p->up ? 1 : 0);
+    if (p->cur >= n)
+        p->cur = n - 1;
+    if (p->cur < 0)
+        p->cur = 0;
+}
+
+/* A name the Amiga gave (a script, a typed line), as the host has it. */
+void host_name(struct RConn *c, const char *name, char *out, int max)
+{
+    int i = pan_find(&c->pn[1], name);
     if (i >= 0) {
-        strncpy(out, ename(c, i), max - 1);
+        strncpy(out, pname(&c->pn[1], i), max - 1);
         out[max - 1] = 0;
     } else
         to_utf8(name, out, max);
+}
+
+/* The Amiga's drawer (or, path "", the volumes), read into panel 0. */
+BOOL loc_list(struct RConn *c)
+{
+    struct Panel *p = &c->pn[0];
+    struct FileInfoBlock *fib;
+    char keep[256], date[18];
+    BPTR l;
+    pan_keep(p, keep);
+    pan_clear(p);
+    if (!p->path[0]) {
+        struct DosList *dl;
+        p->up = FALSE;
+        dl = LockDosList(LDF_VOLUMES | LDF_READ);
+        while ((dl = NextDosEntry(dl, LDF_VOLUMES))) {
+            UBYTE *b = BADDR(dl->dol_Name);
+            char n[40];
+            int k = b[0] < 36 ? b[0] : 36;
+            memcpy(n, b + 1, k);
+            n[k++] = ':';
+            pan_add(p, n, k, 0, "", 1);
+        }
+        UnLockDosList(LDF_VOLUMES | LDF_READ);
+        pan_sort(p);
+        pan_seek(p, keep);
+        return TRUE;
+    }
+    p->up = TRUE;
+    if (!(l = Lock((STRPTR)p->path, ACCESS_READ))) {
+        tsay(c, "\x1b[1;31m[", p->path, ": not there]\x1b[0m\r\n");
+        pan_seek(p, keep);
+        return FALSE;
+    }
+    if ((fib = AllocDosObject(DOS_FIB, NULL))) {
+        if (Examine(l, fib) && fib->fib_DirEntryType > 0)
+            while (ExNext(l, fib)) {
+                LONG t = fib->fib_DirEntryType;
+                int dir = t == ST_SOFTLINK ? 2 : t > 0;    /* 2: a link */
+                date_text(fib->fib_Date.ds_Days + 2922,
+                          fib->fib_Date.ds_Minute, date);
+                pan_add(p, (char *)fib->fib_FileName,
+                        strlen((char *)fib->fib_FileName),
+                        dir ? 0 : fib->fib_Size, date, dir);
+            }
+        FreeDosObject(DOS_FIB, fib);
+    }
+    UnLock(l);
+    pan_sort(p);
+    pan_seek(p, keep);
+    return TRUE;
 }
 
 /* ---- SFTP's waits and failures ---- */
@@ -417,6 +559,7 @@ static BOOL sf_fail(struct RConn *c, LONG rc, const char *what)
         "", "no such drawer", "", "it is write-protected", "",
         "the host's disk is full", "", "", "", "the drawer is not empty",
         "not a drawer", "a name the host does not take" };
+    char m[300];
     if (rc == SF_AGAIN || SF_LOST(rc) || !c->sf) {
         if (SF_LOST(rc))
             c->lost = TRUE;
@@ -425,10 +568,11 @@ static BOOL sf_fail(struct RConn *c, LONG rc, const char *what)
     }
     if (rc < 0)
         rc = OPS->sf_error(c->sf);
-    tsay_name(c, "\x1b[1;31m[", what, ": ");
-    tsay(c, rc > 0 && rc <= 20 && why[rc][0] ? why[rc]
-                                              : "the host said no",
-         "]\x1b[0m\r\n", NULL);
+    to_latin1(what, strlen(what), m, 200, '?');
+    strcat(m, ": ");
+    strcat(m, rc > 0 && rc <= 20 && why[rc][0] ? why[rc]
+                                               : "the host said no");
+    tsay(c, "\x1b[1;31m[", m, "]\x1b[0m\r\n");
     return FALSE;
 }
 
@@ -458,6 +602,7 @@ static BOOL sf_cd(struct RConn *c, const char *path)
 
 static BOOL sf_list(struct RConn *c)
 {
+    struct Panel *p = &c->pn[1];
     void *dh;
     LONG rc, r2;
     char name[512], date[18];
@@ -468,7 +613,7 @@ static BOOL sf_list(struct RConn *c)
         ;
     if (rc)
         return sf_fail(c, rc, c->cwd);
-    ent_clear(c);
+    pan_clear(p);
     for (;;) {
         while ((rc = OPS->sf_readdir(dh, name, sizeof name, &a)) ==
                SF_AGAIN && sf_wait(c))
@@ -478,22 +623,9 @@ static BOOL sf_list(struct RConn *c)
         if (!strcmp(name, ".") || !strcmp(name, ".."))
             continue;
         date[0] = 0;
-        if (a.mtime) {
-            int y, m, d, mi = a.mtime % 86400 / 60;
-            ymd(a.mtime / 86400, &y, &m, &d);
-            /* as ftp.c writes them */
-            date[0] = 0;
-            numstr_cat(date, y);
-            strcat(date, m < 10 ? "-0" : "-");
-            numstr_cat(date, m);
-            strcat(date, d < 10 ? "-0" : "-");
-            numstr_cat(date, d);
-            strcat(date, mi / 60 < 10 ? " 0" : " ");
-            numstr_cat(date, mi / 60);
-            strcat(date, mi % 60 < 10 ? ":0" : ":");
-            numstr_cat(date, mi % 60);
-        }
-        ent_add(c, name, rc, a.dir ? 0 : a.size, date,
+        if (a.mtime)
+            date_text(a.mtime / 86400, a.mtime % 86400 / 60, date);
+        pan_add(p, name, rc, a.dir ? 0 : a.size, date,
                 a.dir ? 1 : a.link ? 2 : 0);
     }
     tidy++;
@@ -503,18 +635,18 @@ static BOOL sf_list(struct RConn *c)
     if (rc < 0)
         return sf_fail(c, rc, c->cwd);
     /* links followed, to tell drawers from files (the first 32) */
-    for (i = 0; i < c->nent && links < 32; i++)
-        if (c->ent[i].dir == 2) {
+    for (i = 0; i < p->nent && links < 32; i++)
+        if (p->ent[i].dir == 2) {
             links++;
-            rpath(c, ename(c, i), name, sizeof name);
+            rpath(c, pname(p, i), name, sizeof name);
             while ((rc = OPS->sf_stat(c->sf, name, &a)) == SF_AGAIN &&
                    sf_wait(c))
                 ;
             if (rc == SF_AGAIN)
                 return sf_fail(c, rc, name);
             if (!rc) {
-                c->ent[i].dir = a.dir ? 1 : 0;
-                c->ent[i].size = a.dir ? 0 : a.size;
+                p->ent[i].dir = a.dir ? 1 : 0;
+                p->ent[i].size = a.dir ? 0 : a.size;
             }
         }
     return TRUE;
@@ -534,7 +666,8 @@ static BOOL f_ask(const char *prompt, char *buf, int max, BOOL echo)
         tsay(c, prompt, "(given)\r\n", NULL);
         return TRUE;
     }
-    if (!term_ask(prompt, buf, max, echo))
+    if (!(c ? ask_tab(c, prompt, buf, max, echo)
+            : term_ask(prompt, buf, max, echo)))
         return FALSE;
     if (!echo && c) {
         strncpy(c->pass, buf, sizeof c->pass - 1);
@@ -561,17 +694,23 @@ static BOOL r_connect(struct RConn *c)
     BOOL ok;
     c->lost = c->timedout = FALSE;
     T = c->tab;
-    if (c->kind == FK_FTP)
-        return ftp_open(c);
+    saying = c;
+    if (c->kind == FK_FTP) {
+        ok = ftp_open(c);
+        saying = NULL;
+        return ok;
+    }
     if (!OPS) {
+        saying = NULL;
         tsay(c, "\x1b[1;31m[SFTP is CTermSSH's: call it from there]"
              "\x1b[0m\r\n", NULL, NULL);
         return FALSE;
     }
     asking = c;
     asked = FALSE;
-    c->sf = OPS->sf_open(c->tab->t_dialhost, f_ask, say);
+    c->sf = OPS->sf_open(c->tab->t_dialhost, f_ask, fsay);
     asking = NULL;
+    saying = NULL;
     if (!c->sf)
         return FALSE;
     if (c->cwd[0] && sf_cd(c, c->cwd))  /* called again: where it was */
@@ -620,7 +759,20 @@ static BOOL op_list(struct RConn *c, const char *a, const char *b)
     BOOL ok = c->kind == FK_FTP ? ftp_list(c) : sf_list(c);
     (void)a; (void)b;
     if (ok)
-        ent_sort(c);
+        pan_sort(&c->pn[1]);
+    return ok;
+}
+
+/* The host's drawer read again, the bar on the name it was on. */
+BOOL rem_list(struct RConn *c)
+{
+    struct Panel *p = &c->pn[1];
+    char keep[256];
+    BOOL ok;
+    pan_keep(p, keep);
+    ok = run_op(c, op_list, NULL, NULL);
+    p->up = strcmp(c->cwd, "/") != 0;
+    pan_seek(p, keep);
     return ok;
 }
 
@@ -636,6 +788,16 @@ static BOOL op_cd(struct RConn *c, const char *a, const char *b)
         return FALSE;
     }
     return sf_cd(c, a ? a : "..");
+}
+
+/* Into a drawer of the host's (NULL: up), and its listing. */
+BOOL rem_cd(struct RConn *c, const char *path)
+{
+    if (!run_op(c, op_cd, path, NULL))
+        return FALSE;
+    c->pn[1].cur = c->pn[1].top = 0;
+    c->pn[1].nent = 0;
+    return rem_list(c);
 }
 
 /* mkdir, rmdir, delete, rename: what is FR_* (FR_RMDIR) */
@@ -667,7 +829,7 @@ static BOOL op_do(struct RConn *c, const char *a, const char *b)
     return rc ? sf_fail(c, rc, a) : TRUE;
 }
 
-static BOOL r_do(struct RConn *c, int what, const char *a, const char *b)
+BOOL rem_do(struct RConn *c, int what, const char *a, const char *b)
 {
     op_what = what;
     return run_op(c, op_do, a, b);
@@ -722,9 +884,9 @@ static BOOL ready_now(LONG fd, BOOL wr)
                       NULL) > 0;
 }
 
-/* >0 bytes, 0 the end, -1 failed, AGAIN. FTP's data socket blocks: it
- * is read only when it has something (a write: room for 2 KB, the
- * stack's low-water mark). */
+/* >0 bytes, 0 the end, -1 failed, AGAIN. FTP's data socket is read
+ * only when it has something (a write: room for 2 KB, the stack's
+ * low-water mark). */
 static LONG x_read(struct RConn *c, UBYTE *b, LONG n)
 {
     LONG k;
@@ -793,255 +955,10 @@ static BOOL x_close(struct RConn *c, BOOL stopped)
     return ok;
 }
 
-/* ---- the window ---- */
-
-static void gset(struct RConn *c, int id, ULONG tag, ULONG val)
-{
-    if (c->w && c->g[id] &&
-        SetGadgetAttrs((struct Gadget *)c->g[id], c->w, NULL, tag, val,
-                       TAG_END))
-        RefreshGList((struct Gadget *)c->g[id], c->w, NULL, 1);
-}
-
-static void status(struct RConn *c, const char *a, const char *b)
-{
-    c->status[0] = 0;
-    if (a)
-        strncat(c->status, a, sizeof c->status - 1);
-    if (b)
-        strncat(c->status, b, sizeof c->status - 1 - strlen(c->status));
-    gset(c, W_STATUS, GA_Text, (ULONG)c->status);
-}
-
-/* At rest: what the drawer holds, where downloads go. */
-static void status_idle(struct RConn *c)
-{
-    char s[160], dir[160];
-    int i, d = 0;
-    for (i = 0; i < c->nent; i++)
-        d += c->ent[i].dir == 1;
-    s[0] = 0;
-    numstr_cat(s, c->nent - d);
-    strcat(s, c->nent - d == 1 ? " file, " : " files, ");
-    numstr_cat(s, d);
-    strcat(s, d == 1 ? " drawer. Downloads go to " : " drawers. Downloads go to ");
-    down_dir(c, dir);
-    status(c, s, dir);
-    gset(c, W_GAUGE, FUELGAUGE_Level, 0);
-}
-
-static void list_free(struct RConn *c)
-{
-    struct Node *n;
-    if (c->lbl.lh_Head)
-        while ((n = RemHead(&c->lbl)))
-            FreeListBrowserNode(n);
-}
-
-/* The listing into the window's list: ".." first, unless at the top
- * (only for a window, or one being made: opening). */
-static BOOL opening;
-static void list_fill(struct RConn *c)
-{
-    int i;
-    char name[256], size[16], path[400];
-    if (!c->w && !opening)
-        return;
-    if (c->w)
-        gset(c, W_LIST, LISTBROWSER_Labels, ~0UL);  /* let go of it */
-    list_free(c);
-    NewList(&c->lbl);
-    for (i = strcmp(c->cwd, "/") ? -1 : 0; i < c->nent; i++) {
-        struct Node *n;
-        const struct REnt *e = i >= 0 ? &c->ent[i] : NULL;
-        if (e) {
-            to_latin1(ename(c, i), strlen(ename(c, i)), name, sizeof name,
-                      '?');
-            if (e->dir == 1)
-                strcpy(size, "(drawer)");
-            else if (e->dir == 2)
-                strcpy(size, "(link)");
-            else
-                size_text(e->size, size);
-        } else {
-            strcpy(name, "..");
-            strcpy(size, "(parent)");
-        }
-        n = AllocListBrowserNode(3, LBNA_UserData, (ULONG)i,
-            LBNA_Column, 0, LBNCA_CopyText, TRUE, LBNCA_Text, (ULONG)name,
-            LBNA_Column, 1, LBNCA_CopyText, TRUE, LBNCA_Text, (ULONG)size,
-            LBNCA_Justification, LCJ_RIGHT,
-            LBNA_Column, 2, LBNCA_CopyText, TRUE,
-            LBNCA_Text, (ULONG)(e ? e->date : ""), TAG_END);
-        if (n)
-            AddTail(&c->lbl, n);
-    }
-    if (c->w) {
-        gset(c, W_LIST, LISTBROWSER_Labels, (ULONG)&c->lbl);
-        gset(c, W_LIST, LISTBROWSER_Top, 0);
-        to_latin1(c->cwd, strlen(c->cwd), path, sizeof path, '?');
-        gset(c, W_PATH, STRINGA_TextVal, (ULONG)path);
-        status_idle(c);
-    }
-}
-
-/* At work: everything asleep but Stop. */
-static void busy(struct RConn *c, BOOL on)
-{
-    static const UBYTE ids[] = { W_UP, W_PATH, W_REFRESH, W_GET, W_PUT,
-                                 W_MKDIR, W_REN, W_DEL };
-    int i;
-    c->busy = on;
-    if (on)
-        c->stop = FALSE;
-    for (i = 0; i < (int)sizeof ids; i++)
-        gset(c, ids[i], GA_Disabled, on);
-    gset(c, W_STOP, GA_Disabled, !on);
-}
-
-static void close_gauge(void)
-{
-    struct RConn *c;
-    for (c = conns; c; c = c->next)
-        if (c->w)
-            return;
-    if (FuelGaugeBase)
-        CloseLibrary(FuelGaugeBase);
-    FuelGaugeBase = NULL;
-}
-
-static void b_close(struct RConn *c)
-{
-    if (!c->wobj)
-        return;
-    DisposeObject(c->wobj);             /* the window and every gadget */
-    c->wobj = NULL;
-    c->w = NULL;
-    memset(c->g, 0, sizeof c->g);
-    list_free(c);
-    close_gauge();
-}
-
-static Object *button(struct RConn *c, int id, const char *t)
-{
-    return c->g[id] = ButtonObject, GA_ID, id, GA_RelVerify, TRUE,
-        GA_Text, (ULONG)t, End;
-}
-
-static void add(Object *g, Object *child, ULONG weight)
-{
-    if (g && child)
-        SetAttrs(g, LAYOUT_AddChild, (ULONG)child,
-                 weight != ~0UL ? CHILD_WeightedWidth : TAG_IGNORE, weight,
-                 TAG_END);
-}
-
-static void b_open(struct RConn *c)
-{
-    static struct ColumnInfo ci[] = {
-        { 60, (STRPTR)"Name", 0 }, { 16, (STRPTR)"Size", CIF_RIGHT },
-        { 24, (STRPTR)"Date", 0 }, { -1, NULL, 0 } };
-    Object *root, *h;
-    char path[400];
-    int iw, ih;
-    if (c->w) {
-        WindowToFront(c->w);
-        ActivateWindow(c->w);
-        return;
-    }
-    if (!win) {                         /* hidden: when it is back */
-        c->reopen = TRUE;
-        return;
-    }
-    c->reopen = FALSE;
-    if (!reaction_open() || (!FuelGaugeBase && !(FuelGaugeBase =
-        OpenLibrary((STRPTR)"gadgets/fuelgauge.gadget", 45)))) {
-        tsay(c, "\x1b[1;31m[the browser needs OS 3.2's window classes "
-             "(LIBS:, SYS:Classes)]\x1b[0m\r\n", NULL, NULL);
-        return;
-    }
-    memset(c->g, 0, sizeof c->g);
-    NewList(&c->lbl);
-    opening = TRUE;
-    list_fill(c);
-    opening = FALSE;
-    to_latin1(c->cwd, strlen(c->cwd), path, sizeof path, '?');
-
-    root = c->wlayout = VLayoutObject, LAYOUT_SpaceOuter, TRUE,
-        LAYOUT_DeferLayout, TRUE, End;
-    h = HLayoutObject, End;
-    add(h, button(c, W_UP, "Parent"), 0);
-    add(h, c->g[W_PATH] = StringObject, GA_ID, W_PATH, GA_RelVerify, TRUE,
-        STRINGA_TextVal, (ULONG)path, STRINGA_MaxChars, 390, End, ~0UL);
-    add(h, button(c, W_REFRESH, "Refresh"), 0);
-    if (root && h)
-        SetAttrs(root, LAYOUT_AddChild, (ULONG)h, CHILD_WeightedHeight, 0,
-                 TAG_END);
-    c->g[W_LIST] = ListBrowserObject, GA_ID, W_LIST, GA_RelVerify, TRUE,
-        LISTBROWSER_Labels, (ULONG)&c->lbl, LISTBROWSER_ColumnInfo,
-        (ULONG)ci, LISTBROWSER_ColumnTitles, TRUE,
-        LISTBROWSER_MultiSelect, TRUE, LISTBROWSER_ShowSelected, TRUE, End;
-    if (root && c->g[W_LIST])           /* 6 entries at least */
-        SetAttrs(root, LAYOUT_AddChild, (ULONG)c->g[W_LIST],
-                 CHILD_MinHeight, 7 * (scr->RastPort.TxHeight + 2) + 6,
-                 TAG_END);
-    h = HLayoutObject, End;
-    add(h, c->g[W_STATUS] = ButtonObject, GA_ID, W_STATUS, GA_ReadOnly, TRUE,
-        GA_Text, (ULONG)c->status, BUTTON_BevelStyle, BVS_NONE,
-        BUTTON_Justification, BCJ_LEFT, End, 75);
-    add(h, c->g[W_GAUGE] = FuelGaugeObject, FUELGAUGE_Min, 0,
-        FUELGAUGE_Max, 100, FUELGAUGE_Level, 0, FUELGAUGE_Percent, TRUE,
-        FUELGAUGE_Ticks, 0, End, 25);
-    if (root && h)
-        SetAttrs(root, LAYOUT_AddChild, (ULONG)h, CHILD_WeightedHeight, 0,
-                 TAG_END);
-    h = HLayoutObject, End;
-    add(h, button(c, W_GET, "Download"), ~0UL);
-    add(h, button(c, W_PUT, "Upload..."), ~0UL);
-    add(h, button(c, W_MKDIR, "New drawer..."), ~0UL);
-    add(h, button(c, W_REN, "Rename..."), ~0UL);
-    add(h, button(c, W_DEL, "Delete"), ~0UL);
-    add(h, button(c, W_STOP, "Stop"), ~0UL);
-    if (root && h)
-        SetAttrs(root, LAYOUT_AddChild, (ULONG)h, CHILD_WeightedHeight, 0,
-                 TAG_END);
-    if (!root) {
-        list_free(c);
-        beep();
-        return;
-    }
-    if (c->g[W_STOP])
-        SetAttrs(c->g[W_STOP], GA_Disabled, !c->busy, TAG_END);
-    /* most of a small screen, not all of a big one */
-    iw = scr->Width - 40 < 720 ? scr->Width - 40 : 720;
-    ih = scr->Height - scr->BarHeight - 32;
-    if (ih > 440)
-        ih = 440;
-    strcpy(c->title, c->kind == FK_SFTP ? "CTerm SFTP: " : "CTerm FTP: ");
-    tab_label(c->tab, c->title + strlen(c->title));
-    c->wobj = WindowObject, WA_Title, (ULONG)c->title,
-        scr == ownscr ? WA_CustomScreen : WA_PubScreen, (ULONG)scr,
-        WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
-        WA_SizeGadget, TRUE, WA_Activate, TRUE,
-        WA_InnerWidth, iw, WA_InnerHeight, ih,
-        WINDOW_Position, WPOS_CENTERSCREEN, WINDOW_Layout, (ULONG)root, End;
-    if (!c->wobj) {
-        DisposeObject(root);
-        memset(c->g, 0, sizeof c->g);
-        list_free(c);
-        beep();
-        return;
-    }
-    if (!(c->w = (struct Window *)DoMethod(c->wobj, WM_OPEN)))
-        b_close(c);
-    else if (!c->busy)
-        status_idle(c);
-}
-
 /* ---- transfers ---- */
 
-/* How it goes: the tab's panel and the Transfers window (a few times a
- * second), the browser's status and bar; and CTerm's round now and then,
+/* How it goes: the tab's name and the Transfers window (a few times a
+ * second), the panels' message line; and CTerm's round now and then,
  * so a line that never waits still lets the window and Stop work. */
 static void progress(struct RConn *c)
 {
@@ -1052,27 +969,8 @@ static void progress(struct RConn *c)
         loop_round(-1, 0);
     }
     xfer_show(c->tab, x, 0);
-    if (x->tlast != was && c->w) {      /* drawn: the browser too */
-        char s[160], n[16];
-        ULONG secs = (now - x->t0) / 50;
-        strcpy(s, x->dir == 2 ? "Sending " : "Receiving ");
-        strncat(s, x->name, 60);
-        strcat(s, ": ");
-        size_text(x->done, n);
-        strcat(s, n);
-        if (x->size) {
-            strcat(s, " of ");
-            size_text(x->size, n);
-            strcat(s, n);
-        }
-        if (secs) {
-            strcat(s, ", ");
-            numstr_cat(s, c->moved / secs / 1024);
-            strcat(s, " KB/s");
-        }
-        status(c, s, NULL);
-        gset(c, W_GAUGE, FUELGAUGE_Level, pct100(x->done, x->size));
-    }
+    if (x->tlast != was)
+        ui_progress(c);
 }
 
 /* One file from the host into dir: 1 done, -1 failed, -2 stopped. */
@@ -1109,8 +1007,10 @@ static int get_one(struct RConn *c, const char *rname, ULONG size,
     if (ps > 0 && size && (ULONG)ps < size)
         have = ps;
     strncpy(x->name, cand, sizeof x->name - 1);
+    x->name[sizeof x->name - 1] = 0;
     x->size = size;
     x->done = 0;
+    ui_progress(c);
     if (!x_open(c, rname, 0, &have))
         return given_up(c) ? -2 : -1;
     f = Open((STRPTR)part, have ? MODE_OLDFILE : MODE_NEWFILE);
@@ -1124,12 +1024,12 @@ static int get_one(struct RConn *c, const char *rname, ULONG size,
         return -1;
     }
     if (have) {
-        char m[40];
-        m[0] = 0;
+        char m[160];
+        strcpy(m, FilePart((STRPTR)part));
+        strcat(m, ", ");
         numstr_cat(m, have / 1024);
         strcat(m, " KB there]\x1b[0m\r\n");
-        tsay(c, "\x1b[2m[going on from ", FilePart((STRPTR)part), ", ");
-        tsay(c, m, NULL, NULL);
+        tsay(c, "\x1b[2m[going on from ", m, NULL);
     }
     got = x->done = have;
     x->bdone += have;
@@ -1195,9 +1095,9 @@ static int get_one(struct RConn *c, const char *rname, ULONG size,
     return stopped ? -2 : -1;
 }
 
-/* One file to the host, into the drawer it is in: 1 done, 0 skipped,
- * -1 failed, -2 stopped. ask: a file of the name there - replace it? */
-static int put_one(struct RConn *c, const char *lpath, BOOL ask, UBYTE *buf)
+/* One file to the host, into the drawer it is in (a file of the name
+ * there is replaced): 1 done, 0 skipped, -1 failed, -2 stopped. */
+static int put_one(struct RConn *c, const char *lpath, UBYTE *buf)
 {
     struct Xfer *x = c->x;
     char rname[256];
@@ -1210,23 +1110,15 @@ static int put_one(struct RConn *c, const char *lpath, BOOL ask, UBYTE *buf)
         return 0;
     }
     to_utf8(fp, rname, sizeof rname);
-    if (ask && ent_find(c, rname) >= 0) {
-        struct EasyStruct es = {
-            sizeof(struct EasyStruct), 0, (UBYTE *)"CTerm",
-            (UBYTE *)"%s is on the host already.\nReplace it?",
-            (UBYTE *)"Replace|Skip|Stop" };
-        ULONG arg = (ULONG)fp;
-        LONG a = EasyRequestArgs(c->w, &es, NULL, &arg);
-        if (a != 1)
-            return a == 2 ? 0 : -2;
-    }
     if (!(f = Open((STRPTR)lpath, MODE_OLDFILE))) {
         tsay(c, "\x1b[1;31m[cannot read ", lpath, "]\x1b[0m\r\n");
         return -1;
     }
     strncpy(x->name, fp, sizeof x->name - 1);
+    x->name[sizeof x->name - 1] = 0;
     x->size = size;
     x->done = 0;
+    ui_progress(c);
     if (!x_open(c, rname, 1, NULL)) {
         Close(f);
         return given_up(c) ? -2 : -1;
@@ -1270,11 +1162,11 @@ out:
     return 1;
 }
 
-/* Files to (up: local paths) or from the host (names in its drawer,
- * into dir), one after another, shown as a transfer. The files done;
- * -1: none could start. */
-static int xfer_batch(struct RConn *c, BOOL up, const char *const *names,
-                      const ULONG *sizes, int n, const char *dir, BOOL ask)
+/* Files to (up: the Amiga's paths) or from the host (names in its
+ * drawer, into dir), one after another, shown as a transfer. The files
+ * done; -1: none could start. */
+int xfer_batch(struct RConn *c, BOOL up, const char *const *names,
+               const ULONG *sizes, int n, const char *dir)
 {
     struct Xfer x;
     UBYTE *buf;
@@ -1306,7 +1198,7 @@ static int xfer_batch(struct RConn *c, BOOL up, const char *const *names,
     xfer_show(c->tab, &x, 1);
     for (i = 0; i < n && r != -2; i++) {
         x.fbase = x.bdone;
-        r = up ? put_one(c, names[i], ask, buf)
+        r = up ? put_one(c, names[i], buf)
                : get_one(c, names[i], sizes[i], dir, buf);
         if (r > 0)
             done++;
@@ -1327,9 +1219,9 @@ static int xfer_batch(struct RConn *c, BOOL up, const char *const *names,
 
 static ULONG r_size(struct RConn *c, const char *rname)
 {
-    int i = ent_find(c, rname);
+    int i = pan_find(&c->pn[1], rname);
     if (i >= 0)
-        return c->ent[i].size;
+        return c->pn[1].ent[i].size;
     if (c->kind == FK_FTP) {
         LONG k = ftp_size(c, rname);
         return k > 0 ? (ULONG)k : 0;
@@ -1344,292 +1236,20 @@ static ULONG r_size(struct RConn *c, const char *rname)
     }
 }
 
-/* ---- what the window's buttons do ---- */
+/* ---- the panels' own ---- */
 
-static void hang_up(struct RConn *c)
+void hang_up(struct RConn *c)
 {
-    b_close(c);
     r_drop(c);
     c->tab->ended = TRUE;               /* the tab goes, and with it c */
 }
 
-static BOOL refresh_list(struct RConn *c)
+/* A command at work: no other one starts (busy), Stop is for it. */
+void work(struct RConn *c, BOOL on)
 {
-    BOOL ok = run_op(c, op_list, NULL, NULL);
-    list_fill(c);
-    return ok;
-}
-
-static void go(struct RConn *c, const char *path)
-{
-    if (run_op(c, op_cd, path, NULL))
-        refresh_list(c);
-    else
-        list_fill(c);                   /* the path field as it was */
-}
-
-/* The entries chosen in the list (index), at most max; the first. */
-static int chosen(struct RConn *c, int *out, int max)
-{
-    struct Node *n;
-    int k = 0;
-    for (n = c->lbl.lh_Head; n->ln_Succ && k < max; n = n->ln_Succ) {
-        ULONG sel = 0, ud = 0;
-        GetListBrowserNodeAttrs(n, LBNA_Selected, (ULONG)&sel,
-                                LBNA_UserData, (ULONG)&ud, TAG_END);
-        if (sel && (LONG)ud >= 0 && (LONG)ud < c->nent)
-            out[k++] = ud;
-    }
-    return k;
-}
-
-static void act_get(struct RConn *c, int only)
-{
-    int *idx = AllocVec(c->nent * (sizeof(int) + sizeof(char *) +
-                                   sizeof(ULONG)) + 4, MEMF_ANY);
-    const char **names;
-    ULONG *sizes;
-    char dir[160];
-    int n, i, k = 0;
-    if (!idx)
-        return;
-    names = (const char **)(idx + c->nent);
-    sizes = (ULONG *)(names + c->nent);
-    if (only >= 0) {
-        idx[0] = only;
-        n = 1;
-    } else
-        n = chosen(c, idx, c->nent);
-    for (i = 0; i < n; i++) {
-        if (c->ent[idx[i]].dir == 1) {
-            char nm[112];
-            local_name(ename(c, idx[i]), nm);
-            tsay(c, "\x1b[2m[", nm, ": a drawer, not downloaded]"
-                 "\x1b[0m\r\n");
-            continue;
-        }
-        names[k] = ename(c, idx[i]);
-        sizes[k++] = c->ent[idx[i]].size;
-    }
-    if (!k)
-        tsay(c, "\x1b[1;31m[choose files in the list first]\x1b[0m\r\n",
-             NULL, NULL);
-    else {
-        down_dir(c, dir);
-        xfer_batch(c, FALSE, names, sizes, k, dir, FALSE);
-    }
-    FreeVec(idx);
-}
-
-#define NUP 32
-
-static void act_put(struct RConn *c)
-{
-    struct FileRequester *req;
-    char (*store)[256];
-    const char *paths[NUP];
-    const char *dir = c->tab->t_up[0] ? c->tab->t_up : uldir;
-    int n = 0, i;
-    if (!asl_open() || !(store = AllocVec(NUP * 256, MEMF_ANY)))
-        return;
-    req = AllocAslRequestTags(ASL_FileRequest,
-        ASLFR_Window, (ULONG)c->w, ASLFR_SleepWindow, TRUE,
-        ASLFR_TitleText, (ULONG)"CTerm: files to upload",
-        dir[0] ? ASLFR_InitialDrawer : TAG_IGNORE, (ULONG)dir,
-        ASLFR_DoMultiSelect, TRUE, ASLFR_RejectIcons, TRUE, TAG_END);
-    if (req && AslRequest(req, NULL)) {
-        for (i = 0; i < req->fr_NumArgs && n < NUP; i++) {
-            strncpy(store[n], (char *)req->fr_Drawer, 255);
-            store[n][255] = 0;
-            AddPart((STRPTR)store[n], req->fr_ArgList[i].wa_Name, 256);
-            paths[n] = store[n];
-            n++;
-        }
-        if (!req->fr_NumArgs && req->fr_File[0]) {
-            strncpy(store[0], (char *)req->fr_Drawer, 255);
-            store[0][255] = 0;
-            AddPart((STRPTR)store[0], req->fr_File, 256);
-            paths[n++] = store[0];
-        }
-    }
-    if (req)
-        FreeAslRequest(req);
-    if (n) {
-        xfer_batch(c, TRUE, paths, NULL, n, NULL, TRUE);
-        refresh_list(c);
-    }
-    FreeVec(store);
-}
-
-static void act_mkdir(struct RConn *c)
-{
-    char nm[108], h[256];
-    nm[0] = 0;
-    if (!ask_line("CTerm: new drawer", "Name", nm, sizeof nm,
-                  c->w) || !nm[0])
-        return;
-    to_utf8(nm, h, sizeof h);
-    if (r_do(c, FR_MKDIR, h, NULL))
-        refresh_list(c);
-}
-
-static void act_rename(struct RConn *c)
-{
-    int i;
-    char nm[108], h[256];
-    if (chosen(c, &i, 1) != 1) {
-        tsay(c, "\x1b[1;31m[choose what to rename in the list]\x1b[0m\r\n",
-             NULL, NULL);
-        return;
-    }
-    to_latin1(ename(c, i), strlen(ename(c, i)), nm, sizeof nm, '?');
-    if (!ask_line("CTerm: rename", "New name", nm, sizeof nm,
-                  c->w) || !nm[0])
-        return;
-    to_utf8(nm, h, sizeof h);
-    if (strcmp(h, ename(c, i)) && r_do(c, FR_RENAME, ename(c, i), h))
-        refresh_list(c);
-}
-
-static void act_delete(struct RConn *c)
-{
-    int *idx = AllocVec(c->nent * sizeof(int) + 4, MEMF_ANY), n, i;
-    char nm[112], what[140];
-    if (!idx)
-        return;
-    n = chosen(c, idx, c->nent);
-    if (n) {
-        struct EasyStruct es = {
-            sizeof(struct EasyStruct), 0, (UBYTE *)"CTerm",
-            (UBYTE *)"Delete %s on the host?\n(A drawer must be empty.)",
-            (UBYTE *)"Delete|Cancel" };
-        ULONG arg = (ULONG)what;
-        if (n == 1) {
-            to_latin1(ename(c, idx[0]), strlen(ename(c, idx[0])), what,
-                      sizeof what, '?');
-        } else {
-            what[0] = 0;
-            numstr_cat(what, n);
-            strcat(what, " files and drawers");
-        }
-        if (EasyRequestArgs(c->w, &es, NULL, &arg) == 1) {
-            for (i = 0; i < n && !given_up(c); i++) {
-                const struct REnt *e = &c->ent[idx[i]];
-                if (r_do(c, e->dir == 1 ? FR_RMDIR : FR_DELETE,
-                         ename(c, idx[i]), NULL)) {
-                    local_name(ename(c, idx[i]), nm);
-                    tsay(c, "\x1b[2m[", nm, " deleted]\x1b[0m\r\n");
-                }
-            }
-            refresh_list(c);
-        }
-    } else
-        tsay(c, "\x1b[1;31m[choose what to delete in the list]\x1b[0m\r\n",
-             NULL, NULL);
-    FreeVec(idx);
-}
-
-/* A double-click: a drawer is entered, a file downloaded; a link is
- * tried as a drawer first. */
-static void act_open(struct RConn *c)
-{
-    struct Node *n = NULL;
-    ULONG ud = 0;
-    LONG i;
-    GetAttr(LISTBROWSER_SelectedNode, c->g[W_LIST], (ULONG *)&n);
-    if (!n)
-        return;
-    GetListBrowserNodeAttrs(n, LBNA_UserData, (ULONG)&ud, TAG_END);
-    i = (LONG)ud;
-    if (i < 0) {
-        go(c, NULL);
-        return;
-    }
-    if (i >= c->nent)
-        return;
-    if (c->ent[i].dir) {
-        char nm[400];
-        int was = c->ent[i].dir;
-        strncpy(nm, ename(c, i), sizeof nm - 1);
-        nm[sizeof nm - 1] = 0;
-        if (run_op(c, op_cd, nm, NULL)) {
-            refresh_list(c);
-            return;
-        }
-        if (was == 1 || c->lost)
-            return;
-        c->failed = FALSE;              /* a link to a file: fetched */
-    }
-    act_get(c, i);
-}
-
-static void act(struct RConn *c, int id)
-{
-    char p[400];
-    const char *t = NULL;
-    busy(c, TRUE);
-    c->failed = FALSE;
-    switch (id) {
-    case W_UP: go(c, NULL); break;
-    case W_PATH:
-        GetAttr(STRINGA_TextVal, c->g[W_PATH], (ULONG *)&t);
-        if (t && t[0]) {
-            to_utf8(t, p, sizeof p);
-            go(c, p);
-        }
-        break;
-    case W_REFRESH: refresh_list(c); break;
-    case W_LIST: act_open(c); break;
-    case W_GET: act_get(c, -1); break;
-    case W_PUT: act_put(c); break;
-    case W_MKDIR: act_mkdir(c); break;
-    case W_REN: act_rename(c); break;
-    case W_DEL: act_delete(c); break;
-    }
-    busy(c, FALSE);
-    if (!c->failed && c->w)
-        status_idle(c);
-}
-
-static void b_events(struct RConn *c)
-{
-    ULONG res, ev = 0;
-    UWORD code;
-    while (c->wobj && (res = DoMethod(c->wobj, WM_HANDLEINPUT,
-                                      (ULONG)&code)) != WMHI_LASTMSG) {
-        int id = res & WMHI_GADGETMASK;
-        switch (res & WMHI_CLASSMASK) {
-        case WMHI_CLOSEWINDOW:
-            if (!c->busy) {
-                hang_up(c);
-                return;
-            }
-            c->wantclose = TRUE;        /* when the work has stopped */
-            /* fall through */
-        case WMHI_GADGETUP:
-            if ((res & WMHI_CLASSMASK) == WMHI_CLOSEWINDOW || id == W_STOP) {
-                c->stop = TRUE;
-                if (c->x)
-                    c->x->stop = 1;
-                break;
-            }
-            if (id == W_LIST) {         /* a click chooses; two open */
-                GetAttr(LISTBROWSER_RelEvent, c->g[W_LIST], &ev);
-                if (ev != LBRE_DOUBLECLICK)
-                    break;
-            }
-            if (c->busy) {
-                beep();
-                break;
-            }
-            act(c, id);
-            if (c->wantclose) {
-                hang_up(c);
-                return;
-            }
-            break;
-        }
-    }
+    c->busy = on;
+    if (on)
+        c->stop = FALSE;
 }
 
 /* ---- the part's way in (part.h: FilesPart) ---- */
@@ -1637,21 +1257,25 @@ static void b_events(struct RConn *c)
 static void conn_free(struct RConn *c)
 {
     struct RConn **q;
-    b_close(c);
+    if (c->ui && !c->tab->ended)
+        ui_stop(c);                     /* the tab stays: its messages */
+    ui_free(c);
     r_drop(c);
-    ent_free(c);
+    pan_free(&c->pn[0]);
+    pan_free(&c->pn[1]);
     for (q = &conns; *q && *q != c; q = &(*q)->next)
         ;
     if (*q)
         *q = c->next;
     c->tab->t_rf = NULL;
+    c->tab->t_fui = FALSE;
     memset(c->pass, 0, sizeof c->pass);
     FreeVec(c);
 }
 
 static BOOL callok;
 
-/* T's place: connected (if it is not), its listing, its window. */
+/* T's place: connected (if it is not), its listings, its panels. */
 static void f_call_(void)
 {
     struct RConn *c = conn_of(T);
@@ -1662,6 +1286,7 @@ static void f_call_(void)
         c->tab = T;
         c->kind = T->t_fkind;
         c->cfd = c->dfd = -1;
+        c->side = 1;
         strcpy(c->pass, T->t_pass);
         c->next = conns;
         conns = c;
@@ -1669,23 +1294,35 @@ static void f_call_(void)
     }
     if (!c->busy && !is_up(c)) {
         BOOL ok;
-        busy(c, TRUE);
+        work(c, TRUE);
         ok = r_connect(c);
-        if (ok && !run_op(c, op_list, NULL, NULL) && !is_up(c))
+        if (ok && !rem_list(c) && !is_up(c))
             ok = FALSE;
-        busy(c, FALSE);
+        work(c, FALSE);
         if (!ok) {
-            if (!c->w)
+            if (!c->ui)
                 conn_free(c);           /* nothing open: the part may go */
             return;
         }
-        tsay(c, "\x1b[2m[connected: the browser is open - Return in this "
-             "tab opens it again]\x1b[0m\r\n", NULL, NULL);
     }
     callok = TRUE;
-    if (c->w)
-        list_fill(c);
-    b_open(c);
+    if (!c->ui) {
+        BPTR l;
+        char dir[160];
+        tsay(c, "\x1b[2m[connected: the panels are up - F9 there shows "
+             "these messages, any key goes back]\x1b[0m\r\n", NULL, NULL);
+        down_dir(c, dir);
+        c->pn[0].path[0] = 0;
+        if ((l = Lock((STRPTR)dir, ACCESS_READ))) {
+            if (!NameFromLock(l, (STRPTR)c->pn[0].path,
+                              sizeof c->pn[0].path))
+                c->pn[0].path[0] = 0;
+            UnLock(l);
+        }
+        loc_list(c);
+        ui_start(c);
+    } else
+        ui_draw(c);
 }
 
 static BOOL f_call(void)
@@ -1695,8 +1332,8 @@ static BOOL f_call(void)
 }
 
 /* Project/Open SFTP browser: from an ssh tab, its host and login in a
- * tab of its own (its own connection); from a browser's tab, its
- * window. */
+ * tab of its own (its own connection); from a browser's tab, its panels
+ * drawn again. */
 static void f_menu_(void)
 {
     struct Tab *t, *from = T;
@@ -1741,27 +1378,48 @@ static void f_menu(void)
     deep_call(f_menu_);
 }
 
-static ULONG f_sigmask(void)
+/* A key or a click in a tab whose panels are up (T) */
+static int in_k, in_r, in_c;
+static ULONG in_s, in_us;
+
+static void f_key_(void)
 {
-    struct RConn *c;
-    ULONG m = 0;
-    for (c = conns; c; c = c->next)
-        if (c->w)
-            m |= 1UL << c->w->UserPort->mp_SigBit;
-    return m;
+    struct RConn *c = conn_of(T);
+    int k = in_k;
+    if (c)
+        ui_key(c, k);
 }
 
-static void f_events_(void)
+static void f_key(int k)
 {
-    struct RConn *c;
-    for (c = conns; c; c = c->next)
-        if (c->w)
-            b_events(c);
+    in_k = k;
+    deep_call(f_key_);
 }
 
-static void f_events(void)
+static void f_mouse_(void)
 {
-    deep_call(f_events_);
+    struct RConn *c = conn_of(T);
+    int what = in_k, r = in_r, col = in_c;
+    if (c && c->ui)
+        ui_mouse(c, what, r, col, in_s, in_us);
+}
+
+static void f_mouse(int what, int r, int col, ULONG s, ULONG us)
+{
+    in_k = what;
+    in_r = r;
+    in_c = col;
+    in_s = s;
+    in_us = us;
+    deep_call(f_mouse_);
+}
+
+/* The tab's size changed: drawn again at the new one. */
+static void f_resized(struct Tab *t)
+{
+    struct RConn *c = conn_of(t);
+    if (c && c->ui)
+        ui_draw(c);
 }
 
 static struct Tab *gone_tab;
@@ -1777,25 +1435,6 @@ static void f_tab_gone(struct Tab *t)
 {
     gone_tab = t;
     deep_call(f_tab_gone_);
-}
-
-static BOOL scr_again;
-
-static void f_screen_(void)
-{
-    struct RConn *c;
-    for (c = conns; c; c = c->next)
-        if (!scr_again && c->w) {
-            b_close(c);
-            c->reopen = TRUE;
-        } else if (scr_again && c->reopen)
-            b_open(c);
-}
-
-static void f_screen(BOOL again)
-{
-    scr_again = again;
-    deep_call(f_screen_);
 }
 
 /* ---- ARexx ---- */
@@ -1819,31 +1458,32 @@ static void rx_result(const char *t, LONG n)
 static void f_rexx_(void)
 {
     struct RConn *c = conn_of(T);
-    char h[256], h2[256], dir[256];
+    struct Panel *p;
+    char h[256], h2[256], dir[300];
     int i, got;
     rx_rc = 10;
     rx_res = NULL;
     if (!c || c->busy)
         return;                         /* no place here; at work */
-    busy(c, TRUE);
-    c->failed = FALSE;
+    p = &c->pn[1];
+    work(c, TRUE);
     switch (rx_what) {
     case FR_LIST:
-        if (refresh_list(c)) {
+        if (rem_list(c)) {
             LONG len = 1;
             char *r, *q;
-            for (i = 0; i < c->nent; i++)
-                len += strlen(ename(c, i)) + 4;
+            for (i = 0; i < p->nent; i++)
+                len += strlen(pname(p, i)) + 4;
             if ((r = AllocVec(len, MEMF_ANY))) {
                 q = r;
-                for (i = 0; i < c->nent; i++) {
+                for (i = 0; i < p->nent; i++) {
                     if (i)
                         *q++ = ' ';
                     *q++ = '"';
-                    to_latin1(ename(c, i), strlen(ename(c, i)), q,
+                    to_latin1(pname(p, i), strlen(pname(p, i)), q,
                               len - (q - r) - 3, '?');
                     q += strlen(q);
-                    if (c->ent[i].dir == 1)
+                    if (p->ent[i].dir == 1)
                         *q++ = '/';
                     *q++ = '"';
                 }
@@ -1855,8 +1495,7 @@ static void f_rexx_(void)
         break;
     case FR_CD:
         to_utf8(rx_names[0], h, sizeof h);
-        if (run_op(c, op_cd, h, NULL)) {
-            refresh_list(c);
+        if (rem_cd(c, !strcmp(h, "..") ? NULL : h)) {
             to_latin1(c->cwd, strlen(c->cwd), h, sizeof h, '?');
             rx_result(h, -1);
             rx_rc = 0;
@@ -1880,50 +1519,52 @@ static void f_rexx_(void)
             nm[i] = store + i * 256;
             sz[i] = r_size(c, nm[i]);
         }
+        /* TO, else the Amiga panel's drawer, else the download drawer */
         if (rx_to) {
             strncpy(dir, rx_to, sizeof dir - 1);
             dir[sizeof dir - 1] = 0;
-        } else
+        } else if (c->pn[0].path[0])
+            strcpy(dir, c->pn[0].path);
+        else
             down_dir(c, dir);
-        got = xfer_batch(c, FALSE, nm, sz, rx_n, dir, FALSE);
+        got = xfer_batch(c, FALSE, nm, sz, rx_n, dir);
         rx_rc = got == rx_n ? 0 : got > 0 ? 5 : 10;
         FreeVec(nm);
+        loc_list(c);
         break;
     }
     case FR_PUT:
         if (r_ready(c)) {
-            got = xfer_batch(c, TRUE, rx_names, NULL, rx_n, NULL, FALSE);
+            got = xfer_batch(c, TRUE, rx_names, NULL, rx_n, NULL);
             rx_rc = got == rx_n ? 0 : got > 0 ? 5 : 10;
-            refresh_list(c);
+            rem_list(c);
         }
         break;
     case FR_MKDIR:
         to_utf8(rx_names[0], h, sizeof h);
-        if (r_do(c, FR_MKDIR, h, NULL))
+        if (rem_do(c, FR_MKDIR, h, NULL))
             rx_rc = 0;
-        refresh_list(c);
+        rem_list(c);
         break;
     case FR_DELETE:
         host_name(c, rx_names[0], h, sizeof h);
-        i = ent_find(c, h);
-        if (r_do(c, i >= 0 && c->ent[i].dir == 1 ? FR_RMDIR : FR_DELETE, h,
-                 NULL))
+        i = pan_find(p, h);
+        if (rem_do(c, i >= 0 && p->ent[i].dir == 1 ? FR_RMDIR : FR_DELETE,
+                   h, NULL))
             rx_rc = 0;
-        refresh_list(c);
+        rem_list(c);
         break;
     case FR_RENAME:
         host_name(c, rx_names[0], h, sizeof h);
         to_utf8(rx_to ? rx_to : "", h2, sizeof h2);
-        if (h2[0] && r_do(c, FR_RENAME, h, h2))
+        if (h2[0] && rem_do(c, FR_RENAME, h, h2))
             rx_rc = 0;
-        refresh_list(c);
+        rem_list(c);
         break;
     }
-    busy(c, FALSE);
-    if (!c->failed && c->w)
-        status_idle(c);
-    if (c->wantclose)
-        hang_up(c);
+    work(c, FALSE);
+    if (c->ui && !c->tab->ended)
+        ui_draw(c);
 }
 
 static int f_rexx(int what, const char *const *names, int n, const char *to,
@@ -1945,7 +1586,8 @@ static BOOL f_idle(void)
 
 APTR part_main(void)
 {
-    static struct FilesPart p = { f_call, f_menu, f_events, f_sigmask,
-                                  f_tab_gone, f_screen, f_rexx, f_idle };
+    static struct FilesPart p = { f_call, f_menu, f_key, f_mouse,
+                                  f_resized, f_tab_gone, f_rexx, f_idle };
+    ui_keys();
     return &p;
 }

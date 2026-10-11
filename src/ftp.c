@@ -183,7 +183,7 @@ BOOL ftp_open(struct RConn *c)
         port = atol(colon + 1);
     }
     T = c->tab;
-    c->cfd = net_connect(host, port, say);
+    c->cfd = net_connect(host, port, fsay);
     sock_nonblock(c->cfd);
     if (c->cfd < 0)
         return FALSE;
@@ -206,8 +206,7 @@ BOOL ftp_open(struct RConn *c)
             char q[100];
             strcpy(q, user);
             strcat(q, "'s password: ");
-            T = c->tab;
-            if (!term_ask(q, pw, sizeof pw, FALSE))
+            if (!ask_tab(c, q, pw, sizeof pw, FALSE))
                 goto fail;
             strcpy(c->pass, pw);        /* for calling again */
             memset(pw, 0, sizeof pw);
@@ -263,9 +262,8 @@ BOOL ftp_cd(struct RConn *c, const char *path)
 }
 
 /* A passive data connection, before the command that uses it: the
- * socket, -1 none. It blocks: it is read only when WaitSelect says so
- * (FS-UAE's bsdsocket lost a non-blocking socket's data: a download
- * stood still after 1.1 MB until Stop). */
+ * socket, -1 none. Non-blocking (files.h), and read only when
+ * WaitSelect says so. */
 static LONG data_open(struct RConn *c)
 {
     LONG port = 0;
@@ -303,7 +301,7 @@ static LONG data_open(struct RConn *c)
     }
     T = c->tab;
     {
-        LONG d = net_connect(c->peer, port, say);
+        LONG d = net_connect(c->peer, port, fsay);
         sock_nonblock(d);
         return d;
     }

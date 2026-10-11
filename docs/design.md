@@ -31,7 +31,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 | Panes: the window split, the layout tree, dividers | `src/pane.c` | Yes |
 | Main loop, settings, menus | `src/main.c` | Yes |
 | The parts' loader, their stubs, the ARexx port | `src/parts.c`, `src/part.h`, `src/partlist.h` | Yes |
-| Parts (files of their own, `Parts/`): settings window, phone book window, ARexx's commands, Call window, Transfers window, speed test, the SFTP/FTP file browser | `src/setwin.c`, `src/bookwin.c` (+ `src/serwin.c`, `src/askwin.c`), `src/rexx.c`, `src/callwin.c`, `src/xwin.c`, `src/bench.c`, `src/files.c` + `src/ftp.c` (+ `src/askwin.c`) | Yes |
+| Parts (files of their own, `Parts/`): settings window, phone book window, ARexx's commands, Call window, Transfers window, speed test, the SFTP/FTP file browser | `src/setwin.c`, `src/bookwin.c` (+ `src/serwin.c`, `src/askwin.c`), `src/rexx.c`, `src/callwin.c`, `src/xwin.c`, `src/bench.c`, `src/files.c` + `src/fileui.c` + `src/ftp.c` | Yes |
 | SFTP's calls for the browser (CTermSSH only, through `sftp_ops`) | `src/ssh.c`, `src/ssh.h` | Yes |
 | PC relay: runs a program in a pty, connects to the Amiga | `pc/cterm-relay.py` | PC |
 
@@ -599,8 +599,144 @@ In the order the user and I agreed (2026-10-10):
     PhoneBook 15,052 (+askwin), ARexx 18,220, Call 6,864. Memory: see
     the table below.
   - **Not done:** FTPS (AUTH TLS: AmiSSL is CTermSSH's only - later),
-    active FTP, whole drawers, the Amiga's side as a second list, upload
-    resume, local times for UTC dates (MLSD, SFTP).
+    active FTP, whole drawers, upload resume, local times for UTC dates
+    (MLSD, SFTP). (The Amiga's side as a second list: 0.3b15.)
+
+- **Found on the real A1200, 2026-10-11 (0.3b14, against
+  ftp.aminet.net; Emu68, lwip bsdsocket):** the browser listed fine and
+  downloads arrived whole (RECENT, 10,803 bytes), but (a) the end of an
+  FTP download's data was sometimes never reported "readable": the file
+  stood at 100 % and the loop went round the wait - now a download whose
+  bytes reached the size the host gave waits at most 2 s more, then
+  ends; (b) FTP's sockets are non-blocking now (sock_nonblock,
+  WOULDBLOCK), so no recv/send can hold CTerm, and the download loop
+  sleeps a tick when the wait says "ready" and a look says "not yet"
+  (commit c6cb6e8). (c) **Open:** during every download wasabid (the
+  remote-control daemon, another program) stopped answering for ~15 s at
+  a time, and once (the first time) never came back until a reboot
+  (still running per `status`, unreachable). CTerm's task was in "wait",
+  not spinning, while wasabid stalled; a double-click elsewhere did not
+  stall it. Not reproduced in FS-UAE. Cause not found; suspects: a lock
+  both hold (Intuition/layers from the ReAction window during a
+  transfer, or something in the DOS writes), or lwip itself. 0.3b15
+  removes the ReAction window (below); the A1200 retest will tell.
+  Non-blocking sockets now work in FS-UAE too (8 MB down, md5): the
+  stall of 0.3b14's first try was the zero-time WaitSelect, not
+  FIONBIO.
+
+- **Done 2026-10-11 (0.3b15): the file browser inside the terminal**
+  (the user: "Since CTerm is a terminal, I want to stay in the terminal,
+  just like ssh, telnet"). The ReAction window is gone; the panels are
+  drawn in the place's tab like a program in a terminal (mc's look).
+  - **The pieces:** `src/files.c` (the connection, both listings, the
+    transfers, ARexx, the part's way in), `src/fileui.c` (the panels,
+    drawing, keys, mouse, prompts, command line, key file), `src/ftp.c`
+    (unchanged but for its messages and password question going through
+    files.c: `fsay`, `ask_tab`). askwin.c is PhoneBook's alone now.
+    FilesPart (part.h, PART_VERSION 3): call, menu, key, mouse,
+    resized, tab_gone, rexx, idle - the window's events, sigmask and
+    screen calls are gone from CTerm (main.c, hide.c, screen.c,
+    classes.c).
+  - **How keys get there:** a tab with `t_rf` (a connection) gives every
+    key (not Right Amiga ones) to the part as a code - a character as
+    the keymap makes it, KM_* for the rest (cterm.h, CFile's numbers
+    plus PageUp/PageDown/Home/End/Insert/F11/F12 of a PC keyboard) - also
+    during a transfer, so the stop key is the person's too. Clicks in
+    the text go to the part while `t_fui` (the panels are up); Shift and
+    the mouse still mark text. tell_sizes (and net.c's resize during
+    waits) calls files_resized: everything is drawn again at the new
+    size. The xfer panel over the tab's rows is not drawn for a browser
+    tab (it shows its own progress line), and its Stop is not hit-tested.
+  - **Drawing:** escape sequences into the tab's emulator (say()): CSI
+    H, SGR (the theme's default colours; the bar, the active title and
+    the key labels are inverse video - cyan on a 16-colour Workbench
+    became grey on grey), box drawing U+2500/2550 (CTerm draws them), the
+    tab switched to UTF-8 for it (Latin-1 names written as UTF-8). The
+    alternate screen (?1049h) holds the panels; messages wait in a 4 KB
+    buffer and are written to the main screen when F9 shows it, when
+    the panels go, or when the buffer fills. A moving bar redraws two
+    lines, a page turn its panel's list, the rest is drawn whole (a new
+    drawer, a resize). The message line is never wider than W-1: a
+    character in the last column would wrap and scroll the key bar away
+    (seen: a long progress line did).
+  - **Layout:** each panel half the width; columns by its inner width
+    (name; size from 20 letters; a short date "10-11 07:50" from 34; the
+    whole date from 52); a name too long loses its middle (`~`), a path
+    its start. Under 24x6 it says so and waits for a bigger window.
+  - **Questions in the tab:** y/n (delete, quit, replacing on upload:
+    asked once for all the names that are there already), a line (new
+    name, new drawer, the command line) with its own keys ([line]). A
+    password or a host key question while the panels are up (calling
+    again) puts the main screen back for term_ask, then the panels.
+  - **Keys:** ENVARC:CTerm/files.keys, CFile's format (KEYS ACTION,
+    sections [panels] and [line], `none`), written with the defaults
+    when missing; read when the part loads (a change counts at the next
+    browser). F1 lists the keys as bound; the key bar shows F1-F10's
+    actions as bound.
+  - **The command line:** ls/lls (as text over the panels), cd/lcd,
+    pwd/lpwd, get/mget, put/mput, mkdir, rm/rmdir, rename, bye, help;
+    patterns through ParsePatternNoCase/MatchPatternNoCase (`*` made
+    `#?`); Tab completes the command or a name of the side the command
+    is about; 8 lines of history.
+  - **The Amiga's side:** Lock/ExNext into the same listing as the
+    host's (struct Panel: REnt + a name pool, drawers first); NameFromLock
+    gives the path; `..` above a volume's root lists the volumes
+    (LockDosList); soft links are "Link" and are tried as drawers. Local
+    rename (Rename), new drawer (CreateDir) and delete (DeleteFile, after
+    y) too, as mc does on the active panel.
+  - **A compiler trap (verified, read in the assembly):** bebbo's gcc
+    (-Os, also -O1/-O2) compiled `draw_item(c, s, p->cur - p->top)` after
+    `cmp.l (a4)+,d3` / `cmp.l (a3)+,a5` as `(a4) - (a3)` with both
+    registers already moved on: p->top minus the first long of p->path
+    was passed, and the bar was drawn on the border line. `-fbbb=-`
+    (bebbo's extra backend pass off) makes it right; Parts/Files is built
+    with it (+80 bytes). `-fno-auto-inc-dec`, `-fno-peephole2` did not
+    help.
+  - **The wheel on OS 3.2:** Intuition turns the NewMouse wheel's press
+    ($7A/$7B) into an IDCMP_EXTENDEDMOUSE message (IntuiWheelData) and
+    only the release reaches the window as RAWKEY - CTerm's wheel never
+    worked on 3.2 (FS-UAE, wasabi's NewMouse keys). The window now asks
+    for IDCMP_EXTENDEDMOUSE and makes each notch the old key (and ignores
+    the raw keys once such a message came, so a wheel is never counted
+    twice).
+  - **Also fixed:** ARexx HANGUP on a browser tab said RC 5 (not
+    linked); now it hangs up its place (Return calls again).
+  - **Tested in FS-UAE** (verified 2026-10-11; tests/ftp/ftpd.py,
+    the test sshd, tests/files/uae.sh with wasabid on port 1240): FTP on
+    the A1200 + 8 MB fast: the panels at 77x26 (640x256 Workbench), at
+    160x63 (a 1280x512 own screen, full screen), in a 38-column pane
+    side by side and a 38x12 pane under it, after dragging the window
+    smaller (about 58x18: the date column went); Tab, the arrows, Space,
+    quick search, Backspace, Return, `*`; F7 new drawer on both sides,
+    F6 rename (a Latin-1 é: UTF-8 on the host), F8 delete (asked); F5
+    down 3 MB + 6 bytes and up the same, md5-identical; the replace
+    question (n: nothing sent); `:lcd`, `:cd ..`, `:ls`, `:mget big8*`
+    (two files), `:get big8.bin` - an 8 MB download stopped with Esc
+    and resumed by F5 (REST), md5-identical; F9 the messages and back;
+    F1 help, the wheel scrolling it and a panel; a click, a double-click
+    on `..`, a click on the key bar's Help; a Shell pane typed in while
+    a download ran in the browser pane (8 MB, md5); files.keys with
+    `<F5> none`, `<F3> copy`, `c copy`: F5 nothing, F3 and c copied, the
+    key bar showed 3Copy; files.keys deleted: written again, the
+    defaults back; tests/files/t-files.rexx all as expected (LIST,
+    MKDIR, CD, PUT, RENAME, GET md5, DELETE, a missing file RC 10). SFTP
+    on the 030/50 + 32 MB (1280x512 own screen): the place from the
+    phone book, a 4 MB download stopped and resumed (seek),
+    md5-identical; 2 files up (md5); t-files.rexx (RC 0 where the
+    names are there); ARexx HANGUP, Return calls again, the panels come
+    back; F10 y closes the tab and CTermSSH ends. **Not tested:**
+    Project/Open SFTP browser from an ssh tab (a blind menu pick missed;
+    the code is the old path with the panels), the real A1200 (the
+    wasabid stall above), PC-keyboard PageUp/Home/End codes, a
+    password asked while the panels are up.
+  - **Cost:** CTerm 202,348 -> 203,644 bytes (keys and clicks to the
+    part, the wheel message); CTermSSH 411,464 -> 412,468; Parts/Files
+    32,716 -> 53,160 (fileui.c is 24 KB: drawing, keys, the command
+    line, the key file and its texts). Memory (fast config, Avail FLUSH,
+    the same boot): CTerm idle takes 442,032 (0.3b14: 444,824); CTerm
+    with an FTP place open takes 485,672 (0.3b14 with its window:
+    807,416) - 322 KB less, the window classes no longer loaded. A run
+    still leaves ~6.2 KB behind (as 0.3b14).
 
 - Later idea: Hydra's chat with the other side during a transfer
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
@@ -765,7 +901,7 @@ call that uses ~0.5 KB (the Shell itself is a process of its own).
 
 | | 0.3b7 | 0.3b8 | 0.3b12 | 0.3b13 | 0.3b14 |
 |---|---|---|---|---|---|
-| CTerm (bytes) | 202,960 | 231,176 | 251,788 | 198,556 | 202,348 |
+| CTerm (bytes) | 202,960 | 231,176 | 251,788 | 198,556 | 202,348 (0.3b15: 203,644) |
 | free, CTerm idle, stock A1200 (2 MB chip) | 85,752 | 60,056 | 39,960 | 119,408 | |
 | free, CTerm idle, A1200 + 8 MB fast | | | 8,413,512 | 8,496,696 | |
 | CTerm idle takes, A1200 + 8 MB fast (2026-10-11, same boot) | | | | 442,304, 438,448 | 440,968, 440,968 |
@@ -783,6 +919,9 @@ on the 030/50 they are the same.
 Parts and their sizes: Settings 20,264 bytes, ARexx 16,992, PhoneBook
 13,292, Call 6,140, SpeedTest 4,476, Transfers 4,416. (0.3b14: Files
 32,232, PhoneBook 15,052, ARexx 18,220, Call 6,864.)
+
+0.3b15: CTerm idle 442,032 bytes, with an FTP place's panels 485,672
+(0.3b14: 444,824 and 807,416, its window and the window classes).
 
 0.3b14, measured with Avail FLUSH on the fast config (tests/files/uae.sh,
 free before CTerm 8,948,840): the file browser open (an FTP place: its

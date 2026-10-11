@@ -575,6 +575,8 @@ static void window_resized(void)
         T = tabs[i];
         if (sock >= 0 && T != sending)
             send_naws();
+        if (T->t_fui)
+            files_resized(T);
     }
     T = keep;
 }

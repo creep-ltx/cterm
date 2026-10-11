@@ -21,7 +21,7 @@
 #define PART_H
 
 #define PART_HEAD    0x43545048UL       /* "CTPH": the header's mark */
-#define PART_VERSION 2UL                /* PartEnv's names and the tables
+#define PART_VERSION 3UL                /* PartEnv's names and the tables
                                          * below */
 #define PART_ABI     ((PART_VERSION << 16) | sizeof(struct PartEnv))
 
@@ -80,13 +80,14 @@ struct XwinPart {                       /* Parts/Transfers: xwin.c */
 struct SpeedPart {                      /* Parts/SpeedTest: bench.c */
     void (*test)(void);
 };
-struct FilesPart {                      /* Parts/Files: files.c, ftp.c */
+struct FilesPart {                      /* Parts/Files: files.c, fileui.c,
+                                           ftp.c */
     BOOL (*call)(void);
     void (*menu)(void);
-    void (*events)(void);
-    ULONG (*sigmask)(void);
+    void (*key)(int k);
+    void (*mouse)(int what, int r, int c, ULONG s, ULONG us);
+    void (*resized)(struct Tab *t);
     void (*tab_gone)(struct Tab *t);
-    void (*screen)(BOOL again);
     int (*rexx)(int what, const char *const *names, int n, const char *to,
                 char **res);
     BOOL (*idle)(void);                 /* nothing open: it may go */

@@ -2596,7 +2596,7 @@ static void refresh_pane(void)
     syncwait = 0;
     if (!vt_take_changes(vt, &chg))
         return;
-    xp = T->t_xfer != NULL;
+    xp = T->t_xfer && !T->t_fkind;
     if (xp)
         chg.all = 1;                    /* a scroll would carry the panel */
     rp_forget();
@@ -2720,8 +2720,8 @@ static void xfer_panel_(void);
 void xfer_panel(void)
 {
     struct Pane *p = pane_of(T), *was = cpane;
-    if (!p || !win || !T->t_xfer)
-        return;
+    if (!p || !win || !T->t_xfer || T->t_fkind)
+        return;                         /* a browser shows its own */
     if (p == was)
         xfer_panel_();
     else {
@@ -2832,7 +2832,8 @@ BOOL xfer_click(int mx, int my)
 {
     int i;
     for (i = 0; i < npanes; i++) {      /* a Stop in any pane */
-        struct Xfer *x = panes[i].tab ? panes[i].tab->t_xfer : NULL;
+        struct Xfer *x = panes[i].tab && !panes[i].tab->t_fkind
+                         ? panes[i].tab->t_xfer : NULL;
         if (x && mx >= x->stopx0 && mx <= x->stopx1 && my >= x->stopy0 &&
             my <= x->stopy1) {
             x->stop = 1;

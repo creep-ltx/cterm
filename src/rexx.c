@@ -554,7 +554,7 @@ static LONG c_hangup(struct RexxMsg *rm, LONG *a, BOOL top)
     if (!top)
         return LATER;
     T = target();
-    if (local || !linked) {
+    if (local || (!linked && !T->t_rf)) {   /* a browser's: its place */
         T = keep;
         return RC_WARN;
     }

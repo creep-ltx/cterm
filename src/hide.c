@@ -226,7 +226,6 @@ static void do_hide(void)
     close_settings();                   /* their screen may be going */
     xwin_shut();
     bookwin_close();
-    files_screen(FALSE);                /* the browsers: back with it */
     if (!fullscreen) {
         hid_l = win->LeftEdge; hid_t = win->TopEdge;
         hid_w = win->Width; hid_h = win->Height;
@@ -263,7 +262,6 @@ static void do_show(void)
         ;
     tab_show(i < ntabs ? i : 0);        /* its letters, the layout, the text */
     tell_sizes();                       /* a tab bar may have come meanwhile */
-    files_screen(TRUE);
     ScreenToFront(scr);
 }
 

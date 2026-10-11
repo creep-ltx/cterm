@@ -5,6 +5,10 @@
 
 static BOOL redial_key(const char *b);
 static void raw_report(int cls, int code, int qual);
+static void browser_key(UWORD code, UWORD q, APTR prev);
+static BOOL wheelmsgs;                  /* Intuition sends the wheel as
+                                           IDCMP_EXTENDEDMOUSE (OS 3.2) */
+static BOOL wheelkey;                   /* ... one, made a key */
 static void bar_pull(int y);
 
 /* After a call ended: Return calls again; other keys do nothing. A
@@ -79,6 +83,15 @@ void key(struct IntuiMessage *m)
         "\x1bOP", "\x1bOQ", "\x1bOR", "\x1bOS", "\x1b[15~", "\x1b[17~",
         "\x1b[18~", "\x1b[19~", "\x1b[20~", "\x1b[21~"
     };
+    if ((code == 0x7A || code == 0x7B) && wheelmsgs && !wheelkey)
+        return;                         /* the wheel comes as its message */
+    if (T->t_rf && !(code & IECODE_UP_PREFIX) &&
+        !(q & IEQUALIFIER_RCOMMAND)) {
+        /* a file browser's tab: its keys are the browser's, also
+         * during a transfer (its stop key) */
+        browser_key(code, q, m->IAddress ? *((APTR *)m->IAddress) : NULL);
+        return;
+    }
     if (shown && shown->t_xfer) {
         /* a transfer has the line: Esc stops it, other keys wait, but
          * Right Amiga keys (tabs, menus) still work */
@@ -195,6 +208,58 @@ void key(struct IntuiMessage *m)
     if (!redial_key(buf))
         send_str(buf);
 }
+/* A file browser's tab (Parts/Files): the key as its panels take it -
+ * a character as the keymap gives it, KM_* for the rest; the wheel
+ * scrolls the panel under the pointer. */
+static void browser_key(UWORD code, UWORD q, APTR prev)
+{
+    static const UBYTE arrows[4] = { 0, 1, 3, 2 };  /* up down right left */
+    BOOL shift = (q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) != 0;
+    BOOL ctrl = (q & IEQUALIFIER_CONTROL) != 0;
+    int k = 0;
+    if (code == 0x7A || code == 0x7B) {
+        int r, c;
+        if (T->t_fui && win) {
+            mouse_cell(win->MouseX, win->MouseY, &r, &c);
+            files_mouse(code == 0x7A ? 1 : 2, r, c, 0, 0);
+        }
+        return;
+    }
+    if (code >= 0x4C && code <= 0x4F)
+        k = (shift ? KM_SUP : ctrl ? KM_CUP : KM_UP) + arrows[code - 0x4C];
+    else if (code >= 0x50 && code <= 0x59)
+        k = KM_F1 + code - 0x50;
+    else
+        switch (code) {
+        case 0x4B: k = KM_F11; break;
+        case 0x6F: k = KM_F12; break;
+        case 0x5F: k = KM_HELP; break;
+        case 0x47: k = KM_INS; break;
+        case 0x48: k = KM_PGUP; break;
+        case 0x49: k = KM_PGDN; break;
+        case 0x70: k = KM_HOME; break;
+        case 0x71: k = KM_END; break;
+        case 0x41: k = shift ? KM_SBS : ctrl ? KM_CBS : 8; break;
+        case 0x46: k = 127; break;
+        case 0x45: k = 27; break;
+        case 0x44: case 0x43: k = 13; break;
+        case 0x42: k = 9; break;
+        default: {
+            struct InputEvent ie;
+            char b[8];
+            memset(&ie, 0, sizeof ie);
+            ie.ie_Class = IECLASS_RAWKEY;
+            ie.ie_Code = code;
+            ie.ie_Qualifier = q;
+            ie.ie_EventAddress = prev;
+            if (MapRawKey(&ie, (STRPTR)b, sizeof b, NULL) == 1)
+                k = (UBYTE)b[0];
+        }
+        }
+    if (k)
+        files_key(k);
+}
+
 /* ======================================================================
  * Screens, windows and menus
  * ==================================================================== */
@@ -301,6 +366,8 @@ void tell_sizes(void)
             send_naws();
         if (T->con)
             raw_report(12, 0, 0);
+        if (T->t_fui)
+            files_resized(T);           /* its panels drawn again */
     }
     T = keep;
 }
@@ -326,6 +393,25 @@ BOOL window_events(void)
            (m = (struct IntuiMessage *)GetMsg(win->UserPort))) {
         struct IntuiMessage copy = *m;
         struct Gadget *g = (struct Gadget *)m->IAddress;
+        if (copy.Class == IDCMP_EXTENDEDMOUSE) {
+            /* OS 3.2's wheel: Intuition takes the NewMouse key's press
+             * (only its release came as a key) and sends this - each
+             * notch is the key ($7A up, $7B down) as before */
+            WORD dy = 0;
+            APTR none = NULL;
+            if (copy.Code == IMSGCODE_INTUIWHEELDATA && m->IAddress)
+                dy = ((struct IntuiWheelData *)m->IAddress)->WheelY;
+            ReplyMsg((struct Message *)m);
+            wheelmsgs = wheelkey = TRUE;
+            copy.Class = IDCMP_RAWKEY;
+            copy.IAddress = &none;
+            for (; dy && win; dy += dy < 0 ? 1 : -1) {
+                copy.Code = dy < 0 ? 0x7A : 0x7B;
+                key(&copy);
+            }
+            wheelkey = FALSE;
+            continue;
+        }
         if (copy.Class == IDCMP_RAWKEY) {
             /* IAddress is valid only until the reply: keep what it points
              * at (the dead keys before, for MapRawKey) and answer first -
@@ -437,6 +523,17 @@ BOOL window_events(void)
                 i = (copy.MouseX - win->BorderLeft) * ntabs / wd;
                 if (i >= 0 && i < ntabs)
                     tab_show(i);
+                break;
+            }
+            if (copy.Code == SELECTDOWN && T->t_fui &&
+                !(copy.Qualifier & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT))
+                && copy.MouseX >= ox && copy.MouseY >= oy &&
+                copy.MouseY < oy + rows * ch && copy.MouseX < ox + cols * cw) {
+                int r, c;               /* a file browser's panels: theirs
+                                         * (Shift still marks text) */
+                sel_clear();
+                mouse_cell(copy.MouseX, copy.MouseY, &r, &c);
+                files_mouse(0, r, c, copy.Seconds, copy.Micros);
                 break;
             }
             if ((copy.Code == SELECTDOWN || copy.Code == MIDDLEDOWN ||

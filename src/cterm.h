@@ -225,6 +225,8 @@ struct Tab {
                                            not a terminal */
     char t_fdir[128];                   /* ... the drawer it starts in */
     void *t_rf;                         /* ... its connection (Parts/Files) */
+    BOOL t_fui;                         /* ... its panels are up: keys and
+                                           clicks are theirs */
 };
 
 /* A pane: a part of the window showing a tab (pane.c). */
@@ -239,6 +241,33 @@ struct Pane {
     UBYTE pgen;                         /* draw.c's marks for its rows: */
     UBYTE blank[PROWS], painted[PROWS]; /* shown blank; painted in pgen */
 };
+
+/* Keys as a file browser's panels get them (keys.c): characters as
+ * they are (Return 13, Esc 27, Tab 9, Backspace 8, Del 127, Ctrl+R 18),
+ * these for the rest; as CFile's and Ahiru's keymap numbers them. */
+#define KM_UP 300
+#define KM_DOWN 301
+#define KM_LEFT 302
+#define KM_RIGHT 303
+#define KM_SUP 304                      /* Shift + the arrows */
+#define KM_SDOWN 305
+#define KM_SLEFT 306
+#define KM_SRIGHT 307
+#define KM_HELP 308
+#define KM_F1 310                       /* .. KM_F1 + 9 */
+#define KM_CUP 320                      /* Ctrl + the arrows */
+#define KM_CDOWN 321
+#define KM_CLEFT 322
+#define KM_CRIGHT 323
+#define KM_SBS 324                      /* Shift + Backspace */
+#define KM_CBS 325                      /* Ctrl + Backspace */
+#define KM_F11 326
+#define KM_F12 327
+#define KM_PGUP 328                     /* a PC keyboard's (OS 3.2 codes) */
+#define KM_PGDN 329
+#define KM_HOME 330
+#define KM_END 331
+#define KM_INS 332
 
 /* The tab has its host or line: something to send to. */
 #define linked    (sock >= 0 || T->t_st.ser != NULL)
@@ -509,13 +538,14 @@ extern LONG loop_wfd;                   /* loop_round also waits for this
 BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo);
 /* parts.c: the file browser for SFTP and FTP places (Parts/Files) */
 BOOL files_call(void);                  /* T's place: connected, its
-                                           browser open */
+                                           panels up */
 void files_menu(void);                  /* Project/Open SFTP browser */
-ULONG files_sigmask(void);
-void files_events(void);
-void files_tab_gone(struct Tab *t);     /* its connection, its window go */
-void files_screen(BOOL again);          /* windows closed with the screen,
-                                           and opened again */
+void files_key(int k);                  /* T's panels: a key (KM_*) */
+/* T's panels: what 0 a click, 1 the wheel up, 2 down, at the cell r,
+ * c; s, us: when (a double-click) */
+void files_mouse(int what, int r, int c, ULONG s, ULONG us);
+void files_resized(struct Tab *t);      /* its size changed */
+void files_tab_gone(struct Tab *t);     /* its connection goes */
 /* ARexx's GET, PUT, LIST, CD, MKDIR, DELETE, RENAME on T's place: the
  * RC; *res a result (AllocVec, the caller frees) or NULL */
 enum { FR_LIST, FR_CD, FR_GET, FR_PUT, FR_MKDIR, FR_DELETE, FR_RENAME };

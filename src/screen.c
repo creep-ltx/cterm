@@ -254,7 +254,8 @@ BOOL open_display(void)
     ULONG idcmp = IDCMP_CLOSEWINDOW | IDCMP_NEWSIZE | IDCMP_RAWKEY |
                   IDCMP_GADGETDOWN | IDCMP_GADGETUP | IDCMP_MOUSEMOVE |
                   IDCMP_INTUITICKS | IDCMP_MENUPICK | IDCMP_ACTIVEWINDOW |
-                  IDCMP_INACTIVEWINDOW | IDCMP_MOUSEBUTTONS;
+                  IDCMP_INACTIVEWINDOW | IDCMP_MOUSEBUTTONS |
+                  IDCMP_EXTENDEDMOUSE;
     if (scrmode == SCR_OWN && !ownscr && !open_own_screen())
         scrmode = SCR_WB;
     if (scrmode == SCR_WB) {
@@ -381,7 +382,6 @@ void switch_display(void)
         close_settings();               /* its screen may be going */
     xwin_shut();
     bookwin_close();
-    files_screen(FALSE);
     BOOL keep = want_mode == SCR_OWN && scrmode == SCR_OWN &&
                 want_depth == owndepth;
     want_switch = FALSE;
@@ -397,7 +397,6 @@ void switch_display(void)
         open_display();
     }
     tell_sizes();
-    files_screen(TRUE);                 /* the browsers on the new one */
     save_prefs();
 }
 

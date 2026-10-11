@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b14 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b15 (11.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -1105,7 +1105,7 @@ BOOL loop_round(LONG xfd, LONG ms)
     ULONG rxsig = rexx_sigmask();
     ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
                  xwin_sigmask() | bookwin_sigmask() | sersig | rxsig |
-                 hidesig | files_sigmask();
+                 hidesig;
     BOOL hostdata = FALSE, ready = FALSE;
     ULONG consigs = 0;
     int i;
@@ -1193,8 +1193,6 @@ BOOL loop_round(LONG xfd, LONG ms)
         xwin_events();
     if (sigs & bookwin_sigmask())
         bookwin_events();
-    if (sigs & files_sigmask())
-        files_events();
     if (sigs & rxsig)
         rexx_serve();                   /* before the hosts' bytes: an
                                          * UPLOAD waiting is seen first */
