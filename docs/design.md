@@ -7,7 +7,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
-**Installed:** 0.3b23 on the A1200 (0.3b24 not yet: PART_VERSION 9, the user's CTerm was running) (Work:Utils/CTerm: CTerm, CTermSSH,
+**Installed:** 0.3b24 on the A1200 (Ed/More own screen checked there with More) (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
 hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
 AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
