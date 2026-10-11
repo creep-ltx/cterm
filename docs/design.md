@@ -81,7 +81,7 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    by libnix) - no stray pixels in the rows around (verified in FS-UAE).
    Bold beside a `-Regular.ttf` is `-Bold.ttf` (open_variant). Noto Sans
    Mono Regular + Bold are in Work:Utils/CTerm/Fonts on the A1200 (not
-   in the repo; OFL); the user picks them in Settings.
+   in the repo; OFL); set as the user's font on 2026-10-11 (truetype=1, ttsize=16; the old prefs in ENVARC:CTerm.prefs.before-noto).
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).
