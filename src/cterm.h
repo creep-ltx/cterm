@@ -651,6 +651,11 @@ ULONG rexx_sigmask(void);
 void rexx_serve(void);                  /* read the port: safe anywhere */
 void rexx_run(void);                    /* the queued commands: run() only */
 const char *rexx_port(void);
+/* screen.c: the About requester, answered in the main loop */
+void about_open(void);
+ULONG about_sigmask(void);
+void about_events(void);
+void about_close(void);
 void rexx_feed(struct Tab *t, const UBYTE *b, LONG n);
 void rexx_watch(struct Tab *t);         /* its text kept for WAITFOR */
 void rexx_tab_gone(struct Tab *t);

@@ -7,7 +7,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
-**Installed:** 0.3b24 on the A1200 (Ed/More own screen checked there with More) (Work:Utils/CTerm: CTerm, CTermSSH,
+**Installed:** 0.3b25 on the A1200 (CTerm only; parts as 0.3b24) (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
 hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
 AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
@@ -64,6 +64,12 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    (main.c), console.c's SCREEN_MODE. Setting: Text page "Full-screen
    Amiga programs get their own screen" (prefs ownscreen=0 turns it
    off). Verified in FS-UAE with More and Ed; tests/amiga_test covers it.
+1c. **About is a window (0.3b25):** a requester (BuildEasyRequest,
+   answered in the main loop: about_sigmask/about_events in screen.c),
+   not text in the terminal; the terminal goes on while it is open
+   (verified in FS-UAE: typed and echoed with it open; Quit with it open
+   is clean). close_display closes it. On the A1200 it opened and
+   closed by OK.
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).

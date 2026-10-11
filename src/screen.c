@@ -465,8 +465,65 @@ BOOL open_display(void)
 /* keep_screen: TRUE keeps the own screen, FALSE closes it (asking about
  * other programs' windows on it), SCREEN_IF_FREE closes it only if it
  * can be at once (hiding). */
+/* About: a requester of its own that does not stop CTerm (Build-
+ * EasyRequest, answered in the main loop), not text in the terminal. */
+static struct Window *aboutwin;
+static char abouttext[640];
+
+void about_open(void)
+{
+    static struct EasyStruct es = {
+        sizeof(struct EasyStruct), 0, (UBYTE *)"About CTerm",
+        (UBYTE *)"%s", (UBYTE *)"OK"
+    };
+    APTR arg = abouttext;
+    if (aboutwin) {
+        WindowToFront(aboutwin);
+        return;
+    }
+    strcpy(abouttext, version + 6);     /* past "$VER: " */
+    strcat(abouttext, "\n"
+        "A VT100/xterm terminal for AmigaOS 3.2\n"
+        "\n"
+        "File transfers: Zmodem, Ymodem, Xmodem, and the HYDRA file\n"
+        "transfer protocol (designed by Arjen G. Lentz and Joaquim H.\n"
+        "Homrighausen; HydraCom's code by Arjen G. Lentz, LENTZ\n"
+        "SOFTWARE-DEVELOPMENT - Hydra and HydraCom are free).");
+    if (rexx_port()[0]) {
+        strcat(abouttext, "\n\nARexx port: ");
+        strcat(abouttext, rexx_port());
+    }
+    aboutwin = BuildEasyRequestArgs(win, &es, 0, &arg);
+    if (aboutwin == (struct Window *)1)
+        aboutwin = NULL;                /* (answered at once: no window) */
+    if (!aboutwin)
+        beep();
+}
+
+ULONG about_sigmask(void)
+{
+    return aboutwin ? 1UL << aboutwin->UserPort->mp_SigBit : 0;
+}
+
+void about_events(void)
+{
+    if (aboutwin && SysReqHandler(aboutwin, NULL, FALSE) != -2) {
+        FreeSysRequest(aboutwin);       /* OK, or closed */
+        aboutwin = NULL;
+    }
+}
+
+void about_close(void)
+{
+    if (aboutwin) {
+        FreeSysRequest(aboutwin);
+        aboutwin = NULL;
+    }
+}
+
 void close_display(int keep_screen)
 {
+    about_close();                      /* its screen may be going */
     if (win && remember && !fullscreen && scr != ownscr) {
         wl = win->LeftEdge; wt = win->TopEdge;  /* kept for next time */
         ww = win->Width; wh = win->Height;
@@ -587,19 +644,7 @@ BOOL menu_pick(ULONG id)
             beep();                     /* Ed or More has the window */
         break;
     case M_ABOUT:
-        say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
-            "Amiga.\r\n"
-            "File transfers: Zmodem, Ymodem, Xmodem, and the HYDRA file "
-            "transfer protocol\r\n"
-            "(designed by Arjen G. Lentz and Joaquim H. Homrighausen; "
-            "HydraCom's code by\r\n"
-            "Arjen G. Lentz, LENTZ SOFTWARE-DEVELOPMENT - Hydra and HydraCom "
-            "are free).\r\n");
-        if (rexx_port()[0]) {
-            say("ARexx port: ");
-            say(rexx_port());
-            say("\r\n");
-        }
+        about_open();
 #ifdef PROFILE
         {   /* ms = ticks / TPMS */
             char l[200];
