@@ -859,6 +859,15 @@ In the order the user and I agreed (2026-10-10):
     iTerm2 sizing and scaling could move into the part (it would need
     the part to allocate the picture through the hooks). Parts/Pictures
     3,560, Settings 20,264 -> 20,420.
+  - **Speed** (tests/stock/bench.sh on the fast config, a private drive,
+    alternating builds): first 0.3b15 17.16/17.04/17.20 s against
+    17.40/17.48/17.36 - every pair slower, with no picture on screen:
+    inlining and layout in the parser changed. Every picture function
+    is now cold and noinline (-Os), the clean-up called only when a
+    picture exists: 0.3b15 17.24/17.08/17.08, 0.3b16 17.20/17.20/17.08.
+  - **Seen once:** a stray cursor block at the end of a wrapped command
+    line after ShowPic scrolled the screen; not seen again in four
+    tries (wrapped lines, scrolling, sixel and PNG).
   - **Not done:** kitty's pictures shown (they are swallowed); sixel
     aspect ratios; iTerm2's MultipartFile; a picture's own palette on
     screens of few colours (the cube is shared); pictures redrawn at a
