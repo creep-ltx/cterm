@@ -573,8 +573,8 @@ static LONG row_text(struct Tab *t, int r, char *out)
         ULONG cp = l[c].cp;
         if (cp == VT_WIDE_TAIL)
             continue;
-        out[k++] = !cp ? ' ' : cp < 256 ? (char)cp : '?';
-        if (cp && cp != ' ')
+        out[k++] = !cp || VT_IS_PIC(cp) ? ' ' : cp < 256 ? (char)cp : '?';
+        if (cp && cp != ' ' && !VT_IS_PIC(cp))
             end = k;
     }
     return end;

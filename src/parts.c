@@ -42,6 +42,8 @@ struct Slot {
     BPTR seg;
     APTR fns;                           /* its table (part.h) */
     int depth;                          /* calls into it under way */
+    BOOL quiet;                         /* missing: nothing said (called
+                                           while a tab's text is parsed) */
 };
 
 /* The part in memory, loaded now if need be. NULL: missing or of
@@ -56,6 +58,8 @@ APTR part_load(struct Slot *s)
     strcpy(path, "PROGDIR:Parts/");
     strcat(path, s->file);
     if (!(s->seg = LoadSeg((STRPTR)path))) {
+        if (s->quiet)
+            return NULL;
         say("\r\n\x1b[1;31m[");
         say(s->what);
         say(" missing: ");
@@ -68,6 +72,8 @@ APTR part_load(struct Slot *s)
     if (!start || !(s->fns = start(&penv))) {
         UnLoadSeg(s->seg);
         s->seg = 0;
+        if (s->quiet)
+            return NULL;
         say("\r\n\x1b[1;31m[");
         say(path);
         say(" is not CTerm's part of this version]\x1b[0m\r\n");
@@ -534,6 +540,53 @@ void rexx_close(void)
     }
 }
 
+/* ---- pictures in the terminal: iTerm2's files decoded, pixels made
+ * pens for 8-bit and plain screens; there while a tab holds a picture.
+ * Asked for while a tab's text is parsed or drawn: nothing is said into
+ * a tab then (a missing file: the picture is not shown). ---- */
+
+static struct Slot pq = { "Pictures", "pictures in the terminal", 0, NULL,
+                          0, TRUE };
+#define QP ((struct PicsPart *)pq.fns)
+
+int pics_decode(const uint8_t *file, long len, uint32_t **argb, int *w,
+                int *h)
+{
+    int ok;
+    if (!part_load(&pq))
+        return 0;
+    pq.depth++;
+    ok = QP->decode(file, len, (ULONG **)argb, w, h);
+    pq.depth--;
+    return ok;
+}
+
+void pics_decode_free(uint32_t *argb)
+{
+    if (pq.fns)
+        QP->decode_free((ULONG *)argb);
+}
+
+BOOL pics_pens(const UBYTE *rgb, int n, int x, int y, UBYTE *out)
+{
+    if (!part_load(&pq))
+        return FALSE;
+    QP->pens(rgb, n, x, y, out);
+    return TRUE;
+}
+
+/* Between rounds: no tab holds a picture any more - the file goes. */
+void pics_tidy(void)
+{
+    int i;
+    if (!pq.fns || pq.depth)
+        return;
+    for (i = 0; i < ntabs; i++)
+        if (tabs[i]->t_vt && vt_pic_count(tabs[i]->t_vt))
+            return;
+    part_unload(&pq);
+}
+
 /* At the end: every part is closed by then; what is left goes. */
 void parts_free(void)
 {
@@ -541,4 +594,5 @@ void parts_free(void)
     part_unload(&pb);
     part_unload(&px);
     part_unload(&pr);
+    part_unload(&pq);
 }

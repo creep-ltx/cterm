@@ -295,7 +295,7 @@ enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_R, S_G, S_B, S_RESET, S_PIC, S_NOPIC, S_SEE, S_KUSER, S_KPASS,
        S_DLDIR, S_ULDIR,
        S_MINIT, S_MINIT2, S_MDIALK, S_MDIAL, S_MSUFFIX, S_MHANG, S_MHANGCMD,
-       S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE,
+       S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE, S_PICS,
        S_SAVE, S_USE, S_CANCEL, S_N };
 
 /* ---- shared state ---- */
@@ -376,6 +376,20 @@ extern BOOL envonly;
 extern BOOL used_only;
 extern BOOL saved_pc;
 extern BOOL title_force;
+/* pictures in the terminal (vt.h): the setting; the pen cache's
+ * generation (a new one: pens asked for before are gone) */
+extern BOOL pics;
+extern ULONG pen_gen;
+LONG pic_pen(ULONG rgb);                /* a pen for RGB, cached */
+long pics_cap(void);                    /* a tab's pictures' memory */
+void pics_tab(struct Tab *t);           /* its emulator told: on, cap */
+void pics_all(void);                    /* every tab: the setting */
+/* parts.c: Parts/Pictures (pics.c) */
+int pics_decode(const uint8_t *file, long len, uint32_t **argb, int *w,
+                int *h);
+void pics_decode_free(uint32_t *argb);
+BOOL pics_pens(const UBYTE *rgb, int n, int x, int y, UBYTE *out);
+void pics_tidy(void);                   /* no picture left: it goes */
 
 /* ---- the parts' calls ---- */
 BOOL asl_open(void);

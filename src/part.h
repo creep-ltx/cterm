@@ -1,7 +1,8 @@
 /*
  * part - a part of CTerm in a file of its own (PROGDIR:Parts/): the
  * settings window, the phone book's window, ARexx's commands, the Call
- * window, the Transfers window, the speed test, the file browser. Each is loaded with
+ * window, the Transfers window, the speed test, the file browser,
+ * pictures in the terminal. Each is loaded with
  * LoadSeg the first time it is wanted and (but ARexx's) unloaded when
  * its work is done, as the protocols are (xfermod.h): on a stock A1200
  * CTerm's code sits in chip memory, which the Shell's programs need.
@@ -21,7 +22,7 @@
 #define PART_H
 
 #define PART_HEAD    0x43545048UL       /* "CTPH": the header's mark */
-#define PART_VERSION 3UL                /* PartEnv's names and the tables
+#define PART_VERSION 4UL                /* PartEnv's names and the tables
                                          * below */
 #define PART_ABI     ((PART_VERSION << 16) | sizeof(struct PartEnv))
 
@@ -91,6 +92,12 @@ struct FilesPart {                      /* Parts/Files: files.c, fileui.c,
     int (*rexx)(int what, const char *const *names, int n, const char *to,
                 char **res);
     BOOL (*idle)(void);                 /* nothing open: it may go */
+};
+struct PicsPart {                       /* Parts/Pictures: pics.c */
+    int (*decode)(const UBYTE *file, LONG len, ULONG **argb, int *w,
+                  int *h);
+    void (*decode_free)(ULONG *argb);
+    void (*pens)(const UBYTE *rgb, int n, int x, int y, UBYTE *out);
 };
 
 #ifdef PART

@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b15 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b16 (11.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -462,6 +462,7 @@ static void load_prefs_(char *buf)
             else if (!stricmp(p, "pc")) pcmode = saved_pc = val[0] == '1';
             else if (!stricmp(p, "pcfont")) pcfont = val[0] != '0';
             else if (!stricmp(p, "altmeta")) altmeta = val[0] != '0';
+            else if (!stricmp(p, "pictures")) pics = val[0] != '0';
             else if (!stricmp(p, "keyuser")) userkey[0] = val[0];
             else if (!stricmp(p, "keypass")) passkey[0] = val[0];
             else if (!stricmp(p, "dldir")) {
@@ -541,6 +542,7 @@ static void save_prefs_(char *buf)
     numstr_cat(buf, fontover ? keepfont.ttsize : ttsize);
     if (!pcfont) strcat(buf, "\npcfont=0");
     if (!altmeta) strcat(buf, "\naltmeta=0");
+    if (!pics) strcat(buf, "\npictures=0");
     if (userkey[0] != 'U') {
         strcat(buf, "\nkeyuser=");
         strcat(buf, userkey[0] ? userkey : "-");
@@ -734,6 +736,7 @@ struct Tab *tab_new(void)
     t->t_utf8 = saved_utf8;
     vt_set_utf8(t->t_vt, t->t_utf8);
     tabs[ntabs++] = t;
+    pics_tab(t);
     return t;
 }
 
@@ -1024,6 +1027,7 @@ static void run(void)
         loop_round(-1, -1);
         rexx_run();                     /* ARexx's queued commands: here,
                                          * where nothing is half done */
+        pics_tidy();                    /* Parts/Pictures, if none is left */
         /* tabs whose Shell has ended go */
         for (i = 0; i < ntabs; i++)
             if (tabs[i]->ended && !(tabs[i]->con &&
@@ -1300,6 +1304,44 @@ static int hist_room(long n)
     }
     left -= n;
     return 1;
+}
+
+/* Pictures in the terminal: what a tab's may hold - a quarter of what
+ * is free beyond the reserve, at most 4 MB (the reserve itself is kept
+ * by vt_room, as for the history). */
+long pics_cap(void)
+{
+    ULONG avail = AvailMem(MEMF_ANY), keep = reserve();
+    ULONG part = avail <= keep ? 0 : (avail - keep) / 4;
+    return part > (4UL << 20) ? 4L << 20 : (long)part;
+}
+
+/* Pictures' pixels straight from exec: back to the system the moment a
+ * picture goes (not kept in the C library's heap), and none of them
+ * splits that heap into pieces. */
+static void *pic_alloc(long n)
+{
+    return AllocVec(n, MEMF_ANY);
+}
+
+static void pic_release(void *p)
+{
+    FreeVec(p);
+}
+
+void pics_tab(struct Tab *t)
+{
+    if (!t->t_vt)
+        return;
+    vt_set_pictures(t->t_vt, pics, pics_cap());
+    vt_set_cell_px(t->t_vt, cw > 0 ? cw : 8, ch > 0 ? ch : 16, defbg);
+}
+
+void pics_all(void)                     /* the setting changed */
+{
+    int i;
+    for (i = 0; i < ntabs; i++)
+        pics_tab(tabs[i]);
 }
 
 BOOL asl_open(void)
@@ -1581,6 +1623,10 @@ static int cterm_main(int argc, char **argv)
     ML("book");
     con_timer_init();
     vt_room = hist_room;
+    vt_decode = pics_decode;            /* iTerm2's files: Parts/Pictures */
+    vt_decode_free = pics_decode_free;
+    vt_palloc = pic_alloc;
+    vt_pfree = pic_release;
     ML("timer");
     {
         /* the history's ceiling; its lines (80 cells: 492 bytes) only
@@ -1590,6 +1636,7 @@ static int cterm_main(int argc, char **argv)
         vt = vt_new(80, 25, lines < SCROLLBACK ? (int)lines : SCROLLBACK);
     }
     if (vt) {
+        pics_tab(T);
         vt_set_utf8(vt, utf8);
         if (pcmode)
             vt_set_cp437(vt, 1);

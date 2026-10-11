@@ -40,6 +40,11 @@ tour: CTermTour
 CTermTour: tools/tour.c
 	$(CC) $(CFLAGS) tools/tour.c -o $@
 
+# ShowPic: a picture file shown in CTerm (iTerm2's code), as imgcat
+showpic: ShowPic
+ShowPic: tools/showpic.c
+	$(CC) $(CFLAGS) tools/showpic.c -o $@
+
 # The planar painter's asm against its C reference, under vamos
 tests/pptest: tests/pptest.c src/ppaint.c src/ppaint.h src/ppaint.o
 	$(CC) $(CFLAGS) tests/pptest.c src/ppaint.c src/ppaint.o -o $@
@@ -79,7 +84,7 @@ Protocols/Serial: src/sermod.c src/sermod.h src/serial.h
 NM = $(HOME)/opt/amiga/bin/m68k-amigaos-nm
 PARTFLAGS = -Os -m68020 -noixemul -nostartfiles -fomit-frame-pointer -Wall -Wno-pointer-sign -Iinclude -DPART
 PARTHDR = src/cterm.h src/part.h src/partlist.h src/partuse.h src/vt.h src/serial.h src/book.h
-PARTS = Parts/Settings Parts/PhoneBook Parts/ARexx Parts/Call Parts/Transfers Parts/SpeedTest Parts/Files
+PARTS = Parts/Settings Parts/PhoneBook Parts/ARexx Parts/Call Parts/Transfers Parts/SpeedTest Parts/Files Parts/Pictures
 parts: $(PARTS)
 src/partuse.h: src/partlist.h
 	sed -n -e 's/^V(\(.*\))$$/#define \1 (*penv->\1)/p' -e 's/^A(\(.*\))$$/#define \1 (penv->\1)/p' -e 's/^F(\(.*\))$$/#define \1 (penv->\1)/p' $< > $@
@@ -104,6 +109,10 @@ Parts/SpeedTest: src/partstart.c src/bench.c $(PARTHDR)
 # -fbbb=-: without bebbo's extra backend pass, which miscompiled the
 # panels (a post-increment, then the register used as if it had not
 # moved: p->top - p->path[] passed for p->cur - p->top)
+# pictures in the terminal: iTerm2's files by datatypes, pens for plain
+# and 8-bit screens
+Parts/Pictures: src/partstart.c src/pics.c $(PARTHDR)
+	$(call partlink,src/pics.c)
 Parts/Files: PARTFLAGS += -fbbb=-
 Parts/Files: src/partstart.c src/files.c src/fileui.c src/ftp.c src/files.h src/ssh.h $(PARTHDR)
 	$(call partlink,src/files.c src/fileui.c src/ftp.c)
@@ -135,11 +144,16 @@ tests/vtdump: tests/vtdump.c src/vt.c src/vt.h
 tests/amiga_test: tests/amiga_test.c src/vt.c src/vt.h
 	gcc -O2 -Wall -o $@ tests/amiga_test.c src/vt.c
 
-test: tests/vtdump tests/amiga_test tests/shadow_test
+test: tests/vtdump tests/amiga_test tests/shadow_test tests/pic_test
 	.venv/bin/python tests/compare.py
 	tests/amiga_test
+	tests/pic_test
 	.venv/bin/python tests/lines.py
 	tests/shadow_test tests/streams/*.bin tests/lines/*.bin
+
+# pictures: sixel and iTerm2 files (tests/pictures/mksixel.py makes them)
+tests/pic_test: tests/pic_test.c src/vt.c src/vt.h
+	gcc -O2 -Wall -o $@ tests/pic_test.c src/vt.c
 
 tests/shadow_test: tests/shadow_test.c src/vt.c src/vt.h
 	gcc -O2 -Wall -o tests/shadow_test tests/shadow_test.c src/vt.c

@@ -123,7 +123,7 @@ void sel_copy(void)
             ULONG cp = line && x < w ? line[x].cp : 0;
             if (cp == VT_WIDE_TAIL)
                 continue;
-            buf[20 + n++] = cp == 0 ? ' ' : cp < 256 ? (UBYTE)cp
+            buf[20 + n++] = cp == 0 || VT_IS_PIC(cp) ? ' ' : cp < 256 ? (UBYTE)cp
                           : (cp >= 0x2500 && cp <= 0x257F) ? '+' : '?';
         }
         while (n > start && buf[20 + n - 1] == ' ')

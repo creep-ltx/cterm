@@ -72,6 +72,7 @@ static struct {                         /* what Cancel goes back to */
     int k_theme, k_ttsize, k_fontsize, k_linespace, k_bgsee;
     char k_bgfile[256];
     BOOL k_ownfg, k_ownbg, k_usett, k_s_utf8, k_pc, k_pcfont, k_altmeta;
+    BOOL k_pics;
     ULONG k_myfg, k_mybg;
     char k_ttfile[160], k_fontname[48];
     char k_userkey[2], k_passkey[2], k_dldir[160], k_uldir[160];
@@ -442,6 +443,8 @@ static Object *page_text(void)
     r_add(g, r_chooser(S_CHARS, charlabels, chars_now()), "Characters");
     r_add(g, r_check(S_PCFONT, "The IBM VGA font in PC BBS mode", pcfont),
           NULL);
+    r_add(g, r_check(S_PICS, "Pictures in the terminal (sixel, iTerm2)",
+                     pics), NULL);
     r_put(p, g);
     return r_wrap(p);
 }
@@ -512,6 +515,7 @@ static void open_settings_(void)
 
     tab_letters(FALSE);                     /* the controls show the person's */
     snap.k_pcfont = pcfont;
+    snap.k_pics = pics;
     snap.k_altmeta = altmeta;
     snap.k_theme = theme;
     snap.k_ownfg = ownfg; snap.k_ownbg = ownbg;
@@ -656,6 +660,10 @@ static void finish_settings_(int how)
         serdef = snap.k_serdef;
         modem = snap.k_modem;
         pcfont = snap.k_pcfont;
+        if (pics != snap.k_pics) {
+            pics = snap.k_pics;
+            pics_all();
+        }
         altmeta = snap.k_altmeta;
         ownfg = snap.k_ownfg; ownbg = snap.k_ownbg;
         myfg = snap.k_myfg; mybg = snap.k_mybg;
@@ -853,6 +861,10 @@ static int settings_gadget(int id)
         tab_letters(FALSE);                 /* shown on closing */
         break;
     case S_PCFONT: pcfont = get_attr(S_PCFONT, GA_Selected) != 0; break;
+    case S_PICS:
+        pics = get_attr(S_PICS, GA_Selected) != 0;
+        pics_all();                     /* at once: DA1 says so, or not */
+        break;
     case S_ALT: altmeta = get_attr(S_ALT, CHOOSER_Selected) == 0; break;
     case S_THEME:
         theme = get_attr(S_THEME, CHOOSER_Selected);

@@ -31,7 +31,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 | Panes: the window split, the layout tree, dividers | `src/pane.c` | Yes |
 | Main loop, settings, menus | `src/main.c` | Yes |
 | The parts' loader, their stubs, the ARexx port | `src/parts.c`, `src/part.h`, `src/partlist.h` | Yes |
-| Parts (files of their own, `Parts/`): settings window, phone book window, ARexx's commands, Call window, Transfers window, speed test, the SFTP/FTP file browser | `src/setwin.c`, `src/bookwin.c` (+ `src/serwin.c`, `src/askwin.c`), `src/rexx.c`, `src/callwin.c`, `src/xwin.c`, `src/bench.c`, `src/files.c` + `src/fileui.c` + `src/ftp.c` | Yes |
+| Parts (files of their own, `Parts/`): settings window, phone book window, ARexx's commands, Call window, Transfers window, speed test, the SFTP/FTP file browser, pictures (iTerm2 files, pens) | `src/setwin.c`, `src/bookwin.c` (+ `src/serwin.c`, `src/askwin.c`), `src/rexx.c`, `src/callwin.c`, `src/xwin.c`, `src/bench.c`, `src/files.c` + `src/fileui.c` + `src/ftp.c`, `src/pics.c` | Yes |
 | SFTP's calls for the browser (CTermSSH only, through `sftp_ops`) | `src/ssh.c`, `src/ssh.h` | Yes |
 | PC relay: runs a program in a pty, connects to the Amiga | `pc/cterm-relay.py` | PC |
 
@@ -738,6 +738,132 @@ In the order the user and I agreed (2026-10-10):
     807,416) - 322 KB less, the window classes no longer loaded. A run
     still leaves ~6.2 KB behind (as 0.3b14).
 
+- **Done 2026-10-11 (0.3b16): pictures in the terminal** (the user's
+  spec, 2026-10-11): sixel, iTerm2's inline files, kitty's swallowed.
+  - **Stored as cells:** a picture is cut into tiles of a cell; a cell
+    showing one holds `VT_PIC_CP(id, row, col)` (bit 31 set, id 13 bits,
+    row and column 9 bits each: at most 511 cells a side) instead of a
+    letter. So pictures scroll, go into the history, reflow, are erased
+    and written over exactly as text is, with no second list to keep in
+    step. A row's header cell (`[-2].pen`, free until now) marks a row
+    that may hold picture cells (`VT_ROW_PICS`): rows without are drawn
+    and walked as before; a whole-row blank clears the mark.
+  - **The pixels:** per tab, in the emulator (vt.c, no Amiga headers), a
+    table of `VtPic` (id, size, the cell size it was cut for, 24-bit
+    RGB), oldest first. The pixel memory comes from the host's hooks
+    (`vt_palloc`/`vt_pfree`: CTerm's AllocVec/FreeVec, so it goes back
+    to the system at once, never into libnix's heap).
+  - **The cap:** `pics_cap()` per tab: a quarter of what is free beyond
+    the 512 KB reserve, at most 4 MB; and every allocation also asks
+    `vt_room` (the history's reserve rule). Over the cap: first the
+    pictures no cell shows any more go (a walk of the marked rows: the
+    screens and the history), then the oldest - its cells become blanks
+    (also in the history), so a cell never shows another picture that
+    got its id. The walk also runs on ED 2/3, RIS, leaving the
+    alternate screen and at the 32nd picture.
+  - **Sixel** (DCS P1;P2;P3 q): decoded in vt.c as bytes come (a loop of
+    its own in vt_write, not the state machine per byte): raster
+    attributes (the size, made at once), colour registers (256, RGB and
+    DEC's HLS, the VT340's 16 to start), repeat, $ and -. The picture is
+    cut at the right edge where it starts (it is never wider than the
+    cells left) and grows by halves only without raster attributes.
+    Unset pixels: the theme's background. Aspect ratios are ignored
+    (1:1, as foot). Placed at the cursor; the screen scrolls for it; the
+    cursor goes to the line below, at the picture's left column (DECSET
+    8452: right of its last row); DECSET 80 (DECSDM): at the top left,
+    cut at the bottom, the cursor stays. CAN/SUB drop it.
+  - **iTerm2** (OSC 1337;File=args:base64 BEL/ST): the base64 is decoded
+    as it comes into a growing buffer (under the cap); at the end
+    `vt_decode` (CTerm: Parts/Pictures) turns the file into ARGB, which
+    vt.c scales (nearest pixel, 16.16 steps) to width=/height= (cells,
+    px, %; preserveAspectRatio: inside the box) and to the width left.
+    The cursor ends right of its last row (as iTerm2; imgcat sends a
+    LF). inline=0 (a download) is swallowed.
+  - **kitty** (APC G): swallowed whole (APC was already a string to
+    ST), so its base64 never shows.
+  - **Replies:** DA1 `?62;4;22c` while pictures are on (else as before);
+    CSI 14 t (text area in pixels), CSI 16 t (the cell); XTSMGRAPHICS
+    `? 1;1;0 S` (256 registers) and `? 2;1;0 S` (the area); DECRQM 80
+    and 8452. In the Amiga Shell CSI n t stays the console's own.
+  - **Drawing** (draw.c): the RTG painter copies a picture cell's tile
+    into its row buffer (the rest of the cell the background), so a row
+    of text and picture is one WritePixelArray as before; the 8-bit
+    card's painter (paint_row8) and Text()'s path take pens; draw_cells
+    writes a run of picture cells straight to the window
+    (WritePixelArray on a deep card without the painter,
+    WriteChunkyPixels with pens on plain screens - it clips to the
+    layer). The planar painter (ppaint.s) is never used on a marked row
+    (it would draw glyphs); on a plain screen a picture sets the write
+    mask to all planes, so scrolls carry it (until the next full
+    redraw). Rows without the mark: one load and a test more per row,
+    nothing per cell.
+  - **Pens** (Parts/Pictures, pics.c): a colour cube by depth - 6x6x6
+    on 256 colours, 4^3 on 128, 3^3 on 64, the 8 pure colours on 32 and
+    16 (27 on 16 pens: the first free pens went to the dark entries and
+    yellow came out grey) - its pens asked with PRECISION_EXACT
+    (PRECISION_IMAGE handed out near ones already given: the cube fell
+    into its neighbours, yellow came out yellow-green; measured on a
+    256-colour own screen), kept in CTerm's pen cache (`pic_pen`), so
+    `release_pens` gives them back; `pen_gen` tells the part to ask
+    again. Ordered 4x4 dithering by screen position, with per-channel
+    tables (no divide a pixel).
+  - **Parts/Pictures** (3.5 KB): decoding iTerm2's files (written to
+    `T:CTerm-pic.<task>`, read by picture.datatype V43 as ARGB, alpha
+    put over the background, deleted) on a deep stack (`deep_call`), and
+    the pens. Loaded when the first file comes or a picture is drawn on
+    a screen of 256 colours or fewer; unloaded between rounds when no
+    tab holds a picture (`pics_tidy`). It is called while a tab's text
+    is parsed: a missing file says nothing (`quiet` slot: say() there
+    would re-enter vt_write on the same emulator) - the picture just
+    does not show.
+  - **ShowPic** (tools/showpic.c, 4.4 KB): a file as iTerm2's code, as
+    imgcat. An ARexx version did the same but took ~100 s for a 10 KB PNG
+    on the emulated A1200 (base64 in ARexx); ShowPic takes a moment.
+  - **The setting:** `pics` (prefs `pictures=0` when off), Settings, Text
+    tab; on at first, on every screen (pictures are drawn on all of
+    them); off, the codes are swallowed and DA1 says no sixel.
+  - **Tested natively** (verified 2026-10-11): tests/pic_test.c in
+    `make test` (pictures from tests/pictures/mksixel.py: placement,
+    cursor, pixels, scrolling into the history, overwrite, erase and the
+    memory back, the right-edge cut, DECSDM, 8452, the cap dropping the
+    oldest with no cell left showing it, iTerm2 through a PPM decoder,
+    width=, a download and a broken file, kitty swallowed, reflow,
+    replies). img2sixel 1.10.5 is installed here but wrote nothing (any
+    input): its test is skipped. The fuzzer (fz.c) got sixel, OSC 1337
+    and APC fragments, a PPM decoder, pictures on/off and small caps,
+    and checks that every picture cell shows a picture there is, inside
+    it, on a marked row: seeds 1..846 passed (5 minutes, ASan/UBSan).
+  - **Tested in FS-UAE** (verified 2026-10-11; tests/pictures/uae.sh: the
+    A1200 + 8 MB fast, a private drive, wasabid on 1250): a 16-colour
+    Workbench, an own screen of 256 and of 16 colours (the bars'
+    pixels exact on both: FFFFFF FFFF00 00FFFF 00FF00 FF00FF FF0000
+    0000FF 000000), `Type` of sixel files in the Shell, ShowPic (PNG
+    through datatypes, WIDTH 20, 30, 50%), the scrollback, two panes
+    (pictures cut at the pane edge), hide/show (identical), pane close,
+    tab switch (the reflowed picture), ESC c and CSI 2J, the setting off
+    (swallowed) and on, and a telnet host (tests/pictures/picserve.py):
+    the replies `?62;4;22c`, `6;8;8t`, `4;184;608t`, `?1;0;256S`,
+    `?2;0;608;184S`, the bars, the PNG (width=30), kitty swallowed, the
+    gradient. Memory (Avail FLUSH, same boot): before CTerm 8,938,440,
+    CTerm idle takes 450,912 (0.3b15: 442,032), the 282x176 Kickstart
+    picture 152,064 more (148,896 its pixels, the rest Parts/Pictures),
+    all of it back after a clear (72 bytes off). **Not tested:** RTG
+    (FS-UAE has the uaegfx card built in, but the drive has no
+    Picasso96, and the P96 package on the PC has no
+    cybergraphics.library, which CTerm's RTG painters need): the RTG
+    painter's and the 8-bit card's picture paths are read through only;
+    the real A1200.
+  - **Cost:** CTerm 203,644 -> 215,324 bytes (the emulator's picture
+    code ~5.7 KB, compiled -Os; drawing ~1.7 KB; the rest glue,
+    replies and relocations) - more than the few KB hoped for; the
+    iTerm2 sizing and scaling could move into the part (it would need
+    the part to allocate the picture through the hooks). Parts/Pictures
+    3,560, Settings 20,264 -> 20,420.
+  - **Not done:** kitty's pictures shown (they are swallowed); sixel
+    aspect ratios; iTerm2's MultipartFile; a picture's own palette on
+    screens of few colours (the cube is shared); pictures redrawn at a
+    new letter size (a tile keeps its old size, cut or filled).
+
 - Later idea: Hydra's chat with the other side during a transfer
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
 - Also: an ssh password login tried against a real server,
@@ -901,7 +1027,7 @@ call that uses ~0.5 KB (the Shell itself is a process of its own).
 
 | | 0.3b7 | 0.3b8 | 0.3b12 | 0.3b13 | 0.3b14 |
 |---|---|---|---|---|---|
-| CTerm (bytes) | 202,960 | 231,176 | 251,788 | 198,556 | 202,348 (0.3b15: 203,644) |
+| CTerm (bytes) | 202,960 | 231,176 | 251,788 | 198,556 | 202,348 (0.3b15: 203,644; 0.3b16: 215,324) |
 | free, CTerm idle, stock A1200 (2 MB chip) | 85,752 | 60,056 | 39,960 | 119,408 | |
 | free, CTerm idle, A1200 + 8 MB fast | | | 8,413,512 | 8,496,696 | |
 | CTerm idle takes, A1200 + 8 MB fast (2026-10-11, same boot) | | | | 442,304, 438,448 | 440,968, 440,968 |

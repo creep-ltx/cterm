@@ -13,7 +13,10 @@
 #define REPLYMAX 256
 
 enum { S_GROUND, S_ESC, S_ESC_INT, S_CSI, S_OSC, S_OSC_ESC, S_STR,
-       S_STR_ESC };
+       S_STR_ESC, S_DCS, S_SIXEL, S_SIXEL_ESC, S_FILE, S_FILE_ESC };
+
+struct Sixel;
+struct FileIn;
 
 typedef struct {
     int x, y, pending;
@@ -96,11 +99,27 @@ struct Vt {
     int title_changed, bell;
     char *clip;                         /* OSC 52: text for the clipboard */
     int cliplen;
+
+    /* pictures (vt.h): sixel and iTerm2's files */
+    int pic_on;
+    long pic_cap, pic_bytes;            /* the most they may hold; held now
+                                           (one coming in too) */
+    int pcw, pch;                       /* a cell in pixels */
+    uint32_t pic_bg;                    /* unset pixels */
+    VtPic **pics;                       /* the oldest first */
+    int npics, pics_cap, pic_id, pic_last;
+    int sdm, sright;                    /* DECSET 80: sixels do not scroll;
+                                           8452: the cursor right of one */
+    struct Sixel *sx;                   /* a sixel picture coming in */
+    struct FileIn *fi;                  /* an iTerm2 file coming in */
 };
 
 /* ---- small things ---------------------------------------------------- */
 
 static int pen_gc(Vt *v);
+static void pic_gc(Vt *v, long need);
+static void sixel_end(Vt *v, int keep);
+static void file_end(Vt *v, int keep);
 
 static unsigned pen_hash(const VtPen *p)
 {
@@ -181,6 +200,9 @@ static void fill(VtCell *p, int n, VtCell c)
 /* RWRAP: the row ran on into the next (the text wrapped there, it did
  * not end): what lets a resize join and wrap the lines again */
 #define RWRAP(r) ((r)[-1].pen)
+/* RPIC: the row may hold picture cells (VT_ROW_PICS): rows without are
+ * drawn and walked as before */
+#define RPIC(r) ((r)[-2].pen)
 
 static VtCell *row_new(int cols)
 {
@@ -212,6 +234,8 @@ static void grow(VtCell *r, int x1)
 static void blank_range(VtCell *r, int x0, int x1, VtCell b)
 {
     int l = (int)RLEN(r);
+    if (x0 == 0 && x1 >= l)
+        RPIC(r) = 0;                    /* all it held is gone */
     if (!b.pen) {
         if (x1 >= l) {
             if (x0 < l)
@@ -366,6 +390,7 @@ static int swap_into_history(Vt *v, VtCell **pline)
     v->hist_w[slot] = RLEN(*pline);
     RLEN(fresh) = 0;                    /* the caller blanks it */
     RWRAP(fresh) = 0;
+    RPIC(fresh) = 0;
     *pline = fresh;
     return 1;
 }
@@ -402,6 +427,7 @@ static void push_history(Vt *v, const VtCell *line)
     memcpy(copy, line, RLEN(line) * sizeof(VtCell));
     RLEN(copy) = RLEN(line);
     RWRAP(copy) = RWRAP(line);          /* a reflow joins it on again */
+    RPIC(copy) = RPIC(line);
     v->hist_w[slot] = RLEN(line);
 }
 
@@ -726,6 +752,8 @@ static void erase_display(Vt *v, int how)
         for (y = 0; y < v->rows; y++)
             erase(v, y, 0, v->cols);
         v->pen_nomem = 0;               /* looks may have gone: try again */
+        if (v->npics)
+            pic_gc(v, 0);                   /* pictures too */
     } else if (how == 3) {                  /* the scrollback too */
         int i;
         for (i = 0; i < v->hist_cap; i++) {
@@ -736,6 +764,8 @@ static void erase_display(Vt *v, int how)
         v->hist_len = v->hist_head = 0;
         v->hist_cap = v->hist_max;      /* may grow again */
         v->pen_nomem = 0;
+        if (v->npics)
+            pic_gc(v, 0);
         dirty_all(v);
     }
 }
@@ -800,6 +830,8 @@ static void use_alt(Vt *v, int on, int clear)
     if (!on) {
         free_screen(v->lines[1], v->rows);
         v->lines[1] = NULL;
+        if (v->npics)
+            pic_gc(v, 0);                   /* its pictures went with it */
     }
     dirty_all(v);
 }
@@ -825,6 +857,11 @@ static void reset_tabs(Vt *v)
 static void full_reset(Vt *v)
 {
     int i;
+    if (v->sx || v->fi) {
+        sixel_end(v, 0);
+        file_end(v, 0);
+    }
+    v->sdm = v->sright = 0;
     v->pen_nomem = 0;
     reset_pen(v);
     use_alt(v, 0, 0);
@@ -849,6 +886,8 @@ static void full_reset(Vt *v)
     save_cursor(v);
     v->saved[1] = v->saved[0];
     v->state = S_GROUND;
+    if (v->npics)
+        pic_gc(v, 0);
     dirty_all(v);
 }
 
@@ -946,6 +985,8 @@ static void set_mode(Vt *v, int on)
             case 1006: v->mouse_sgr = on; break;
             case 1004: v->focus = on; break;
             case 2026: v->sync = on; v->any_dirty = 1; break;
+            case 80: v->sdm = on; break;        /* sixels do not scroll */
+            case 8452: v->sright = on; break;   /* cursor right of a sixel */
             default: break;
             }
         } else if (v->priv == 0) {
@@ -969,6 +1010,8 @@ static int mode_state(Vt *v, int p)
     case 1006: return v->mouse_sgr ? 1 : 2;
     case 1004: return v->focus ? 1 : 2;
     case 2026: return v->sync ? 1 : 2;
+    case 80: return v->sdm ? 1 : 2;
+    case 8452: return v->sright ? 1 : 2;
     default: return 0;                  /* not recognised */
     }
 }
@@ -1053,6 +1096,24 @@ static void csi(Vt *v, int final)
     }
     if (v->inter)                       /* DECSCUSR (" q") and others */
         return;
+    if (v->priv == '?' && final == 'S') {
+        /* XTSMGRAPHICS: 1 colour registers, 2 the sixel picture's most
+         * pixels (read, or reset/set: the same, it cannot change) */
+        int what = P(0, 0);
+        if (!v->pic_on)
+            return;
+        if (what == 1)
+            reply(v, "\x1b[?1;0;256S");
+        else if (what == 2) {
+            sprintf(buf, "\x1b[?2;0;%d;%dS", v->cols * v->pcw,
+                    v->rows * v->pch);
+            reply(v, buf);
+        } else {
+            sprintf(buf, "\x1b[?%d;1;0S", what);
+            reply(v, buf);
+        }
+        return;
+    }
     if (v->priv == '?' && final != 'h' && final != 'l' && final != 'J' &&
         final != 'K' && final != 'n')
         return;                         /* kitty "CSI ? u" and friends */
@@ -1117,7 +1178,9 @@ static void csi(Vt *v, int final)
         break;
     case 'c':
         if (P(0, 0) == 0)
-            reply(v, "\x1b[?62;22c");   /* DA1: VT220 with ANSI colour */
+            /* DA1: VT220 with ANSI colour, and sixel (4) when pictures
+             * are on - what programs look for */
+            reply(v, v->pic_on ? "\x1b[?62;4;22c" : "\x1b[?62;22c");
         break;
     case 'g':
         if (P(0, 0) == 0) v->tabs[v->x] = 0;
@@ -1150,6 +1213,12 @@ static void csi(Vt *v, int final)
     case 't':
         if (P(0, 0) == 18) {
             sprintf(buf, "\x1b[8;%d;%dt", v->rows, v->cols);
+            reply(v, buf);
+        } else if (P(0, 0) == 14) {     /* the text area in pixels */
+            sprintf(buf, "\x1b[4;%d;%dt", v->rows * v->pch, v->cols * v->pcw);
+            reply(v, buf);
+        } else if (P(0, 0) == 16) {     /* a cell in pixels */
+            sprintf(buf, "\x1b[6;%d;%dt", v->pch, v->pcw);
             reply(v, buf);
         }
         break;
@@ -1205,6 +1274,684 @@ static void esc(Vt *v, int c)
     default: break;
     }
 }
+
+/* ---- pictures ----------------------------------------------------------
+ * Sixel (DCS q) is decoded here; iTerm2's files (OSC 1337;File=) are
+ * gathered here and decoded by the host (vt_decode). A picture is cut
+ * into cell tiles; the cells hold VT_PIC_CP. The pixels count against
+ * the tab's cap: what no cell shows any more goes first, then the
+ * oldest picture, its cells blanked (vt.h). */
+
+int (*vt_decode)(const uint8_t *, long, uint32_t **, int *, int *);
+void (*vt_decode_free)(uint32_t *);
+void *(*vt_palloc)(long n);
+void (*vt_pfree)(void *p);
+
+static void *palloc(long n)
+{
+    return vt_palloc ? vt_palloc(n) : malloc(n);
+}
+
+static void pfree(void *p)
+{
+    if (p)
+        vt_pfree ? vt_pfree(p) : free(p);
+}
+
+/* small before quick: a picture comes seldom, and its inner loops are
+ * plain at any optimisation (CTerm's size: the rule is a few KB) */
+#pragma GCC push_options
+#pragma GCC optimize("Os")
+/* out of the text's way: never inlined into the parser, kept apart
+ * (a 68020's 256-byte cache; conbench lost 1.6 % without this) */
+#define COLD __attribute__((cold, noinline))
+
+#define PIC_MAXT 511                    /* tiles a side (9 bits a cell) */
+#define PIC_KEEP 32                     /* pictures before a clean-up */
+
+/* May pictures take n more bytes? Within the cap (making room) and the
+ * host's reserve. Counted at once. */
+static COLD int pic_room(Vt *v, long n)
+{
+    if (n <= 0)
+        return 1;
+    if (v->pic_bytes + n > v->pic_cap)
+        pic_gc(v, n);
+    if (v->pic_bytes + n > v->pic_cap || (vt_room && !vt_room(n)))
+        return 0;
+    v->pic_bytes += n;
+    return 1;
+}
+
+static COLD void pic_free(Vt *v, VtPic *p)
+{
+    v->pic_bytes -= (long)p->w * p->h * 3;
+    pfree(p->rgb);
+    free(p);
+}
+
+/* fn on every row that may hold picture cells */
+static COLD void pic_rows(Vt *v, void (*fn)(VtCell *, uint8_t *), uint8_t *map)
+{
+    int i, y;
+    for (i = 0; i < 2; i++)
+        for (y = 0; v->lines[i] && y < v->rows; y++)
+            if (RPIC(v->lines[i][y]))
+                fn(v->lines[i][y], map);
+    for (i = 0; v->hist && i < v->hist_cap; i++)
+        if (v->hist[i] && RPIC(v->hist[i]))
+            fn(v->hist[i], map);
+}
+
+#define MAPPED(m, id) ((m)[(id) >> 3] & (1 << ((id) & 7)))
+
+static COLD void pic_mark(VtCell *r, uint8_t *map)
+{
+    int x, n = (int)RLEN(r), any = 0;
+    for (x = 0; x < n; x++)
+        if (VT_IS_PIC(r[x].cp)) {
+            unsigned id = VT_PIC_ID(r[x].cp);
+            map[id >> 3] |= 1 << (id & 7);
+            any = 1;
+        }
+    if (!any)
+        RPIC(r) = 0;                    /* written over: none there now */
+}
+
+static COLD void pic_blank(VtCell *r, uint8_t *map)
+{
+    int x, n = (int)RLEN(r);
+    for (x = 0; x < n; x++)
+        if (VT_IS_PIC(r[x].cp) && MAPPED(map, VT_PIC_ID(r[x].cp)))
+            r[x].cp = r[x].pen = 0;
+}
+
+/* The pictures no cell shows go; then, while need more bytes would pass
+ * the cap, the oldest, and their cells become blanks. */
+static COLD void pic_gc(Vt *v, long need)
+{
+    uint8_t *map;
+    int i, n = 0, drop = 0;
+    if (!v->npics || !(map = calloc(1024, 1)))
+        return;
+    pic_rows(v, pic_mark, map);
+    for (i = 0; i < v->npics; i++)
+        if (MAPPED(map, v->pics[i]->id))
+            v->pics[n++] = v->pics[i];
+        else
+            pic_free(v, v->pics[i]);
+    v->npics = n;
+    memset(map, 0, 1024);
+    while (v->npics && v->pic_bytes + need > v->pic_cap) {
+        VtPic *p = v->pics[0];
+        map[p->id >> 3] |= 1 << (p->id & 7);
+        pic_free(v, p);
+        memmove(v->pics, v->pics + 1, --v->npics * sizeof *v->pics);
+        drop = 1;
+    }
+    if (drop) {
+        pic_rows(v, pic_blank, map);
+        dirty_all(v);
+    }
+    v->pic_last = -1;
+    free(map);
+}
+
+const VtPic *vt_pic(const Vt *v, uint32_t cp)
+{
+    int id = VT_PIC_ID(cp), i = v->pic_last;
+    if (i >= 0 && i < v->npics && v->pics[i]->id == id)
+        return v->pics[i];
+    for (i = v->npics - 1; i >= 0; i--)
+        if (v->pics[i]->id == id) {
+            ((Vt *)v)->pic_last = i;    /* the next cell asks for it too */
+            return v->pics[i];
+        }
+    return NULL;
+}
+
+/* Into the table with an id no cell holds. 0: no memory (freed). */
+static COLD int pic_add(Vt *v, VtPic *p)
+{
+    int i;
+    if (v->npics >= PIC_KEEP)
+        pic_gc(v, 0);
+    if (v->npics == v->pics_cap) {
+        int nc = v->pics_cap ? v->pics_cap * 2 : 8;
+        VtPic **np = realloc(v->pics, nc * sizeof *np);
+        if (!np) {
+            pic_free(v, p);
+            return 0;
+        }
+        v->pics = np;
+        v->pics_cap = nc;
+    }
+    do {
+        v->pic_id = v->pic_id % 8190 + 1;   /* 8191 with 511, 511 would be
+                                               VT_WIDE_TAIL */
+        for (i = 0; i < v->npics && v->pics[i]->id != v->pic_id; i++)
+            ;
+    } while (i < v->npics);
+    p->id = v->pic_id;
+    v->pics[v->npics++] = p;
+    return 1;
+}
+
+/* At the cursor (sixel scrolling off: the screen's top left), as rows of
+ * tiles; the screen scrolls for it. The cursor goes below it (sixel), or
+ * right of its last row (8452, iTerm2). */
+static COLD void pic_place(Vt *v, VtPic *p, int right)
+{
+    int nc = (p->w + p->cw - 1) / p->cw, nr = (p->h + p->ch - 1) / p->ch;
+    int fixed = !right && v->sdm, x0 = fixed ? 0 : v->x, y = fixed ? 0 : v->y;
+    int i, j, nx = nc;
+    if (!pic_add(v, p))
+        return;
+    if (x0 + nx > v->cols)
+        nx = v->cols - x0;              /* cut at the right edge */
+    v->pending = 0;
+    for (i = 0; i < nr && i <= PIC_MAXT; i++) {
+        VtCell *r;
+        if (i) {
+            if (fixed) {
+                if (++y >= v->rows)
+                    break;              /* cut at the bottom */
+            } else {
+                linefeed(v);
+                y = v->y;
+            }
+        }
+        r = row(v, y);
+        grow(r, x0 + nx);
+        unsplit(v, r, x0);
+        unsplit(v, r, x0 + nx);
+        for (j = 0; j < nx; j++) {
+            r[x0 + j].cp = VT_PIC_CP(p->id, i, j);
+            r[x0 + j].pen = 0;
+        }
+        RPIC(r) = 1;
+        dirty_span(v, y, x0 - 1, x0 + nx);
+    }
+    if (fixed)
+        return;                         /* the cursor stays */
+    if (right || v->sright) {
+        v->x = x0 + nx;
+        if (v->x >= v->cols) {
+            v->x = v->cols - 1;
+            v->pending = 1;
+        }
+    } else {
+        linefeed(v);
+        v->x = x0;
+    }
+}
+
+/* ---- sixel ---- */
+
+struct Sixel {
+    uint8_t *px;                        /* aw x ah, R G B */
+    int aw, ah;                         /* made so far */
+    int maxw, maxh;                     /* the most it may be */
+    int w, h;                           /* drawn so far */
+    int rw, rh;                         /* the raster attributes' size */
+    int x, y;                           /* the next sixel: column, band */
+    uint32_t col, reg[256];
+    int cmd, par[5], npar, rep;
+    int full;                           /* memory ran out: the rest cut */
+};
+
+/* The VT340's 16 colours, in per cent */
+static const uint8_t vt340[16][3] = {
+    { 0, 0, 0 }, { 20, 20, 80 }, { 80, 13, 13 }, { 20, 80, 20 },
+    { 80, 20, 80 }, { 20, 80, 80 }, { 80, 80, 20 }, { 53, 53, 53 },
+    { 26, 26, 26 }, { 33, 33, 60 }, { 60, 26, 26 }, { 33, 60, 33 },
+    { 60, 33, 60 }, { 33, 60, 60 }, { 60, 60, 33 }, { 80, 80, 80 }
+};
+
+static COLD uint32_t pct_rgb(int r, int g, int b)
+{
+    if (r > 100) r = 100;
+    if (g > 100) g = 100;
+    if (b > 100) b = 100;
+    return (uint32_t)(r * 255 / 100) << 16 | (uint32_t)(g * 255 / 100) << 8 |
+           (uint32_t)(b * 255 / 100);
+}
+
+/* DEC's HLS: hue 0 is blue, 120 red, 240 green; l, s in per cent */
+static COLD uint32_t hls_rgb(int h, int l, int s)
+{
+    int q, p, k, c[3];
+    if (l > 100) l = 100;
+    if (s > 100) s = 100;
+    h = (h + 240) % 360;
+    q = l < 50 ? l * (100 + s) / 100 : l + s - l * s / 100;
+    p = 2 * l - q;
+    for (k = 0; k < 3; k++) {
+        int t = (h + 120 - k * 120 + 360) % 360;
+        c[k] = t < 60 ? p + (q - p) * t / 60 : t < 180 ? q
+             : t < 240 ? p + (q - p) * (240 - t) / 60 : p;
+    }
+    return pct_rgb(c[0], c[1], c[2]);
+}
+
+/* Room for nw x nh pixels (within the most): FALSE when there is none
+ * (s->full: what does not fit is cut). By halves more at a time: a
+ * picture without raster attributes comes a band at a time. */
+static COLD int sixel_grow(Vt *v, struct Sixel *s, int nw, int nh)
+{
+    int aw = s->aw, ah = s->ah, y, k, tries;
+    uint8_t *np = NULL, bg[3];
+    if (nw > s->maxw) nw = s->maxw;
+    if (nh > s->maxh) nh = s->maxh;
+    if (nw <= aw && nh <= ah)
+        return 1;
+    if (s->full)
+        return 0;
+    for (tries = 0; tries < 2 && !np; tries++) {
+        int ww = nw < aw ? aw : nw, hh = nh < ah ? ah : nh;
+        long add;
+        if (!tries && !s->rh) {         /* first by half again (no size
+                                           was given) */
+            if (ww > aw && ww < aw + aw / 2) ww = aw + aw / 2;
+            if (hh > ah && hh < ah + ah / 2) hh = ah + ah / 2;
+            if (ww > s->maxw) ww = s->maxw;
+            if (hh > s->maxh) hh = s->maxh;
+        }
+        add = (long)ww * hh * 3 - (long)aw * ah * 3;
+        if (!pic_room(v, add))
+            continue;
+        if (!(np = palloc((long)ww * hh * 3))) {
+            v->pic_bytes -= add;
+            continue;
+        }
+        bg[0] = v->pic_bg >> 16; bg[1] = v->pic_bg >> 8; bg[2] = v->pic_bg;
+        for (k = 0; k < ww; k++)        /* unset pixels: the background */
+            memcpy(np + k * 3, bg, 3);
+        for (y = 1; y < hh; y++)
+            memcpy(np + (long)y * ww * 3, np, ww * 3);
+        for (y = 0; y < ah; y++)
+            memcpy(np + (long)y * ww * 3, s->px + (long)y * aw * 3, aw * 3);
+        pfree(s->px);
+        s->px = np;
+        s->aw = ww;
+        s->ah = hh;
+    }
+    if (!np)
+        s->full = 1;
+    return np != NULL;
+}
+
+/* One sixel: a column of six pixels (bits, top first), rep times */
+static COLD void sixel_put(Vt *v, struct Sixel *s, int bits)
+{
+    int n = s->rep, x = s->x, m, i, k;
+    s->rep = 1;
+    s->x += n;
+    if (s->x > (1 << 20))
+        s->x = 1 << 20;                 /* !999999 a thousand times */
+    if (!bits || x >= s->maxw || s->y >= s->maxh)
+        return;
+    if (x + n > s->maxw)
+        n = s->maxw - x;
+    i = bits & 32 ? 6 : bits & 16 ? 5 : bits & 8 ? 4 : bits & 4 ? 3
+      : bits & 2 ? 2 : 1;               /* the rows it reaches */
+    if (x + n > s->aw || s->y + i > s->ah)
+        sixel_grow(v, s, x + n > s->aw ? x + n : s->aw,
+                   s->y + i > s->ah ? s->y + i : s->ah);
+    m = x + n <= s->aw ? n : s->aw - x;
+    if (m <= 0)
+        return;
+    for (i = 0; i < 6 && s->y + i < s->ah; i++)
+        if (bits & 1 << i) {
+            uint8_t *p = s->px + ((long)(s->y + i) * s->aw + x) * 3;
+            uint8_t r = s->col >> 16, g = s->col >> 8, b = s->col;
+            for (k = 0; k < m; k++, p += 3) {
+                p[0] = r; p[1] = g; p[2] = b;
+            }
+            if (s->y + i + 1 > s->h)
+                s->h = s->y + i + 1;
+        }
+    if (x + m > s->w)
+        s->w = x + m;
+}
+
+/* A command's parameters are all there: " (raster), # (colour), ! */
+static COLD void sixel_cmd(Vt *v, struct Sixel *s)
+{
+    int *a = s->par;
+    if (s->cmd == '!')
+        s->rep = a[0] > 0 ? a[0] : 1;
+    else if (s->cmd == '"') {
+        if (s->npar >= 4 && a[2] > 0 && a[3] > 0) {
+            s->rw = a[2] < s->maxw ? a[2] : s->maxw;
+            s->rh = a[3] < s->maxh ? a[3] : s->maxh;
+            sixel_grow(v, s, s->rw, s->rh);
+        }
+    } else if (s->cmd == '#') {
+        uint32_t *r = &s->reg[a[0] & 255];
+        if (s->npar >= 5 && a[1] == 2)
+            *r = pct_rgb(a[2], a[3], a[4]);
+        else if (s->npar >= 5 && a[1] == 1)
+            *r = hls_rgb(a[2] % 361, a[3], a[4]);
+        s->col = *r;
+    }
+    s->cmd = 0;
+}
+
+static COLD void sixel_byte(Vt *v, int c)
+{
+    struct Sixel *s = v->sx;
+    if (s->cmd) {
+        if (c >= '0' && c <= '9') {
+            int *p;
+            if (!s->npar)
+                s->npar = 1;
+            p = &s->par[s->npar - 1];
+            if (*p < 100000)
+                *p = *p * 10 + (c - '0');
+            return;
+        }
+        if (c == ';') {
+            if (!s->npar)
+                s->npar = 1;
+            if (s->npar < 5)
+                s->par[s->npar++] = 0;
+            return;
+        }
+        sixel_cmd(v, s);
+    }
+    if (c >= '?' && c <= '~')
+        sixel_put(v, s, c - '?');
+    else if (c == '"' || c == '#' || c == '!') {
+        s->cmd = c;
+        s->npar = 0;
+        memset(s->par, 0, sizeof s->par);
+    } else if (c == '$')
+        s->x = 0;
+    else if (c == '-') {
+        s->x = 0;
+        if (s->y < (1 << 20))
+            s->y += 6;
+    }
+}
+
+/* DCS P1;P2;P3 q: a sixel picture begins. 0: not now (swallowed). */
+static COLD int sixel_begin(Vt *v)
+{
+    struct Sixel *s;
+    int x0 = v->sdm ? 0 : v->x, i;
+    if (!v->pic_on || v->pcw <= 0 || v->pch <= 0 ||
+        !(s = calloc(1, sizeof *s)))
+        return 0;
+    s->maxw = (v->cols - x0) * v->pcw;
+    if (s->maxw > PIC_MAXT * v->pcw)
+        s->maxw = PIC_MAXT * v->pcw;
+    s->maxh = (v->sdm ? v->rows : PIC_MAXT) * v->pch;
+    for (i = 0; i < 256; i++)
+        s->reg[i] = i < 16 ? pct_rgb(vt340[i][0], vt340[i][1], vt340[i][2])
+                           : 0;
+    s->col = s->reg[7];
+    s->rep = 1;
+    v->sx = s;
+    return 1;
+}
+
+/* ST: the picture shown (keep), or dropped */
+static COLD void sixel_end(Vt *v, int keep)
+{
+    struct Sixel *s = v->sx;
+    VtPic *p = NULL;
+    int w, h, y;
+    if (!s)
+        return;
+    v->sx = NULL;
+    if (s->cmd)
+        sixel_cmd(v, s);
+    w = s->w > s->rw ? s->w : s->rw;
+    h = s->h > s->rh ? s->h : s->rh;
+    if (w > s->aw) w = s->aw;
+    if (h > s->ah) h = s->ah;
+    if (keep && w > 0 && h > 0)
+        p = calloc(1, sizeof *p);
+    if (!p) {
+        v->pic_bytes -= (long)s->aw * s->ah * 3;
+        pfree(s->px);
+        free(s);
+        return;
+    }
+    if (w < s->aw)                      /* the rows close together */
+        for (y = 1; y < h; y++)
+            memmove(s->px + (long)y * w * 3, s->px + (long)y * s->aw * 3,
+                    w * 3);
+    /* the rest given back (when there is room for the copy; else it is
+     * kept, the picture's size counted) */
+    if (w * h < s->aw * s->ah && (p->rgb = palloc((long)w * h * 3))) {
+        memcpy(p->rgb, s->px, (size_t)w * h * 3);
+        pfree(s->px);
+    } else
+        p->rgb = s->px;
+    v->pic_bytes -= (long)s->aw * s->ah * 3 - (long)w * h * 3;
+    p->w = w;
+    p->h = h;
+    p->cw = v->pcw;
+    p->ch = v->pch;
+    free(s);
+    pic_place(v, p, 0);
+}
+
+/* ---- iTerm2's inline files: OSC 1337 ; File = args : base64 ST ---- */
+
+struct FileIn {
+    uint8_t *buf;
+    long len, cap;
+    uint32_t acc;
+    int bits, full, inl, keep;          /* inline=1; preserveAspectRatio */
+    int wv, hv;                         /* width=, height=: how many */
+    char wu, hu;                        /* ... of what: c cells, p pixels,
+                                           % of the screen; 0 auto */
+};
+
+static COLD void file_arg(int *val, char *unit, const char *s)
+{
+    int n = 0;
+    while (*s >= '0' && *s <= '9' && n < 100000)
+        n = n * 10 + (*s++ - '0');
+    *val = n;
+    *unit = !n ? 0 : *s == 'p' ? 'p' : *s == '%' ? '%' : 'c';
+}
+
+/* The arguments before ':' are in v->osc after "1337;File=". */
+static COLD int file_begin(Vt *v)
+{
+    struct FileIn *f;
+    char *a = v->osc + 10, *e = v->osc + v->osclen;
+    if (!v->pic_on || !vt_decode || v->pcw <= 0 ||
+        !(f = calloc(1, sizeof *f)))
+        return 0;
+    f->keep = 1;
+    *e = 0;
+    while (a < e) {
+        char *k = a, *val, *end = strchr(a, ';');
+        if (!end)
+            end = e;
+        *end = 0;
+        val = strchr(k, '=');
+        if (val) {
+            *val++ = 0;
+            if (!strcmp(k, "inline"))
+                f->inl = *val == '1';
+            else if (!strcmp(k, "preserveAspectRatio"))
+                f->keep = *val != '0';
+            else if (!strcmp(k, "width"))
+                file_arg(&f->wv, &f->wu, val);
+            else if (!strcmp(k, "height"))
+                file_arg(&f->hv, &f->hu, val);
+        }
+        a = end + 1;
+    }
+    v->fi = f;
+    return 1;
+}
+
+static COLD void file_byte(Vt *v, int c)
+{
+    struct FileIn *f = v->fi;
+    int d = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26
+          : c >= '0' && c <= '9' ? c - '0' + 52 : c == '+' ? 62
+          : c == '/' ? 63 : -1;
+    if (d < 0 || f->full || !f->inl)
+        return;                         /* '=', line breaks; a download */
+    f->acc = f->acc << 6 | d;
+    if ((f->bits += 6) < 8)
+        return;
+    f->bits -= 8;
+    if (f->len == f->cap) {
+        long nc = f->cap ? f->cap * 2 : 16384;
+        uint8_t *nb;
+        if (!pic_room(v, nc - f->cap)) {
+            f->full = 1;
+            return;
+        }
+        if (!(nb = palloc(nc))) {
+            v->pic_bytes -= nc - f->cap;
+            f->full = 1;
+            return;
+        }
+        if (f->len)
+            memcpy(nb, f->buf, f->len);
+        pfree(f->buf);
+        f->buf = nb;
+        f->cap = nc;
+    }
+    f->buf[f->len++] = (uint8_t)(f->acc >> f->bits);
+}
+
+static COLD int file_size(int val, char unit, int cell, int whole)
+{
+    return unit == 'c' ? val * cell : unit == 'p' ? val
+         : unit == '%' ? (int)((long)whole * val / 100) : 0;
+}
+
+/* ST: decoded by the host, sized as asked (and to fit the width left),
+ * shown at the cursor */
+static COLD void file_end(Vt *v, int keep)
+{
+    struct FileIn *f = v->fi;
+    uint32_t *argb = NULL;
+    int w = 0, h = 0, tw, th, x, y, ok;
+    VtPic *p;
+    if (!f)
+        return;
+    v->fi = NULL;
+    ok = keep && f->inl && !f->full && f->len && vt_decode &&
+         vt_decode(f->buf, f->len, &argb, &w, &h) && argb;
+    pfree(f->buf);
+    v->pic_bytes -= f->cap;
+    if (!ok || w <= 0 || h <= 0) {
+        if (argb && vt_decode_free)
+            vt_decode_free(argb);
+        free(f);
+        return;
+    }
+    tw = file_size(f->wv, f->wu, v->pcw, v->cols * v->pcw);
+    th = file_size(f->hv, f->hu, v->pch, v->rows * v->pch);
+    if (!tw && !th) {
+        tw = w;
+        th = h;
+    } else if (!tw)
+        tw = f->keep ? (int)((long)w * th / h) : w;
+    else if (!th)
+        th = f->keep ? (int)((long)h * tw / w) : h;
+    else if (f->keep) {                 /* inside the box, in shape */
+        if ((long)tw * h > (long)th * w)
+            tw = (int)((long)w * th / h);
+        else
+            th = (int)((long)h * tw / w);
+    }
+    x = (v->cols - v->x) * v->pcw;      /* the width left of the screen */
+    if (tw > x) {
+        th = (int)((long)th * x / tw);
+        tw = x;
+    }
+    if (th > PIC_MAXT * v->pch) {
+        tw = (int)((long)tw * PIC_MAXT * v->pch / th);
+        th = PIC_MAXT * v->pch;
+    }
+    if (tw < 1) tw = 1;
+    if (th < 1) th = 1;
+    free(f);
+    p = calloc(1, sizeof *p);
+    if (p && pic_room(v, (long)tw * th * 3)) {
+        if ((p->rgb = palloc((long)tw * th * 3))) {
+            /* nearest pixel, in 16.16 steps (no divide a pixel) */
+            uint32_t sx, dx = ((uint32_t)w << 16) / tw;
+            uint8_t *d = p->rgb;
+            for (y = 0; y < th; y++) {
+                const uint32_t *srow = argb + (long)y * h / th * w;
+                for (x = 0, sx = 0; x < tw; x++, sx += dx) {
+                    uint32_t c = srow[sx >> 16];
+                    *d++ = c >> 16;
+                    *d++ = c >> 8;
+                    *d++ = c;
+                }
+            }
+            p->w = tw;
+            p->h = th;
+            p->cw = v->pcw;
+            p->ch = v->pch;
+        } else
+            v->pic_bytes -= (long)tw * th * 3;
+    }
+    if (vt_decode_free)
+        vt_decode_free(argb);
+    if (p && p->rgb)
+        pic_place(v, p, 1);
+    else
+        free(p);
+}
+
+/* A picture's data in one go (the state machine for each byte costs):
+ * the bytes taken. */
+static void byte(Vt *v, int c);
+static COLD int pic_run(Vt *v, const uint8_t *b, int n)
+{
+    int i = 0;
+    if (v->state == S_SIXEL)
+        while (i < n && v->state == S_SIXEL) {
+            int c = b[i++];
+            if (c >= 0x20 && c < 0x7F)
+                sixel_byte(v, c);
+            else
+                byte(v, c);
+        }
+    else
+        while (i < n && v->state == S_FILE) {
+            int c = b[i++];
+            if (c > 0x20 && c < 0x7F)
+                file_byte(v, c);
+            else
+                byte(v, c);
+        }
+    return i;
+}
+
+void vt_set_pictures(Vt *v, int on, long cap)
+{
+    v->pic_on = on;
+    v->pic_cap = cap;
+    pic_gc(v, 0);                       /* a smaller cap: the oldest go */
+}
+
+void vt_set_cell_px(Vt *v, int cw, int ch, uint32_t bg)
+{
+    v->pcw = cw;
+    v->pch = ch;
+    v->pic_bg = bg & 0xFFFFFF;
+}
+
+long vt_pic_bytes(const Vt *v) { return v->pic_bytes; }
+int vt_pic_count(const Vt *v) { return v->npics; }
+#pragma GCC pop_options
 
 /* OSC 52;targets;base64: the program copied text (vim, tmux) - decoded
  * and kept for the clipboard. A query ("?") is not answered: the host
@@ -1298,6 +2045,15 @@ static void control(Vt *v, int c)
     }
 }
 
+/* A DCS: its parameters, then sixel's q (or swallowed to ST). */
+static void dcs_start(Vt *v)
+{
+    v->state = S_DCS;
+    v->nparam = 0;
+    v->param[0] = -1;
+    v->priv = v->priv2 = v->inter = 0;
+}
+
 /* C1 controls, as bytes in Latin-1 mode or as ESC + letter. */
 static int c1(Vt *v, int c)
 {
@@ -1306,7 +2062,7 @@ static int c1(Vt *v, int c)
     case 0x85: v->x = 0; linefeed(v); return 1;
     case 0x88: v->tabs[v->x] = 1; return 1;
     case 0x8D: reverse_index(v); return 1;
-    case 0x90: v->state = S_STR; return 1;     /* DCS */
+    case 0x90: dcs_start(v); return 1;         /* DCS */
     case 0x9B:                                  /* CSI */
         v->state = S_CSI;
         v->nparam = 0;
@@ -1446,8 +2202,13 @@ static void byte(Vt *v, int c)
         v->state = S_GROUND;
         if (c == '[') { start_csi(v); return; }
         if (c == ']') { v->state = S_OSC; v->osclen = 0; return; }
-        if (c == 'P' || c == 'X' || c == '^' || c == '_') {
-            v->state = S_STR;
+        if (c == 'P') {
+            dcs_start(v);
+            return;
+        }
+        if (c == 'X' || c == '^' || c == '_') {
+            v->state = S_STR;           /* APC too: kitty's pictures are
+                                           swallowed, never shown as text */
             return;
         }
         if (c == '\\')
@@ -1509,6 +2270,11 @@ static void byte(Vt *v, int c)
             return;
         }
         if (c == 0x1B) { v->state = S_OSC_ESC; return; }
+        if (c == ':' && v->osclen >= 10 && !memcmp(v->osc, "1337;File=", 10) &&
+            v->osclen < OSCMAX - 1 && file_begin(v)) {
+            v->state = S_FILE;          /* iTerm2's picture: its base64 */
+            return;
+        }
         if (v->osclen < OSCMAX - 1)
             v->osc[v->osclen++] = (char)c;
         return;
@@ -1527,6 +2293,59 @@ static void byte(Vt *v, int c)
     case S_STR:
         if (c == 0x1B) v->state = S_STR_ESC;
         else if (c == 0x9C && !v->utf8) v->state = S_GROUND;
+        return;
+
+    case S_DCS:
+        if (c >= '0' && c <= '9') {
+            if (v->nparam == 0) v->nparam = 1;
+            if (v->param[v->nparam - 1] < 0) v->param[v->nparam - 1] = 0;
+            if (v->param[v->nparam - 1] < 100000)
+                v->param[v->nparam - 1] = v->param[v->nparam - 1] * 10 + (c - '0');
+        } else if (c == ';') {
+            if (v->nparam == 0) v->nparam = 1;
+            if (v->nparam < MAXPARAM) v->param[v->nparam++] = -1;
+        } else if (c >= 0x20 && c <= 0x3F)
+            v->inter = (char)c;
+        else if (c >= 0x40 && c <= 0x7E)
+            v->state = c == 'q' && !v->inter && sixel_begin(v) ? S_SIXEL
+                                                              : S_STR;
+        else if (c == 0x1B)
+            v->state = S_STR_ESC;
+        else if (c == 0x9C && !v->utf8)
+            v->state = S_GROUND;
+        return;
+
+    case S_SIXEL:
+        if (c == 0x1B)
+            v->state = S_SIXEL_ESC;
+        else if ((c == 0x9C && !v->utf8) || c == 0x18 || c == 0x1A) {
+            sixel_end(v, c == 0x9C);    /* ST; CAN and SUB cancel it */
+            v->state = S_GROUND;
+        } else if (c >= 0x20 && c < 0x7F)
+            sixel_byte(v, c);
+        return;
+
+    case S_FILE:
+        if (c == 0x1B)
+            v->state = S_FILE_ESC;
+        else if (c == 7 || (c == 0x9C && !v->utf8) || c == 0x18 || c == 0x1A) {
+            file_end(v, c == 7 || c == 0x9C);
+            v->state = S_GROUND;
+        } else
+            file_byte(v, c);
+        return;
+
+    case S_SIXEL_ESC:
+    case S_FILE_ESC:
+        /* ESC \ is ST; anything else ends the picture too and starts its
+         * own sequence */
+        if (v->state == S_SIXEL_ESC)
+            sixel_end(v, 1);
+        else
+            file_end(v, 1);
+        v->state = S_ESC;
+        v->inter = 0;
+        byte(v, c);
         return;
     }
 }
@@ -1611,6 +2430,10 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
             i--;                        /* the for loop steps past it */
             v->any_dirty = 1;
             v->last_cp = buf[i] >= 0x80 ? cp437[buf[i] - 0x80] : buf[i];
+            continue;
+        }
+        if (v->state >= S_SIXEL && (v->state == S_SIXEL || v->state == S_FILE)) {
+            i += pic_run(v, buf + i, len - i) - 1;
             continue;
         }
         /* a whole CSI with plain parameters inside this write: parsed
@@ -1809,6 +2632,9 @@ Vt *vt_new(int cols, int rows, int scrollback)
     }
     memset(&v->pens[0], 0, sizeof v->pens[0]);
     v->bpen_bg = 0xFFFFFFFFu;
+    v->pcw = 8;                         /* until the host says */
+    v->pch = 16;
+    v->pic_last = -1;
     v->lines[0] = alloc_screen(cols, rows);
     v->lines[1] = NULL;                 /* made when first used */
     v->tabs = calloc(cols, 1);
@@ -1837,6 +2663,11 @@ void vt_free(Vt *v)
     int i;
     if (!v)
         return;
+    sixel_end(v, 0);
+    file_end(v, 0);
+    for (i = 0; i < v->npics; i++)
+        pic_free(v, v->pics[i]);
+    free(v->pics);
     for (i = 0; i < v->hist_cap && v->hist; i++)
         row_free(v->hist[i]);
     free(v->clip);
@@ -1972,6 +2803,15 @@ static int reflow(Vt *v, int ncols, int nrows, VtCell **ng,
         cr = out.n - 1;
         cc = 0;
     }
+    if (v->npics)                       /* the new rows' picture marks */
+        for (i = 0; i < out.n; i++) {
+            int x;
+            for (x = 0; x < (int)RLEN(out.r[i]); x++)
+                if (VT_IS_PIC(out.r[i][x].cp)) {
+                    RPIC(out.r[i]) = 1;
+                    break;
+                }
+        }
     /* the screen is the last nrows rows, the cursor's always among them */
     start = out.n > nrows ? out.n - nrows : 0;
     if (cr < start)
@@ -2072,6 +2912,7 @@ void vt_resize(Vt *v, int cols, int rows)
             memcpy(ng[i][y], o, n * sizeof(VtCell));
             RLEN(ng[i][y]) = n;
             RWRAP(ng[i][y]) = RWRAP(o);
+            RPIC(ng[i][y]) = RPIC(o);
         }
         free_screen(v->lines[i], v->rows);
         v->lines[i] = ng[i];

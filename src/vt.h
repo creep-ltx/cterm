@@ -113,4 +113,47 @@ const char *vt_title(Vt *vt, int *changed);
 char *vt_take_clip(Vt *vt, int *len);
 int vt_take_bell(Vt *vt);
 
+/* ---- pictures (sixel, iTerm2's inline files) ----
+ * A picture is cut into tiles of a cell each; a cell showing one holds
+ * VT_PIC_CP(id, row, col) instead of a letter, so pictures scroll, go
+ * into the history and are erased as text is. The pixels are kept here,
+ * 24-bit, per tab, up to a cap; the oldest picture goes when it is full
+ * (its cells become blanks). */
+#define VT_PIC_CP(id, ty, tx) (0x80000000u | (uint32_t)(id) << 18 | \
+                               (uint32_t)(ty) << 9 | (uint32_t)(tx))
+#define VT_IS_PIC(cp)   ((cp) >= 0x80000000u && (cp) != VT_WIDE_TAIL)
+#define VT_PIC_ID(cp)   (((cp) >> 18) & 0x1FFF)
+#define VT_PIC_TY(cp)   (((cp) >> 9) & 511)
+#define VT_PIC_TX(cp)   ((cp) & 511)
+/* A row (vt_line's) may hold picture cells: else none is there. */
+#define VT_ROW_PICS(l)  ((l)[-2].pen)
+
+typedef struct {
+    int id;
+    int w, h;                   /* in pixels */
+    int cw, ch;                 /* the cell it was cut into */
+    uint8_t *rgb;               /* w*h pixels: R, G, B */
+} VtPic;
+
+/* Pictures understood (on) or swallowed; cap: bytes they may hold. */
+void vt_set_pictures(Vt *vt, int on, long cap);
+/* A cell in pixels (for placing pictures, CSI 14/16 t), and the colour
+ * of pixels a picture leaves unset (the background). */
+void vt_set_cell_px(Vt *vt, int cw, int ch, uint32_t bg);
+/* The picture a picture cell shows (NULL: gone); its tile's top left
+ * pixel is (VT_PIC_TX(cp) * pic->cw, VT_PIC_TY(cp) * pic->ch). */
+const VtPic *vt_pic(const Vt *vt, uint32_t cp);
+long vt_pic_bytes(const Vt *vt);
+int vt_pic_count(const Vt *vt);
+/* Set by the host: a whole image file (iTerm2's PNG, JPEG, GIF) into
+ * 0xAARRGGBB pixels (opaque), which vt_decode_free gives back. 0: not
+ * a picture. NULL: such files are swallowed. */
+extern int (*vt_decode)(const uint8_t *file, long len, uint32_t **argb,
+                        int *w, int *h);
+extern void (*vt_decode_free)(uint32_t *argb);
+/* Pixel memory (pictures, files coming in): the host's own way, so it
+ * goes back to the system when a picture goes. NULL: malloc and free. */
+extern void *(*vt_palloc)(long n);
+extern void (*vt_pfree)(void *p);
+
 #endif

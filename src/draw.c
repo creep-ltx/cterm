@@ -166,6 +166,7 @@ char ttfile[160] = "SYS:Fonts/TrueType/DejaVuSansMono.ttf";
  * (int10h.org's Ultimate Oldschool PC Font Pack, CC BY-SA 4.0), at its
  * one true size and not smoothed. */
 BOOL pcfont = TRUE;              /* the setting */
+BOOL pics = TRUE;                /* pictures in the terminal (sixel...) */
 BOOL altmeta = TRUE;             /* Alt is Meta in a host's tab */
 char userkey[2] = "U";           /* Right Amiga + it: send the name */
 char passkey[2] = "P";           /* ... the password */
@@ -398,12 +399,42 @@ static void softstyle(int st)
     }
 }
 
+ULONG pen_gen;                   /* counts release_pens: pens asked for
+                                    before (the pictures' cube) are gone */
+
 void release_pens(void)
 {
     while (npc > 0)
         ReleasePen(scr->ViewPort.ColorMap, pc_pen[--npc]);
     memset(ph_rgb, 0, sizeof ph_rgb);   /* their numbers mean nothing now */
     ph_n = 0;
+    pen_gen++;
+}
+
+/* For Parts/Pictures: a pen for a colour of its cube, exactly that
+ * colour while the screen has pens free (ObtainBestPen's image
+ * precision took a near one already given out: the cube fell into its
+ * neighbours - yellow came out yellow-green); kept in the cache, so the
+ * text shares it and release_pens gives it back. */
+LONG pic_pen(ULONG rgb)
+{
+    int slot;
+    LONG p = pen_find(rgb, &slot);
+    if (p >= 0 || npc >= NPEN || ph_n >= PHASH * 3 / 4)
+        return p >= 0 ? p : pen_for(rgb);
+    p = ObtainBestPen(scr->ViewPort.ColorMap,
+                      ((rgb >> 16) & 255) * 0x01010101,
+                      ((rgb >> 8) & 255) * 0x01010101,
+                      (rgb & 255) * 0x01010101,
+                      OBP_Precision, PRECISION_EXACT, TAG_END);
+    if (p < 0)
+        return pen_for(rgb);
+    pc_rgb[npc] = rgb;
+    pc_pen[npc++] = p;
+    ph_rgb[slot] = rgb + 1;
+    ph_pen[slot] = p;
+    ph_n++;
+    return p;
 }
 
 /* What a cell's colours come to, as RGB. */
@@ -714,11 +745,110 @@ static UBYTE fallback(ULONG cp)
  * everything outside Latin-1. */
 static BOOL is_special(ULONG cp)
 {
-    if (cp == VT_WIDE_TAIL)
+    if (cp <= 0xFF || cp == VT_WIDE_TAIL)
         return FALSE;
     if (cp >= 0x2500 && cp <= 0x259F)
         return TRUE;
-    return !usett && cp > 0xFF;
+    return !usett || VT_IS_PIC(cp);     /* a picture's cell too */
+}
+
+/* ---- pictures in the text (vt.h): a cell may show a picture's tile ----
+ * The RTG painter copies the tile into its row; an 8-bit card's painter
+ * and plain screens take pens for its pixels from Parts/Pictures (a
+ * colour cube, dithered); the Text() ways write a run of such cells
+ * straight to the window. */
+
+/* The tile a picture cell shows: its first pixel, how much of the cell
+ * it covers (the rest is background), the picture's row in bytes.
+ * NULL: the picture is gone. */
+static __attribute__((cold, noinline)) const UBYTE *pic_tile(ULONG cp, int *tw, int *th, int *stride)
+{
+    const VtPic *p = vt_pic(vt, cp);
+    int px, py;
+    if (!p)
+        return NULL;
+    px = VT_PIC_TX(cp) * p->cw;
+    py = VT_PIC_TY(cp) * p->ch;
+    *tw = p->w - px < p->cw ? p->w - px : p->cw;
+    *th = p->h - py < p->ch ? p->h - py : p->ch;
+    if (*tw > cw) *tw = cw;             /* the letters got smaller since */
+    if (*th > ch) *th = ch;
+    *stride = p->w * 3;
+    return p->rgb + ((long)py * p->w + px) * 3;
+}
+
+/* A picture cell into a row of ARGB rw pixels wide */
+static __attribute__((cold, noinline)) void pic_argb(ULONG *d, int rw, ULONG cp)
+{
+    int tw = 0, th = 0, st = 0, x, y;
+    const UBYTE *s = pic_tile(cp, &tw, &th, &st);
+    if (!s)
+        th = 0;
+    for (y = 0; y < ch; y++, d += rw) {
+        x = 0;
+        if (y < th) {
+            const UBYTE *q = s + y * st;
+            for (; x < tw; x++, q += 3)
+                d[x] = (ULONG)q[0] << 16 | (ULONG)q[1] << 8 | q[2];
+        }
+        for (; x < cw; x++)
+            d[x] = defbg;
+    }
+}
+
+/* ... into a row of pens rw bytes wide; sx, sy: the cell's place on the
+ * screen (the dither's pattern is the screen's) */
+static __attribute__((cold, noinline)) void pic_pens8(UBYTE *d, int rw, ULONG cp, int sx, int sy)
+{
+    int tw = 0, th = 0, st = 0, x, y;
+    const UBYTE *s = pic_tile(cp, &tw, &th, &st);
+    UBYTE bgp = (UBYTE)pen_for(defbg);
+    if (!s)
+        th = 0;
+    for (y = 0; y < ch; y++, d += rw) {
+        x = 0;
+        if (y < th && pics_pens(s + y * st, tw, sx, sy + y, d))
+            x = tw;
+        for (; x < cw; x++)
+            d[x] = bgp;
+    }
+}
+
+static BOOL chunky;
+
+/* Cells a..b of row r, picture cells all, straight to the window: a
+ * card's pixels, or pens (plain screens: every plane from now on, so a
+ * scroll carries the picture's too) */
+static __attribute__((cold, noinline)) void pic_put(int r, int a, int b)
+{
+    int w, x, rw = (b - a + 1) * cw, y = oy + r * ch;
+    const VtCell *line = vt_line(vt, r, back, &w);
+    BOOL deep = !planar && GetCyberMapAttr(rp->BitMap, CYBRMATTR_DEPTH) >= 15;
+    UBYTE *buf = AllocVec(deep ? rw * ch * 4 : rw * ch, MEMF_ANY);
+    if (!buf) {
+        apen(defbg);
+        RectFill(rp, ox + a * cw, y, ox + a * cw + rw - 1, y + ch - 1);
+        return;
+    }
+    for (x = a; x <= b; x++) {
+        ULONG cp = line && x < w ? line[x].cp : 0;
+        if (deep)
+            pic_argb((ULONG *)buf + (x - a) * cw, rw, cp);
+        else
+            pic_pens8(buf + (x - a) * cw, rw, cp, ox + x * cw, y);
+    }
+    if (deep)
+        WritePixelArray(buf, 0, 0, rw * 4, rp, ox + a * cw, y, rw, ch,
+                        RECTFMT_ARGB);
+    else {
+        if (pmask != 0xFF) {
+            pmask = 0xFF;
+            SetWriteMask(rp, 0xFF);
+        }
+        WriteChunkyPixels(rp, ox + a * cw, y, ox + a * cw + rw - 1,
+                          y + ch - 1, buf, rw);
+    }
+    FreeVec(buf);
 }
 
 /* Characters Claude Code uses that DejaVu Sans Mono lacks: a close
@@ -824,14 +954,14 @@ static void draw_cells(int r, int x0, int x1)
     const VtCell *line = vt_line(vt, r, back, &w);
 
     int s0 = -1, s1 = -2, xend = x1, runs = 0;
-    BOOL insel;
+    BOOL insel, rpics = line && VT_ROW_PICS(line);
     sel_span(r, &s0, &s1);
     drmd(JAM2);
     x = x0;
     while (x <= xend) {
         /* a colourful row: the rest by the planar painter, which costs
          * the same for any number of colours (Text() is a call a run) */
-        if (++runs == PPRUN && ppon && pp_cells(r, x, xend))
+        if (++runs == PPRUN && ppon && !rpics && pp_cells(r, x, xend))
             break;
         const VtCell *c = x < w && line ? &line[x] : &empty;
         ULONG fg, bg, cp = c->cp;
@@ -852,6 +982,14 @@ static void draw_cells(int r, int x0, int x1)
         if (usett)
             cp = tt_stand_in(cp);
         if (is_special(cp)) {
+            if (VT_IS_PIC(cp)) {        /* a run of picture cells */
+                int e = x;
+                while (e < xend && e + 1 < w && VT_IS_PIC(line[e + 1].cp))
+                    e++;
+                pic_put(r, x, e);
+                x = e + 1;
+                continue;
+            }
             /* one special cell: its background, then the shape */
             apen(bg);
             RectFill(rp, ox + x * cw, y, ox + x * cw + cw - 1, y + ch - 1);
@@ -974,7 +1112,7 @@ struct CEntry {
  * the window is not covered: else Text() as before.
  * ==================================================================== */
 
-static BOOL chunky;                     /* the painter in pens: 8-bit card */
+/* chunky (above): the painter in pens, an 8-bit card */
 BOOL nopp;                              /* TEXTDRAW: Text() as before */
 static struct TextFont *pp_font;        /* what the glyphs were made for */
 static int pp_fch, pp_fbase;
@@ -1300,7 +1438,7 @@ static void draw_span(int r, int a, int b)
         return;
     if (last >= a) {
         PF_START(tt);
-        if (!pp_all || !pp_cells(r, a, last))
+        if (!pp_all || (line && VT_ROW_PICS(line)) || !pp_cells(r, a, last))
             draw_cells(r, a, last);
         PF_ADD(pf_text, tt);
     }
@@ -1747,6 +1885,7 @@ static void paint_row8(int r, int cx, int cy, int cshape, int ps0, int ps1)
     UBYTE *rb = (UBYTE *)rowbuf;
     LONG fp = 0, bp = 0;
     UWORD st = 0;
+    BOOL rpics = line && VT_ROW_PICS(line);
     if (pp_room() < cols)
         pp_reset();
     for (x = 0; x < cols; x++) {
@@ -1755,6 +1894,11 @@ static void paint_row8(int r, int cx, int cy, int cshape, int ps0, int ps1)
         const UBYTE *g;
         ULONG *d;
         int y;
+        if (rpics && VT_IS_PIC(c->cp)) {
+            pic_pens8(rb + x * 8, rw, c->cp, ox + x * 8, oy + r * ch);
+            prev = NULL;
+            continue;
+        }
         if (rev || !prev || c->pen != prev->pen) {
             ULONG fg, bg;
             cell_rgb(c, &fg, &bg);
@@ -1800,7 +1944,7 @@ static void paint_row(int r)
     const VtCell *prev = NULL;
     ULONG pfg = 0, pbg = 0;
     struct CEntry *pe = NULL;
-    BOOL bk;
+    BOOL bk, rpics = line && VT_ROW_PICS(line);
     if (r < 0 || r >= rows)
         return;
     if (r < (int)sizeof painted)
@@ -1853,6 +1997,10 @@ static void paint_row(int r)
         ULONG *src, *dst;
         if (cp == VT_WIDE_TAIL)
             continue;                   /* drawn with its left half */
+        if (rpics && VT_IS_PIC(cp)) {
+            pic_argb(rowbuf + x * cw, rw, cp);
+            continue;
+        }
         if (x + 1 < cols && x + 1 < w && line && line[x + 1].cp == VT_WIDE_TAIL)
             wide = 1;
         /* neighbours mostly share colours: work them out once a run */
@@ -2184,6 +2332,8 @@ void layout_and_resize(void)
         struct Pane *p = pane_of(tabs[i]);
         if (!p)
             p = apane;
+        if (tabs[i]->t_vt)              /* pictures: the cell in pixels */
+            vt_set_cell_px(tabs[i]->t_vt, cw, ch, defbg);
         if (tabs[i]->t_vt && (p->cols != vt_cols(tabs[i]->t_vt) ||
                               p->rows != vt_rows(tabs[i]->t_vt))) {
             vt_resize(tabs[i]->t_vt, p->cols, p->rows);

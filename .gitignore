@@ -31,3 +31,5 @@ demo/
 CTermTour
 Parts/
 src/partuse.h
+ShowPic
+tests/pic_test
