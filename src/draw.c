@@ -1298,7 +1298,7 @@ static void draw_span(int r, int a, int b)
 
 void draw_row(int r)
 {
-    if (r < 0 || r >= rows)
+    if (r < 0 || r >= rows || !win)     /* hidden: nothing is drawn */
         return;
     if (painter) {
         paint_row(r);                   /* the cursor comes with the row */
@@ -1334,6 +1334,8 @@ static void cursor_mark(int x, int y)
 void draw_cursor(BOOL on)
 {
     int x, y, vis;
+    if (!win)
+        return;
     if (!on)
         rp_forget();                    /* a draw starts: Ed or More may
                                            have used the window since */
@@ -1895,8 +1897,11 @@ static void paint_row(int r)
 /* Use the painter on this screen? And the buffers it needs. */
 void painter_setup(void)
 {
-    struct BitMap *bm = scr->RastPort.BitMap;
+    struct BitMap *bm;
     LONG need = (LONG)cols * cw * ch;
+    if (!scr)
+        return;
+    bm = scr->RastPort.BitMap;
     painter = chunky = FALSE;
     planar = !CyberGfxBase || !GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX);
     if (!planar && GetCyberMapAttr(bm, CYBRMATTR_DEPTH) <= 8 && !usett &&
@@ -2035,6 +2040,8 @@ void add_scroller(void)
 void update_knob(void)
 {
     LONG total = vt_history(vt) + rows, top = vt_history(vt) - back;
+    if (!win)
+        return;
     if (total == k_total && top == k_top && rows == k_rows)
         return;
     if (fullscreen && win) {
@@ -2089,6 +2096,8 @@ int tabbar_h(void)
 void layout_and_resize(void)
 {
     int w, h, i;
+    if (!win)
+        return;                         /* hidden: the sizes stay */
     ox = win->BorderLeft + 2;
     oy = win->BorderTop + 1 + tabbar_h();
     w = win->Width - ox - win->BorderRight - 2 -
@@ -2135,7 +2144,7 @@ void draw_tabbar(void)
     int x1 = win->Width - win->BorderRight - 1, wd = x1 - x0 + 1, i;
     LONG keepbase = pbase;
     UBYTE keepmask = pmask;
-    if (!h)
+    if (!h || !win)
         return;
     planes_full();
     rp_forget();
@@ -2329,6 +2338,8 @@ void redraw_all(void)
     int r;
     VtChanges chg;
     term_sync(T);
+    if (!win)
+        return;                         /* hidden: drawn when shown */
     forget_shown();
     rp_forget();
     planes_full();
@@ -2431,6 +2442,8 @@ void refresh(void)
     BOOL xp;
     static int syncwait;
     term_sync(T);                       /* what the Shell wrote, parsed */
+    if (!win)
+        return;                         /* hidden: the changes wait */
     /* the program is between "begin" and "end" of a frame (2026): show
      * the finished one - but never hold the window more than ~8 frames */
     if (vt_sync(vt) && syncwait < 8) {

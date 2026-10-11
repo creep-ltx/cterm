@@ -807,7 +807,7 @@ static BOOL keys_clash(void)
     int bad = key_taken(u, p) ? S_KUSER : key_taken(p, u) ? S_KPASS : 0;
     if (!bad)
         return FALSE;
-    DisplayBeep(scr);
+    beep();
     SetWindowTitles(setwin, (UBYTE *)"CTerm Settings: that key is taken "
                     "(Keys tab)", (UBYTE *)~0);
     set_attr(S_TABS, CLICKTAB_Current, 3);
@@ -874,7 +874,7 @@ static int settings_gadget(int id)
                 ttfile[sizeof ttfile - 1] = 0;
                 usett = TRUE;
                 if (!load_tt()) {
-                    DisplayBeep(scr);   /* it would not open */
+                    beep();   /* it would not open */
                     strcpy(ttfile, old);
                     usett = load_tt();
                     if (!usett)
@@ -940,7 +940,7 @@ static int settings_gadget(int id)
                 bgfile[sizeof bgfile - 1] = 0;
                 picture_changed();
                 if (!bgfile[0])
-                    DisplayBeep(scr);   /* not a picture it could read */
+                    beep();   /* not a picture it could read */
             }
         }
         break;

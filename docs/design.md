@@ -27,6 +27,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 | The line's code, loaded on demand (`Protocols/Serial`): the device, dialling, the modem's words | `src/sermod.c`, `src/sermod.h` | Yes |
 | A serial line's settings window (phone book, Settings) | `src/serwin.c` | Yes |
 | The ARexx port: commands, WAITFOR, starting scripts | `src/rexx.c` | Yes |
+| Hiding the window: the AppIcon, the commodity broker | `src/hide.c` | Yes |
 | Main loop, settings, menus | `src/main.c` | Yes |
 | PC relay: runs a program in a pty, connects to the Amiga | `pc/cterm-relay.py` | PC |
 
@@ -288,9 +289,8 @@ In the order the user and I agreed (2026-10-10):
   - **Phone book:** "script=" per place; the window has a Script field
     (User and Password now share a row: the window stays 542x198 on a
     640x256 screen, measured in FS-UAE).
-  - **Not done:** WINDOW HIDE/SHOW (closing the window while everything
-    runs on: much of CTerm assumes the window is there - left for the
-    detach work); STEM/VAR results; a requester (ASL, EasyRequest) holds
+  - **Not done:** STEM/VAR results (WINDOW HIDE/SHOW: done in 0.3b11,
+    below); a requester (ASL, EasyRequest) holds
     the port unread while it is open.
   - **Cost:** CTerm 220,024 -> 237,508 bytes (the port, the commands,
     the book's field). Could be a loaded part like Protocols/Serial if it
@@ -311,6 +311,84 @@ In the order the user and I agreed (2026-10-10):
     CTERM.2, and CTermSSH as CTERM.2); QUIT with a WAITFOR pending (RC 10
     to the script, no hang) and with a script CTerm started still
     waiting (it ended cleanly, no crash).
+
+- **Done 2026-10-11 (0.3b11): detach and reattach** (`src/hide.c`), as
+  tmux/screen do it, the Amiga way.
+  - **Hiding** (Project/Hide window, the 3.2 iconify gadget - CLOSEWINDOW
+    with Code 1 -, ARexx WINDOW HIDE, Exchange's Hide): the window
+    closes, and CTerm's own screen with it; the settings, phone book
+    and Transfers windows close as for a screen switch. Every tab runs
+    on. Not while a Shell's console is raw (Ed, More hold the window's
+    pointer): a beep, RC 10. The processes whose requesters went to the
+    window (pr_WindowPtr) get NULL (the default screen) and the window
+    again when it is back - those whose console is one of CTerm's.
+  - **Asked, then done at a round's end:** every way only sets a wish;
+    loop_round does it last, where no window message is being read and
+    nothing is half drawn. A transfer waits in loop_round, so hiding
+    works while one runs (its menu's window_events is on the stack then:
+    it now stops reading when win changed, and never touches the menu
+    strip after a pick that hid the window).
+  - **While hidden:** win, rp and scr are NULL; every drawing entry
+    point returns (refresh, redraw_all, draw_row, draw_cursor,
+    update_knob, draw_tabbar, layout_and_resize, painter_setup), the
+    emulators keep their changes for the redraw. The Shells' writes go
+    on through term_take (its 4 KB batch is bounded as before) and are
+    answered at once; a flood (list SYS: ALL, 2013 files) ran 29.4 s
+    hidden against 38.3 s shown (FS-UAE A1200 with fast RAM). Bells are
+    silent: beep() replaces DisplayBeep(scr) everywhere (NULL would
+    flash every screen). A program that asks for the window then
+    (DISK_INFO) gets none: Ed started while hidden ran, and showed
+    right once the window was back. An ssh password question gives up
+    (nobody can type it).
+  - **Back** (the AppIcon, ARexx WINDOW SHOW, Exchange's Show, starting
+    CTerm again): open_display at the place and size it had (hid_l...;
+    full screen and the own screen as they were), then tab_show (the
+    tab's letters, layout, text, title) and the hosts told the size.
+  - **The AppIcon:** only while hidden; workbench.library and
+    icon.library opened for it, closed after. CTerm's own icon (CTerm.info
+    beside it) or the default tool icon, NO_ICON_POSITION,
+    WBAPPICONA_SupportsOpen (its menu's Open). Any message on its port
+    shows the window. If it cannot be made and there is no commodity
+    broker either, CTerm does not hide (no way back).
+  - **The commodity:** a broker for the whole run (commodities.library
+    at the start), named after the ARexx port ("CTerm", "CTerm.2"),
+    COF_SHOW_HIDE; Exchange's Show, Hide and Remove (quit) work, also
+    while hidden.
+  - **Starting again:** a start with no words at all (Workbench too) asks
+    every CTERM, CTERM.2... port "WINDOW STATE" and the first HIDDEN one
+    "WINDOW SHOW", then ends. `SHOW` does the same and else brings the
+    first CTerm to the front (WINDOW ACTIVATE). The messages are made by
+    rexxsyslib and go straight to the port (no RexxMast); ln_Name must
+    be set to "REXX" by hand - CreateRexxMsg left it NULL and IsRexxMsg
+    refused them (seen on 3.2). An answer is waited for 5 s; one that
+    never comes leaves the port behind (PA_IGNORE), as rexx_close does.
+  - **Decided: a start with words opens its own CTerm**, as before
+    (HOST, BOOK, SERIAL, FROM, COLS...). It asks for something new; a
+    hidden CTerm may be in the middle of other work, and the person may
+    want two. Calls into a running CTerm are ARexx's CALL.
+  - **Tested in FS-UAE** (A1200 with fast RAM, verified 2026-10-11):
+    hide by ARexx, the menu, the iconify gadget and Exchange; show by
+    ARexx, a double-click on the AppIcon, Exchange, a second `CTerm` (0.9
+    s, then it ends) and `CTerm SHOW` (also when not hidden); the flood
+    above, the screen right after showing; Ed started while hidden; HIDE
+    refused while Ed ran; a Zmodem download hidden in the middle of it
+    (900 KB + 200 KB, md5-identical); memory: 10 hide/show rounds, Avail
+    FLUSH the same to the byte; the own screen in full screen, scrolled
+    back: pixel-identical before and after; the planar painter's page
+    (lookpage.py) pixel-identical too; a stock A1200 (chip only): 6 rounds
+    by the menu and the AppIcon, free memory the same (no grab there:
+    no room for wasabi's buffer, and rx fails with "Ram Disk is full" -
+    CTerm leaves ~100 KB of 750, as 0.3b10 does).
+  - **Found on the way:** close_own_screen took a screen for closed when
+    CloseScreen failed (a Shell's requester on it - not a visitor, so it
+    could be made private): the screen stayed for good. Now it is made
+    public again and waited for; hiding never asks, a screen that cannot
+    close at once stays and is used again. Seen in FS-UAE with a "Please
+    insert volume" requester. Also: a Zmodem batch of 3 MB + 200 KB
+    fails on the second file in FS-UAE ("transfer failed" after big.bin)
+    with 0.3b10 as well - not this work's; 900 KB + 200 KB is fine. To
+    look at.
+  - **Cost:** CTerm 237,508 -> 243,252 bytes.
 
 - Later idea: Hydra's chat with the other side during a transfer
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.

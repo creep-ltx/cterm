@@ -61,7 +61,8 @@ static BOOL user_gives_up(void)
     while (win && (m = (struct IntuiMessage *)GetMsg(win->UserPort))) {
         ULONG cl = m->Class;
         UWORD code = m->Code;
-        if (cl == IDCMP_CLOSEWINDOW || (cl == IDCMP_RAWKEY && code == 0x45)) {
+        if ((cl == IDCMP_CLOSEWINDOW && code != 1) ||   /* 1: iconify */
+            (cl == IDCMP_RAWKEY && code == 0x45)) {
             ReplyMsg((struct Message *)m);
             out = TRUE;
         } else
@@ -598,6 +599,8 @@ static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
         refresh();
         return TRUE;
     }
+    if (!win)
+        return FALSE;                   /* hidden: nobody to type it */
     say(prompt);
     refresh();
     for (;;) {
@@ -640,7 +643,7 @@ static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
                 }
                 continue;
             }
-            if (cl == IDCMP_CLOSEWINDOW) {
+            if (cl == IDCMP_CLOSEWINDOW && m->Code != 1) {
                 ReplyMsg((struct Message *)m);
                 buf[0] = 0;
                 return FALSE;
@@ -1039,7 +1042,7 @@ void send_login(BOOL pass)
 {
     const char *s = pass ? T->t_pass : T->t_user;
     if (local || !linked || !s[0]) {
-        DisplayBeep(scr);
+        beep();
         return;
     }
     send_data((UBYTE *)s, strlen(s));

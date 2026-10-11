@@ -905,12 +905,24 @@ static LONG c_screen(struct RexxMsg *rm, LONG *a, BOOL top)
     return RC_OK;
 }
 
+/* WINDOW HIDE, SHOW, STATE: only asked for here (safe anywhere); done
+ * at the end of CTerm's round (hide.c). */
 static LONG c_window(struct RexxMsg *rm, LONG *a, BOOL top)
 {
     char *w = (char *)a[0];
     (void)rm; (void)top;
+    if (!stricmp(w, "STATE")) {
+        res_set(hide_state() ? "HIDDEN" : "SHOWN", -1);
+        return RC_OK;
+    }
+    if (!stricmp(w, "HIDE"))
+        return hide_ask() ? RC_OK : RC_ERROR;   /* not while Ed runs */
+    if (!stricmp(w, "SHOW") && hide_state()) {
+        show_ask();
+        return RC_OK;
+    }
     if (!win)
-        return RC_ERROR;
+        return RC_ERROR;                /* hidden: SHOW first */
     if (!stricmp(w, "TOFRONT") || !stricmp(w, "SHOW")) {
         ScreenToFront(scr);
         WindowToFront(win);
@@ -921,7 +933,7 @@ static LONG c_window(struct RexxMsg *rm, LONG *a, BOOL top)
     } else if (!stricmp(w, "TOBACK"))
         WindowToBack(win);
     else
-        return RC_ERROR;                /* HIDE: not yet */
+        return RC_ERROR;
     return RC_OK;
 }
 
@@ -1147,6 +1159,102 @@ void rexx_run(void)
         }
     }
     running = FALSE;
+}
+
+/* ---- another CTerm, from a new start ---- */
+
+/* cmd to the port called name, its answer waited for (5 s at most): its
+ * RC, -1 no such port, -2 no answer. res: its RESULT (out, max bytes).
+ * An answer that never came would land in freed memory: then the port
+ * and message are left behind, ignored (as rexx_close does), and *me
+ * is NULL - no more asking. */
+static LONG ask_port(struct MsgPort **me, const char *name, const char *cmd,
+                     char *res, int max)
+{
+    struct RexxMsg *rm = CreateRexxMsg(*me, NULL, NULL);
+    struct MsgPort *p;
+    LONG rc;
+    int i;
+    if (res)
+        res[0] = 0;
+    Forbid();
+    p = FindPort((STRPTR)name);
+    Permit();
+    if (!p || !rm) {                    /* (looked at again below) */
+        if (rm)
+            DeleteRexxMsg(rm);
+        return -1;
+    }
+    if (!(rm->rm_Args[0] = (STRPTR)CreateArgstring((STRPTR)cmd,
+                                                    strlen(cmd)))) {
+        DeleteRexxMsg(rm);
+        return -1;
+    }
+    rm->rm_Action = RXCOMM | (res ? RXFF_RESULT : 0);
+    /* what IsRexxMsg looks for: CreateRexxMsg leaves it NULL (seen on
+     * 3.2), RexxMast sets it on the messages it sends */
+    rm->rm_Node.mn_Node.ln_Name = (char *)"REXX";
+    Forbid();
+    if ((p = FindPort((STRPTR)name)))
+        PutMsg(p, (struct Message *)rm);
+    Permit();
+    if (!p) {
+        DeleteArgstring((UBYTE *)rm->rm_Args[0]);
+        DeleteRexxMsg(rm);
+        return -1;
+    }
+    for (i = 0; i < 250 && !GetMsg(*me); i++)
+        Delay(1);                       /* 20 ms a look */
+    if (i == 250) {
+        (*me)->mp_Flags = PA_IGNORE;    /* left behind */
+        *me = NULL;
+        return -2;
+    }
+    rc = rm->rm_Result1;
+    if (!rc && res && rm->rm_Result2) {
+        strncpy(res, (char *)rm->rm_Result2, max - 1);
+        res[max - 1] = 0;
+        DeleteArgstring((UBYTE *)rm->rm_Result2);
+    }
+    DeleteArgstring((UBYTE *)rm->rm_Args[0]);
+    DeleteRexxMsg(rm);
+    return rc;
+}
+
+/* At the start: a hidden CTerm (CTERM, CTERM.2...) is asked to show
+ * itself - TRUE, this one need not open. any: else the first CTerm there
+ * is comes to the front. */
+BOOL rexx_wake(BOOL any)
+{
+    struct MsgPort *me;
+    char name[12], res[16], first[12];
+    int n;
+    BOOL done = FALSE;
+    if (!lib_open())
+        return FALSE;
+    if (!(me = CreateMsgPort()))
+        return FALSE;
+    first[0] = 0;
+    for (n = 1; n < 100 && me && !done; n++) {
+        LONG rc;
+        strcpy(name, "CTERM");
+        if (n > 1) {
+            strcat(name, ".");
+            numstr_cat(name, n);
+        }
+        rc = ask_port(&me, name, "WINDOW STATE", res, sizeof res);
+        if (rc != 0)
+            continue;
+        if (!stricmp(res, "HIDDEN"))
+            done = ask_port(&me, name, "WINDOW SHOW", NULL, 0) == 0;
+        else if (!first[0])
+            strcpy(first, name);
+    }
+    if (!done && any && first[0] && me)
+        done = ask_port(&me, first, "WINDOW ACTIVATE", NULL, 0) == 0;
+    if (me)
+        DeleteMsgPort(me);
+    return done;
 }
 
 /* ---- starting scripts ---- */

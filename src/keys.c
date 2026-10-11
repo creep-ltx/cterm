@@ -292,7 +292,10 @@ BOOL window_events(void)
 {
     struct IntuiMessage *m;
     BOOL go = TRUE;
-    while (!want_switch && (m = (struct IntuiMessage *)GetMsg(win->UserPort))) {
+    /* win may go under us: a menu's transfer waits in loop_round, which
+     * hides the window if asked */
+    while (win && !want_switch &&
+           (m = (struct IntuiMessage *)GetMsg(win->UserPort))) {
         struct IntuiMessage copy = *m;
         struct Gadget *g = (struct Gadget *)m->IAddress;
         if (copy.Class == IDCMP_RAWKEY) {
@@ -309,6 +312,11 @@ BOOL window_events(void)
         ReplyMsg((struct Message *)m);
         switch (copy.Class) {
         case IDCMP_CLOSEWINDOW:
+            if (copy.Code == 1) {       /* 3.2's iconify gadget: hide */
+                if (!hide_ask())
+                    beep();
+                break;
+            }
             if (local && !T->con)
                 T->ended = TRUE;        /* no Shell ever started here */
             else if (local) {
@@ -351,9 +359,12 @@ BOOL window_events(void)
             }
             while (code != MENUNULL && go && !want_switch) {
                 struct MenuItem *it = ItemAddress(menu, code);
+                struct Window *was = win;
                 if (!it) break;
-                go = menu_pick((ULONG)GTMENUITEM_USERDATA(it));
                 code = it->NextSelect;
+                go = menu_pick((ULONG)GTMENUITEM_USERDATA(it));
+                if (win != was)
+                    break;              /* hidden meanwhile: the menus went */
             }
             break;
         }

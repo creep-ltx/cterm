@@ -21,6 +21,7 @@ void con_handle(struct Con *c, ULONG sigs);   /* answer what has come */
 BOOL con_alive(struct Con *c);          /* the Shell is still running */
 BOOL con_raw(struct Con *c);            /* raw: Ed, More may hold win */
 void con_window_moved(struct Window *old, struct Window *now);
+void con_window_back(struct Window *now, struct Con **cs, int n);
 void con_keys(struct Con *c, const UBYTE *b, LONG n);  /* typed bytes */
 void con_reply(struct Con *c, const UBYTE *b, LONG n); /* DSR replies... */
 BOOL con_paste(struct Con *c, const UBYTE *b, LONG n); /* as text */

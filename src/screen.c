@@ -6,7 +6,7 @@
 static void make_menus(void);
 static void make_menus(void);
 static BOOL open_own_screen(void);
-static void close_own_screen(void);
+static void close_own_screen(BOOL ask);
 static void clear_leftover(void);
 static void ask_switch(int mode, int depth, BOOL full, BOOL bar);
 
@@ -25,6 +25,7 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Send password", (STRPTR)"P", 0, 0,
        (APTR)M_SENDPASS },
     {  NM_ITEM, (STRPTR)"Run ARexx script...", 0, 0, 0, (APTR)M_REXX },
+    {  NM_ITEM, (STRPTR)"Hide window", 0, 0, 0, (APTR)M_HIDE },
     {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
     {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
     {  NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
@@ -175,8 +176,13 @@ static BOOL open_own_screen(void)
  * while there are any (bit 0 clear). They get two seconds to go, then
  * the person is asked, on this screen, to close them. "Leave it open"
  * keeps it as it is: it is used again if CTerm goes back to its own
- * screen, and after Quit it stays until a later CTerm clears it up. */
-static void close_own_screen(void)
+ * screen, and after Quit it stays until a later CTerm clears it up.
+ * A requester a Shell's program opened there (pr_WindowPtr) is no
+ * visitor, but CloseScreen fails while it is open: then the screen is
+ * public again and waited for the same way (it was taken for closed,
+ * and stayed for good). ask FALSE (hiding): a screen that cannot close
+ * at once stays, without a question, and is used again when shown. */
+static void close_own_screen(BOOL ask)
 {
     static struct EasyStruct es = {
         sizeof(struct EasyStruct), 0, (UBYTE *)"CTerm",
@@ -186,14 +192,19 @@ static void close_own_screen(void)
     };
     int i;
     while (ownscr) {
-        for (i = 0; i < 20; i++) {
+        for (i = 0; i < (ask ? 20 : 1); i++) {
             if (PubScreenStatus(ownscr, PSNF_PRIVATE) & PSNF_PRIVATE) {
-                CloseScreen(ownscr);
-                ownscr = NULL;
-                return;
+                if (CloseScreen(ownscr)) {
+                    ownscr = NULL;
+                    return;
+                }
+                PubScreenStatus(ownscr, 0);     /* a window still on it */
             }
-            Delay(5);
+            if (ask)
+                Delay(5);
         }
+        if (!ask)
+            return;
         {
             /* a window of our own, out of the way, for the requester to
              * appear on this screen (ours: not a visitor) */
@@ -286,6 +297,9 @@ BOOL open_display(void)
         if (remember && wl >= 0 && scr != ownscr) {
             l = wl; t = wt; w = ww; h = wh;     /* as it was left */
         }
+        if (hid_l >= 0) {               /* back from hiding: as it was */
+            l = hid_l; t = hid_t; w = hid_w; h = hid_h;
+        }
         if (w > scr->Width) w = scr->Width;
         if (h > scr->Height - top0) h = scr->Height - top0;
         if (l + w > scr->Width) l = scr->Width - w;
@@ -297,6 +311,7 @@ BOOL open_display(void)
             WA_Title, (ULONG)(dialhost[0] ? dialtitle : "CTerm"),
             scr == ownscr ? WA_CustomScreen : WA_PubScreen, (ULONG)scr,
             WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
+            WA_IconifyGadget, TRUE,     /* 3.2: CLOSEWINDOW, Code 1 - hide */
             WA_SizeGadget, TRUE, WA_SizeBRight, scrollbar,
             WA_SizeBBottom, !scrollbar,
             WA_SimpleRefresh, TRUE, WA_Activate, TRUE,
@@ -323,7 +338,10 @@ BOOL open_display(void)
     return TRUE;
 }
 
-void close_display(BOOL keep_screen)
+/* keep_screen: TRUE keeps the own screen, FALSE closes it (asking about
+ * other programs' windows on it), SCREEN_IF_FREE closes it only if it
+ * can be at once (hiding). */
+void close_display(int keep_screen)
 {
     if (win && remember && !fullscreen && scr != ownscr) {
         wl = win->LeftEdge; wt = win->TopEdge;  /* kept for next time */
@@ -347,8 +365,8 @@ void close_display(BOOL keep_screen)
     if (scr && scr != ownscr)
         UnlockPubScreen(NULL, scr);
     scr = NULL;
-    if (!keep_screen)
-        close_own_screen();
+    if (keep_screen != TRUE)
+        close_own_screen(keep_screen == FALSE);
 }
 
 void switch_display(void)
@@ -412,6 +430,10 @@ BOOL menu_pick(ULONG id)
         break;
     case M_LOGSTOP: log_stop(); break;
     case M_REXX: rexx_menu(); break;
+    case M_HIDE:
+        if (!hide_ask())
+            beep();                     /* Ed or More has the window */
+        break;
     case M_ABOUT:
         say("\r\n\x1b[1mCTerm\x1b[0m - a VT100/xterm terminal for the "
             "Amiga.\r\n"

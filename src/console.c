@@ -407,7 +407,9 @@ static void insert_char(struct Con *c, UBYTE ch)
 
 static void beep(void)
 {
-    DisplayBeep(win ? win->WScreen : NULL);
+    if (win)                            /* none while hidden: NULL would
+                                         * flash every screen */
+        DisplayBeep(win->WScreen);
 }
 
 /* A pasted byte that is text: no control codes, no CSI - a paste is
@@ -736,6 +738,34 @@ void con_window_moved(struct Window *old, struct Window *now)
             if (n->ln_Type == NT_PROCESS &&
                 ((struct Process *)n)->pr_WindowPtr == (APTR)old)
                 ((struct Process *)n)->pr_WindowPtr = (APTR)now;
+    Permit();
+}
+
+/* The window back after hiding: the processes of these consoles (their
+ * console is one of ours) that were given no window meanwhile - moved
+ * off the hidden one, or started while it was away - get it. */
+void con_window_back(struct Window *now, struct Con **cs, int n)
+{
+    struct List *l[2];
+    struct Node *nd;
+    int i, k;
+    if (!now)
+        return;
+    l[0] = &SysBase->TaskReady;
+    l[1] = &SysBase->TaskWait;
+    Forbid();
+    for (i = 0; i < 2; i++)
+        for (nd = l[i]->lh_Head; nd->ln_Succ; nd = nd->ln_Succ) {
+            struct Process *pr = (struct Process *)nd;
+            if (nd->ln_Type != NT_PROCESS || pr->pr_WindowPtr)
+                continue;
+            for (k = 0; k < n; k++)
+                if (cs[k] && cs[k]->conport &&
+                    pr->pr_ConsoleTask == (APTR)cs[k]->conport) {
+                    pr->pr_WindowPtr = (APTR)now;
+                    break;
+                }
+        }
     Permit();
 }
 

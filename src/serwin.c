@@ -100,7 +100,7 @@ BOOL serwin_edit(SerLine *l, char *init, char *dial, struct Window *over)
     UWORD code;
     int how = 0, i;
     if (!reaction_open()) {
-        DisplayBeep(scr);
+        beep();
         return FALSE;
     }
     for (nrates = 0; ser_rates[nrates] && nrates < 16; nrates++) {
@@ -157,7 +157,7 @@ BOOL serwin_edit(SerLine *l, char *init, char *dial, struct Window *over)
         SetAttrs(root, LAYOUT_AddChild, (ULONG)h, CHILD_WeightedHeight, 0,
                  TAG_END);
     if (!root) {
-        DisplayBeep(scr);
+        beep();
         return FALSE;
     }
     obj = WindowObject, WA_Title, (ULONG)"CTerm Serial line",
@@ -169,7 +169,7 @@ BOOL serwin_edit(SerLine *l, char *init, char *dial, struct Window *over)
         WINDOW_Layout, (ULONG)root, End;
     if (!obj) {
         DisposeObject(root);
-        DisplayBeep(scr);
+        beep();
         return FALSE;
     }
     lw = (struct Window *)DoMethod(obj, WM_OPEN);

@@ -22,6 +22,7 @@ million colours, Latin-1, UTF-8 and the PC's character set.
 | `SERIAL` | a serial terminal on the Settings' line (Modem tab) |
 | `DEVICE name` / `UNIT n` / `BAUD n` | with SERIAL: another device, unit or speed |
 | `LISTEN` / `PORT n` | wait for the PC's relay (pc/cterm-relay.py) |
+| `SHOW` | bring back a CTerm that is already running (hidden or not) instead of opening another |
 
 LISTEN lets in only the PC named in `ENVARC:CTerm/relay_from`. The first
 time, CTerm asks whether to trust the PC that calls and remembers it;
@@ -147,6 +148,34 @@ text: click one, or press Right Amiga+1 to 9. Project/Close tab (Right
 Amiga+W) ends the shown tab's Shell or hangs up its host. Tabs you are
 not looking at keep running.
 
+## Hiding the window
+
+Project/Hide window (or the window's iconify gadget, the small one left
+of the two depth gadgets) puts CTerm away: its window closes (and its
+own screen, if it has one), but everything in it goes on - the Shells
+and what runs in them, calls, file transfers, logs and ARexx scripts.
+A CTerm icon appears on Workbench while it is hidden. To bring it back:
+
+- double-click the icon;
+- start CTerm again, from Workbench or as `CTerm` in a Shell with
+  nothing after it: the hidden CTerm comes back and no second one
+  opens. `CTerm SHOW` also brings a CTerm that is not hidden to the
+  front;
+- Exchange (SYS:Tools/Commodities): CTerm, Show Interface. Hide
+  Interface hides it, Remove quits it;
+- ARexx: `WINDOW SHOW`.
+
+It comes back as it was: the same screen, place and size, every tab,
+how far each is scrolled back, the settings. Nothing is drawn while it
+is hidden and bells keep quiet; what came meanwhile is there to read.
+While a program has the window to itself (Ed, More) it cannot hide
+(you hear a beep).
+
+A start with words (`HOST`, `BOOK`, `SERIAL`, `FROM`, `COLS`...) still
+opens a CTerm of its own, as always: it asks for something new, and a
+hidden CTerm is left as it is. To call from a hidden one, use ARexx's
+`CALL`.
+
 ## ssh
 
 - ssh is in a second program, **CTermSSH**, kept beside CTerm: CTerm
@@ -244,7 +273,9 @@ limit, 10 for an error, 20 for a failure):
 | `UPLOAD file... [PROTOCOL ...]` | sends the files (Hydra: with the host's next Hydra session) |
 | `LOG file` / `LOG OFF` | logs the tab to a file, or stops |
 | `SCREEN TOFRONT` / `TOBACK` | CTerm's screen to the front or back |
-| `WINDOW TOFRONT` / `ACTIVATE` / `TOBACK` | the window (hiding it is not there yet) |
+| `WINDOW TOFRONT` / `ACTIVATE` / `TOBACK` | the window |
+| `WINDOW HIDE` / `SHOW` | hides the window (everything goes on) and brings it back; RC 10 when it cannot hide (Ed has the window) |
+| `WINDOW STATE` | RESULT is `HIDDEN` or `SHOWN` |
 | `PHONEBOOK` | the places' names, each in quotes |
 | `VERSION`, `HELP [command]`, `QUIT` | |
 

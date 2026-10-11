@@ -282,7 +282,7 @@ void serial_close(void)
 void serial_answer(void)
 {
     if (local || !sm || !T->t_st.ser) {
-        DisplayBeep(scr);
+        beep();
         return;
     }
     inside++;

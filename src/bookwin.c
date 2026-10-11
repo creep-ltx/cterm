@@ -232,7 +232,7 @@ static void bookwin_open_(void)
         return;
     }
     if (!reaction_open() || (!book && (book_need(), !book))) {
-        DisplayBeep(scr);
+        beep();
         return;
     }
     if (bcur >= nbook)
@@ -332,7 +332,7 @@ static void bookwin_open_(void)
         if (!root && h) DisposeObject(h);
         memset(bg, 0, sizeof bg);
         list_free();
-        DisplayBeep(scr);
+        beep();
         return;
     }
     if (e == &none)
@@ -361,7 +361,7 @@ static void bookwin_open_(void)
         DisposeObject(root);
         memset(bg, 0, sizeof bg);
         list_free();
-        DisplayBeep(scr);
+        beep();
         return;
     }
     bwwin = (struct Window *)DoMethod(bwobj, WM_OPEN);
@@ -394,11 +394,12 @@ static void entry_call(void)
     int i = bcur;
     entry_read();
     if (i < 0 || i >= nbook || (!book[i].host[0] && !book[i].serial)) {
-        DisplayBeep(scr);
+        beep();
         return;
     }
     bookwin_close_();
-    ActivateWindow(win);
+    if (win)
+        ActivateWindow(win);
     call_book(i, TRUE);
 }
 

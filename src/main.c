@@ -79,7 +79,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b10 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b11 (11.10.2026)";
 
 struct Library *SocketBase;
 struct Library *KeymapBase;
@@ -615,7 +615,7 @@ BOOL display_switch(void)
     for (i = 0; i < ntabs; i++)
         if (con_raw(tabs[i]->con)) {
             want_switch = FALSE;
-            DisplayBeep(scr);
+            beep();
             return FALSE;
         }
     switch_display();
@@ -740,7 +740,7 @@ void tab_new_shell(void)
 {
     struct Tab *t = tab_new();
     if (!t) {
-        DisplayBeep(scr);
+        beep();
         return;
     }
     T = t;
@@ -921,7 +921,7 @@ static void run(void)
         T = shown;
         if (want_switch)
             display_switch();           /* not while Ed or More runs */
-        if (!win)
+        if (!win && !hidden)
             break;
     }
 }
@@ -965,12 +965,14 @@ BOOL loop_round(LONG xfd, LONG ms)
     struct Tab *me = T;
     fd_set rd;
     LONG maxfd = -1, n = 0;
-    ULONG winsig = 1UL << win->UserPort->mp_SigBit;
+    ULONG winsig = win ? 1UL << win->UserPort->mp_SigBit : 0;
+    ULONG hidesig = hide_sigmask();
     ULONG setsig = setwin ? 1UL << setwin->UserPort->mp_SigBit : 0;
     ULONG sersig = serial_sigmask();
     ULONG rxsig = rexx_sigmask();
     ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
-                 xwin_sigmask() | bookwin_sigmask() | sersig | rxsig;
+                 xwin_sigmask() | bookwin_sigmask() | sersig | rxsig |
+                 hidesig;
     BOOL hostdata = FALSE, ready = FALSE;
     ULONG consigs = 0;
     int i;
@@ -1051,6 +1053,8 @@ BOOL loop_round(LONG xfd, LONG ms)
     if (sigs & rxsig)
         rexx_serve();                   /* before the hosts' bytes: an
                                          * UPLOAD waiting is seen first */
+    if (sigs & hidesig)
+        hide_events();                  /* the AppIcon, Exchange: they ask */
     T = shown;
     if ((sigs & winsig) && !window_events() && !quitting)
         quit_all();
@@ -1086,7 +1090,7 @@ BOOL loop_round(LONG xfd, LONG ms)
             }
         }
         if (vt_take_bell(vt) && T == shown)
-            DisplayBeep(scr);
+            beep();
     }
     T = shown;
     title_update();
@@ -1097,11 +1101,14 @@ BOOL loop_round(LONG xfd, LONG ms)
     if (hostdata)
         refresh();
     mouse_reporting();
+    hide_show();                        /* hiding or showing, if asked: here,
+                                         * where nothing is half drawn */
     T = me;
     return ready;
 }
 
 static BOOL arg_pc, arg_latin1, arg_serial, arg_hasunit;
+static BOOL arg_plain = TRUE, arg_show;     /* no words at all; SHOW */
 static char arg_dev[48];
 static LONG arg_unit, arg_baud;
 static int arg_book = -1;
@@ -1218,16 +1225,22 @@ static int cterm_main(int argc, char **argv)
     (void)version;
     (void)argv;
     if (argc > 0) {
-        LONG args[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        LONG args[17] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        int k;
         struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,"
                                       "FROM/K,HOST/K,PC/S,SSH/K,KEY/K,BOOK/K,"
                                       "TEXTDRAW/S,SERIAL/S,DEVICE/K,UNIT/N,"
-                                      "BAUD/N",
+                                      "BAUD/N,SHOW/S",
                                       args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
             return RETURN_FAIL;
         }
+        /* SHOW: a CTerm already running comes to the front instead */
+        for (k = 0; k < 16 && !args[k]; k++)
+            ;
+        arg_show = args[16] != 0;
+        arg_plain = k == 16;
         if (args[0]) port = *(LONG *)args[0];
         if (args[1]) arg_latin1 = TRUE;
         if (args[2]) local = FALSE;     /* wait for the PC's relay */
@@ -1291,6 +1304,12 @@ static int cterm_main(int argc, char **argv)
         }
         FreeArgs(rda);
     }
+    /* started again with no words (from Workbench too): a hidden CTerm
+     * shows itself instead, and this one ends - as tmux attaches. With
+     * SHOW, a CTerm that is not hidden comes to the front as well. A
+     * start that asks for something (a call, a script) opens its own. */
+    if ((arg_plain || arg_show) && rexx_wake(arg_show))
+        return RETURN_OK;
 #ifdef NO_SSH
     if (sshmode) {
         /* ssh is CTermSSH's: start it with the same words, beside us */
@@ -1377,6 +1396,7 @@ static int cterm_main(int argc, char **argv)
             tab_letters(TRUE);
         ML("display");
         rexx_open();
+        cx_open();                      /* Exchange's Show, Hide, Remove */
         run();
     }
     rexx_close();                       /* before the tabs go: no command
@@ -1393,7 +1413,14 @@ static int cterm_main(int argc, char **argv)
         }
         envonly = used_only;
         save_prefs();
+    } else if (hidden) {                /* quit while hidden: as it was */
+        if (remember && hid_l >= 0 && scrmode == SCR_WB) {
+            wl = hid_l; wt = hid_t; ww = hid_w; wh = hid_h;
+        }
+        envonly = used_only;
+        save_prefs();
     }
+    hide_free();                        /* the AppIcon, the broker */
     /* nothing may still be open on a Shell's port when it goes */
     {
         int i;

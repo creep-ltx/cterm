@@ -234,7 +234,7 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
        M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS, M_YRECV, M_XRECV, M_YSEND,
        M_XSEND, M_HSEND, M_XWIN, M_BOOK, M_SERIAL, M_ANSWER, M_REXX,
-       M_ZSEND };
+       M_ZSEND, M_HIDE };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -398,7 +398,8 @@ BOOL file_exists(const char *path);
 BOOL load_tt(void);
 void tt_attach(void);
 BOOL open_display(void);
-void close_display(BOOL keep_screen);
+#define SCREEN_IF_FREE 2
+void close_display(int keep_screen);    /* TRUE, FALSE, SCREEN_IF_FREE */
 void switch_display(void);
 BOOL display_switch(void);              /* as switch_display, if it may */
 void font_changed(void);
@@ -489,5 +490,19 @@ int rexx_uploads(struct Tab *t, char (*store)[256], const char **paths,
 BOOL rexx_start(const char *path, struct Tab *t);
 void rexx_after_call(void);
 void rexx_menu(void);
+BOOL rexx_wake(BOOL any);               /* another CTerm shown: TRUE */
+/* hide.c: the window put away while everything runs on */
+extern BOOL hidden;
+extern LONG hid_l, hid_t, hid_w, hid_h;
+void beep(void);
+BOOL hide_ask(void);                    /* FALSE: not now (Ed, More) */
+void show_ask(void);
+BOOL hide_state(void);
+ULONG hide_sigmask(void);
+void hide_events(void);
+void hide_show(void);                   /* at a round's end: what was asked */
+void cx_open(void);
+void cx_close(void);
+void hide_free(void);
 
 #endif
