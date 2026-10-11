@@ -99,6 +99,9 @@ int vt_app_cursor(const Vt *vt);    /* DECCKM: arrows send ESC O A */
 int vt_app_keypad(const Vt *vt);
 int vt_bracketed_paste(const Vt *vt);
 int vt_alt_screen(const Vt *vt);
+/* The local console went raw (1) or cooked (0): a raw program's first
+ * whole-screen draw gets the alternate screen until it is cooked again. */
+void vt_amiga_raw(Vt *vt, int on);
 int vt_reverse_video(const Vt *vt);
 /* What the program asked of the mouse: 0 none, 9 presses (X10), 1000
  * presses and releases, 1002 + motion while pressed, 1003 + all motion;

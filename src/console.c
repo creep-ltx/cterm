@@ -976,6 +976,8 @@ void con_handle(struct Con *c, ULONG sigs)
                 push_input(c, c->line, c->llen);
                 c->llen = c->lcur = 0;
             }
+            if (c->rawmode != (p->dp_Arg1 != 0))
+                term_raw(c->user, p->dp_Arg1 != 0);
             c->rawmode = p->dp_Arg1 != 0;
             if (c->rawmode)
                 c->editing = FALSE;

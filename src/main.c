@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b23 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b24 (11.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -339,6 +339,14 @@ void term_flush(void *t)
     }
 }
 
+/* The Shell's console went raw or cooked (console.c): Ed, More... */
+void term_raw(void *t, int on)
+{
+    struct Tab *tb = t;
+    if (tb->t_vt && (ownprog || !on))   /* cooked: always back */
+        vt_amiga_raw(tb->t_vt, on);
+}
+
 void term_render_soon(void *t)
 {
     if (pane_of(t))
@@ -463,6 +471,7 @@ static void load_prefs_(char *buf)
             else if (!stricmp(p, "pcfont")) pcfont = val[0] != '0';
             else if (!stricmp(p, "altmeta")) altmeta = val[0] != '0';
             else if (!stricmp(p, "pictures")) pics = val[0] != '0';
+            else if (!stricmp(p, "ownscreen")) ownprog = val[0] != '0';
             else if (!stricmp(p, "keyuser")) userkey[0] = val[0];
             else if (!stricmp(p, "keypass")) passkey[0] = val[0];
             else if (!stricmp(p, "dldir")) {
@@ -548,6 +557,7 @@ static void save_prefs_(char *buf)
     if (!pcfont) strcat(buf, "\npcfont=0");
     if (!altmeta) strcat(buf, "\naltmeta=0");
     if (!pics) strcat(buf, "\npictures=0");
+    if (!ownprog) strcat(buf, "\nownscreen=0");
     if (dwindle) strcat(buf, "\ndwindle=1");
     if (gaps) { strcat(buf, "\ngaps="); numstr_cat(buf, gaps); }
     if (dldir[0]) { strcat(buf, "\ndldir="); strcat(buf, dldir); }

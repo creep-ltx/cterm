@@ -5,9 +5,9 @@ A modern terminal for AmigaOS 3.2, in C. Replaces the Amiga E CTerm in
 and so gets only console.device's ANSI). This one does its own
 VT100/xterm emulation. Decided 2026-10-09.
 
-## Start here: where CTerm is (2026-10-11 evening, 0.3b23)
+## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
-**Installed:** 0.3b23 on the A1200 (Work:Utils/CTerm: CTerm, CTermSSH,
+**Installed:** 0.3b23 on the A1200 (0.3b24 not yet: PART_VERSION 9, the user's CTerm was running) (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
 hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
 AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
@@ -55,6 +55,15 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    Scroll bar | Characters > UTF-8, PC BBS) / Settings (Settings... |
    Amiga font..., TrueType font...). menu_ticks now finds ticks in
    submenus too (Characters). Checked on the A1200 by grabs.
+1b. **Amiga programs get their own screen (0.3b24):** a program that
+   takes the console raw (ACTION_SCREEN_MODE 1) and then draws a whole
+   screen (FF, CSI H/f, CSI 2J, ESC c) is moved to the alternate screen,
+   as ?1049h would; cooked again (it ended), the main screen and the
+   history come back as they were. Raw without such a draw ("press a
+   key") stays in the history. vt_amiga_raw (vt.c auto_alt), term_raw
+   (main.c), console.c's SCREEN_MODE. Setting: Text page "Full-screen
+   Amiga programs get their own screen" (prefs ownscreen=0 turns it
+   off). Verified in FS-UAE with More and Ed; tests/amiga_test covers it.
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).

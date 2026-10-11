@@ -366,7 +366,7 @@ enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_KPRESS, S_KNONE, S_KDEF,
        S_DLDIR, S_ULDIR,
        S_MINIT, S_MINIT2, S_MDIALK, S_MDIAL, S_MSUFFIX, S_MHANG, S_MHANGCMD,
-       S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE, S_PICS, S_GAPS,
+       S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE, S_PICS, S_GAPS, S_OWNPROG,
        S_SAVE, S_USE, S_CANCEL, S_N };
 
 /* ---- shared state ---- */
@@ -450,6 +450,7 @@ extern BOOL title_force;
 /* pictures in the terminal (vt.h): the setting; the pen cache's
  * generation (a new one: pens asked for before are gone) */
 extern BOOL pics;
+extern BOOL ownprog;    /* Ed, More... on the alternate screen */
 extern ULONG pen_gen;
 LONG pic_pen(ULONG rgb);                /* a pen for RGB, cached */
 long pics_cap(void);                    /* a tab's pictures' memory */

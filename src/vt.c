@@ -65,6 +65,10 @@ struct Vt {
     int cshape, cblink;                 /* DECSCUSR: 0 block, 1 underline,
                                            2 bar; blinking */
     int amigamode;                  /* the Amiga console's ways (local) */
+    int rawwatch;                   /* a program took the console raw: its
+                                       first whole-screen draw moves it to
+                                       the alternate screen (vt_amiga_raw) */
+    int autoalt;                    /* ... and it did: back when cooked */
     int cp437;                      /* bytes 0x80-0xFF are the PC's */
     int utf8_set, cp437_set;        /* as the menu set them: ESC % @ */
     unsigned long rawev;            /* raw event classes asked for: CSI n{ */
@@ -846,6 +850,40 @@ static void use_alt(Vt *v, int on, int clear)
     dirty_all(v);
 }
 
+/* Amiga programs know nothing of ?1049, but a whole-screen one (Ed,
+ * More) takes the console raw first, then clears or places the cursor:
+ * that draw goes to the alternate screen, as a Linux program's would,
+ * and the main screen and its history stay as they were. */
+static void auto_alt(Vt *v)
+{
+    v->rawwatch = 0;
+    if (v->alt)                         /* asked for it itself */
+        return;
+    save_cursor(v);
+    use_alt(v, 1, 1);
+    if (!v->alt)                        /* no memory: the main screen */
+        return;
+    v->saved[1] = v->saved[0];
+    v->autoalt = 1;
+}
+
+void vt_amiga_raw(Vt *v, int on)
+{
+    if (on) {
+        if (!v->autoalt)
+            v->rawwatch = 1;
+        return;
+    }
+    v->rawwatch = 0;
+    if (v->autoalt) {
+        v->autoalt = 0;
+        if (v->alt) {
+            use_alt(v, 0, 0);
+            restore_cursor(v);
+        }
+    }
+}
+
 /* ---- resetting --------------------------------------------------------- */
 
 static void reset_pen(Vt *v)
@@ -874,8 +912,12 @@ static void full_reset(Vt *v)
     v->sdm = v->sright = v->picnl = 0;
     v->pen_nomem = 0;
     reset_pen(v);
-    use_alt(v, 0, 0);
-    for (i = 0; i < 2; i++) {
+    /* a raw Amiga program's ESC c: its own screen only (auto_alt) */
+    if (v->rawwatch)
+        auto_alt(v);
+    if (!v->autoalt)
+        use_alt(v, 0, 0);
+    for (i = v->autoalt; i < 2; i++) {
         int y;
         for (y = 0; v->lines[i] && y < v->rows; y++)
             blank_range(v->lines[i][y], 0, v->cols, blank_of(v));
@@ -894,7 +936,8 @@ static void full_reset(Vt *v)
     v->gl = 0;
     reset_tabs(v);
     save_cursor(v);
-    v->saved[1] = v->saved[0];
+    if (!v->autoalt)
+        v->saved[1] = v->saved[0];
     v->state = S_GROUND;
     if (v->npics)
         pic_gc(v, 0);
@@ -1037,6 +1080,9 @@ static void csi(Vt *v, int final)
 
     if (v->priv2)                       /* Ed's CSI >?NN v/l/h/w: private */
         return;
+    if (v->rawwatch && !v->priv && !v->inter &&
+        (final == 'H' || final == 'f' || (final == 'J' && P(0, 0) == 2)))
+        auto_alt(v);                    /* a whole-screen program */
     if (v->inter == ' ' && final == 'q' &&
         (!v->amigamode || P(0, 0) >= 1)) {
         /* DECSCUSR: 0/1 blinking block, 2 block, 3/4 underline, 5/6 bar
@@ -2061,6 +2107,8 @@ static void control(Vt *v, int c)
         break;
     case 12:
         if (v->amigamode) {                 /* the Amiga's FF: a clear page */
+            if (v->rawwatch)
+                auto_alt(v);
             erase_display(v, 2);
             v->x = v->y = v->pending = 0;
             break;

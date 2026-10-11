@@ -167,6 +167,7 @@ char ttfile[160] = "SYS:Fonts/TrueType/DejaVuSansMono.ttf";
  * one true size and not smoothed. */
 BOOL pcfont = TRUE;              /* the setting */
 BOOL pics = TRUE;                /* pictures in the terminal (sixel...) */
+BOOL ownprog = TRUE;             /* raw Amiga programs: own screen */
 BOOL altmeta = TRUE;             /* Alt is Meta in a host's tab */
 char userkey[2] = "U";           /* Right Amiga + it: send the name */
 char passkey[2] = "P";           /* ... the password */

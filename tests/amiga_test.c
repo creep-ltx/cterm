@@ -482,6 +482,31 @@ int main(void)
         vt_room = NULL;
         vt_free(t);
     }
+    {   /* a raw program's whole-screen draw gets the alternate screen;
+         * cooked again, the Shell's screen is as it was */
+        Vt *t = vt_new(20, 4, 100);
+        int x, y, vis;
+        vt_set_amiga(t, 1);
+        feed(t, "1> ed foo\n");
+        vt_amiga_raw(t, 1);
+        feed(t, "key?");                /* raw, no whole-screen draw */
+        CHECK(!vt_alt_screen(t), "raw alone: still the main screen");
+        feed(t, "\x9b" "1;1H" "EDIT");
+        CHECK(vt_alt_screen(t) && at(t, 0, 0) == 'E', "CSI H: own screen");
+        feed(t, "\f" "page");
+        CHECK(vt_alt_screen(t) && at(t, 0, 0) == 'p', "FF: still its own");
+        feed(t, "\x1b" "c" "R");
+        CHECK(vt_alt_screen(t) && at(t, 0, 0) == 'R', "ESC c: its own only");
+        vt_amiga_raw(t, 0);
+        vt_cursor(t, &x, &y, &vis);
+        CHECK(!vt_alt_screen(t) && at(t, 0, 0) == '1' && at(t, 1, 0) == 'k' &&
+              x == 4 && y == 1, "cooked: the Shell's screen back");
+        vt_amiga_raw(t, 1);             /* "Press a key": no draw */
+        vt_amiga_raw(t, 0);
+        feed(t, "\f");                 /* the Shell's own FF: a clear */
+        CHECK(!vt_alt_screen(t) && at(t, 0, 0) == ' ', "cooked FF clears");
+        vt_free(t);
+    }
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     vt_free(v);
     return fails != 0;
