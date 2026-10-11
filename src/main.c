@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b21 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b22 (11.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -478,6 +478,10 @@ static void load_prefs_(char *buf)
             }
             else if (!stricmp(p, "bgsee")) bgsee = atoi(val);
             else if (!stricmp(p, "dwindle")) dwindle = atoi(val) != 0;
+            else if (!stricmp(p, "gaps")) {
+                gaps = atoi(val);
+                if (gaps < 0 || gaps > MAXGAPS) gaps = 0;
+            }
             else if (ser_pref(p, val))
                 ;                       /* the serial line, the modem */
             else if (!stricmp(p, "mode")) {     /* "hexid,w,h" */
@@ -545,6 +549,7 @@ static void save_prefs_(char *buf)
     if (!altmeta) strcat(buf, "\naltmeta=0");
     if (!pics) strcat(buf, "\npictures=0");
     if (dwindle) strcat(buf, "\ndwindle=1");
+    if (gaps) { strcat(buf, "\ngaps="); numstr_cat(buf, gaps); }
     if (dldir[0]) { strcat(buf, "\ndldir="); strcat(buf, dldir); }
     if (uldir[0]) { strcat(buf, "\nuldir="); strcat(buf, uldir); }
     if (bgfile[0]) {

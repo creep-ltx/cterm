@@ -22,7 +22,7 @@
 #define PART_H
 
 #define PART_HEAD    0x43545048UL       /* "CTPH": the header's mark */
-#define PART_VERSION 7UL                /* PartEnv's names and the tables
+#define PART_VERSION 8UL                /* PartEnv's names and the tables
                                          * below */
 #define PART_ABI     ((PART_VERSION << 16) | sizeof(struct PartEnv))
 

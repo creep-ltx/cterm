@@ -2501,6 +2501,13 @@ BOOL load_picture(const char *path)
     return TRUE;
 }
 
+/* A piece of the picture behind the text (a gap between panes): FALSE
+ * when there is none there. */
+BOOL backdrop_area(LONG x, LONG y, LONG w, LONG h)
+{
+    return backdrop_put(x, y, w, h);
+}
+
 void backdrop_free(void)
 {
     if (backdrop)

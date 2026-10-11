@@ -366,7 +366,7 @@ enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_KPRESS, S_KNONE, S_KDEF,
        S_DLDIR, S_ULDIR,
        S_MINIT, S_MINIT2, S_MDIALK, S_MDIAL, S_MSUFFIX, S_MHANG, S_MHANGCMD,
-       S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE, S_PICS,
+       S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE, S_PICS, S_GAPS,
        S_SAVE, S_USE, S_CANCEL, S_N };
 
 /* ---- shared state ---- */
@@ -693,6 +693,12 @@ enum { PO_OPEN, PO_KILL, PO_FOCUS, PO_MOVE, PO_DIR, PO_FULL, PO_SHOW,
  * longer side - side by side when it is wider than high. Kept in the
  * prefs; LA+H/V then choose the next split only. */
 extern BOOL dwindle;
+/* The room between two panes in pixels (the prefs' gaps=): each pane
+ * keeps its own thin border, the gap between two borders is the
+ * background (the picture behind the text, if there is one). */
+#define MAXGAPS 32
+extern int gaps;
+BOOL backdrop_area(LONG x, LONG y, LONG w, LONG h);
 enum { PD_LEFT, PD_RIGHT, PD_UP, PD_DOWN };
 BOOL pane_do(int op, int arg);
 BOOL pane_kept(struct Tab *t);          /* behind a filled window: its

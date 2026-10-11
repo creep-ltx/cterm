@@ -405,6 +405,11 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
 | Left Amiga+T | all panes become tabs: the whole window shows the tab you were in, the others run on behind it, the tab bar lists them |
 | Left Amiga+P | all tabs become panes, laid out by themselves (below) |
 
+- **Gaps** (Settings, Screen tab, "Gap between panes", 0 to 32
+  pixels; seen at once): every pane has a thin border, the one you are in
+  lit; the gap is the room between two panes' borders, all of it, showing
+  the window's background (or the picture behind the text). 0: the
+  borders touch.
 - **Dwindle** (Left Amiga+D, or Panes/Automatic split; kept in the
   settings): as Hyprland's dwindle layout, a new pane splits the one you
   are in along its longer side - side by side when it is wider than

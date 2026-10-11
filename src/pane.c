@@ -27,7 +27,7 @@
  */
 #include "cterm.h"
 
-#define DIVW 2                          /* the divider between two panes */
+#define DIVW gaps                       /* the room between two panes */
 #define MAXNODES (2 * MAXPANES - 1)
 #define MINC 10                         /* the least a pane keeps */
 #define MINR 3
@@ -35,6 +35,7 @@
 struct Pane panes[MAXPANES];
 int npanes = 1;
 BOOL dwindle;                           /* split by shape (PO_DWINDLE) */
+int gaps;                               /* pixels between panes (prefs) */
 struct Pane *apane = &panes[0];         /* the active pane: the shown tab's */
 struct Pane *cpane = &panes[0];         /* the pane drawn now */
 
@@ -226,15 +227,24 @@ void panes_frames(void)
         struct PNode *d = &nodes[n];
         if (!d->used || !d->split)
             continue;
-        apen(mix(defbg, deffg, 25));
-        if (d->split == 'h')
-            RectFill(rp, d->m, d->y0, d->m + DIVW - 1, d->y1);
-        else
+        if (DIVW <= 0)
+            continue;                   /* gaps 0: the borders touch */
+        /* the gap: the window's background, or the picture behind */
+        if (d->split == 'h') {
+            if (!backdrop_area(d->m, d->y0, DIVW, d->y1 - d->y0 + 1)) {
+                apen(defbg);
+                RectFill(rp, d->m, d->y0, d->m + DIVW - 1, d->y1);
+            }
+        } else if (!backdrop_area(d->x0, d->m, d->x1 - d->x0 + 1, DIVW)) {
+            apen(defbg);
             RectFill(rp, d->x0, d->m, d->x1, d->m + DIVW - 1);
+        }
     }
+    /* every pane its border: the active one in the highlight, the
+     * others dimmed */
     for (i = 0; i < npanes; i++)
         frame(&panes[i], &panes[i] == apane ? themes[theme].wbpens[1]
-                                            : defbg);
+                                            : mix(defbg, deffg, 25));
     planes_restore();
 }
 

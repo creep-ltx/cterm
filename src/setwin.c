@@ -76,7 +76,7 @@ static LONG like_w, like_h;             /* the Workbench's mode, size and */
 static int like_depth;                  /* colours (24 for a card's 32) */
 
 static struct {                         /* what Cancel goes back to */
-    int k_theme, k_ttsize, k_fontsize, k_linespace, k_bgsee;
+    int k_theme, k_ttsize, k_fontsize, k_linespace, k_bgsee, k_gaps;
     char k_bgfile[256];
     BOOL k_ownfg, k_ownbg, k_usett, k_s_utf8, k_pc, k_pcfont, k_altmeta;
     BOOL k_pics;
@@ -429,6 +429,8 @@ static Object *page_screen(void)
     r_put(p, g);
     g = r_group("The window");
     r_add(g, r_check(S_BAR, "Scroll bar", pend_bar), NULL);
+    r_add(g, r_slider(S_GAPS, 0, MAXGAPS, gaps, "%ld"),
+          "Gap between panes");
     r_put(p, g);
     return r_wrap(p);
 }
@@ -861,6 +863,7 @@ static void open_settings_(void)
     strcpy(snap.k_fontname, fontname);
     snap.k_fontsize = fontsize;
     snap.k_linespace = linespace;
+    snap.k_gaps = gaps;
     snap.k_s_utf8 = utf8; snap.k_pc = pcmode;
     defchars = saved_pc ? 2 : saved_utf8 ? 0 : 1;
     snap.k_bgsee = bgsee;
@@ -996,6 +999,10 @@ static void finish_settings_(int how)
                        snap.k_fontsize != fontsize ||
                        snap.k_linespace != linespace;
         theme = snap.k_theme;
+        if (gaps != snap.k_gaps) {
+            gaps = snap.k_gaps;
+            panes_changed();
+        }
         CopyMem(kept, keys_binds, sizeof kept);
         keys_n = nkept;
         serdef = snap.k_serdef;
@@ -1139,6 +1146,13 @@ static int settings_gadget(int id)
         if (usett && (int)v != ttsize) {
             ttsize = v;
             letters_changed();
+        }
+        break;
+    case S_GAPS:                        /* seen at once, as the letters */
+        v = get_attr(S_GAPS, SLIDER_Level);
+        if ((int)v != gaps) {
+            gaps = v;
+            panes_changed();
         }
         break;
     case S_SPACE:
