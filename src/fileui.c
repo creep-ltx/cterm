@@ -11,16 +11,13 @@
  * characters (which CTerm draws itself). A moving bar redraws two
  * lines; the rest is drawn whole (a new drawer, a new size).
  *
- * Every key is the person's to change: ENVARC:CTerm/files.keys, the
- * format of CFile's and Ahiru's keys files (one key a line, KEYS
- * ACTION; [panels] and [line] sections), written with the defaults
- * when there is none.
+ * Every key is the person's to change: CTerm's ENVARC:CTerm/CTerm.keys,
+ * sections [files] (the panels) and [filesline] (a line typed); CTerm
+ * reads and writes the file, Settings edits it.
  */
 #include "cterm.h"
 #include "files.h"
 #pragma GCC optimize("Os")              /* called rarely: small before quick */
-
-#define KEYFILE "ENVARC:CTerm/files.keys"
 
 /* ---- the keys ---- */
 
@@ -76,234 +73,54 @@ static const struct Act acts[K_N] = {
     { "newer", NULL, "the command line after", 2 },
 };
 
-static const char defkeys[] =
-"; CTerm's file browser: its keys. One a line: KEYS ACTION.\n"
-"; KEYS is a character, or a name in <>: <Up> <Down> <Left> <Right>,\n"
-"; with Shift <S-Up> or Ctrl <C-Up>; <C-r> (Ctrl+R); <Return> <Esc>\n"
-"; <Tab> <Space> <Del> <BS> <S-BS> <C-BS> <Help> <F1>..<F12> <PgUp>\n"
-"; <PgDn> <Home> <End> <Ins>. The action none takes a key away.\n"
-"; Letters not bound in [panels] look for a name in the panel.\n"
-"; Yes and no are always y and n.\n"
-"[panels]\n"
-"<Up> up\n<Down> down\n<S-Up> pageup\n<PgUp> pageup\n<S-Down> pagedown\n"
-"<PgDn> pagedown\n<C-Up> top\n<Home> top\n<C-Down> bottom\n<End> bottom\n"
-"<Left> left\n<Right> right\n<Tab> switch\n<Return> open\n<BS> parent\n"
-"<Space> mark\n<Ins> mark\n* invert\n<F1> help\n<Help> help\n"
-"<F2> refresh\n<C-r> refresh\n<F5> copy\n<F6> rename\n<F7> mkdir\n"
-"<F8> delete\n<Del> delete\n<F9> log\n<F10> quit\n<Esc> stop\n"
-": command\n<C-l> redraw\n"
-"[line]\n"
-"<Left> left\n<Right> right\n<S-Left> start\n<C-a> start\n<Home> start\n"
-"<S-Right> end\n<C-e> end\n<End> end\n<BS> back\n<Del> delete\n"
-"<S-BS> kill\n<C-u> kill\n<Return> accept\n<Esc> cancel\n<Tab> complete\n"
-"<Up> older\n<Down> newer\n";
+/* The bindings are CTerm's (CTerm.keys, [files] and [filesline]: action
+ * K_x is CTerm's KA_FB_FIRST + K_x - 1); a key comes here as the panels
+ * have always had it (keys.c browser_key: KM_SUP, a Ctrl letter as its
+ * control character) and is looked up as CTerm writes keys (KQ_*). */
+typedef char fb_acts_check[KA_FB_LAST - KA_FB_FIRST + 2 == K_N ? 1 : -1];
 
-#define MAXB 96
-static struct { UBYTE ctx, act; UWORD key; } bd[MAXB];
-static int nbd;
-static char kbad[80];                   /* the key file's first bad line */
-
-static const struct { const char *n; UWORD k; } kn[] = {
-    { "Up", KM_UP }, { "Down", KM_DOWN }, { "Left", KM_LEFT },
-    { "Right", KM_RIGHT }, { "S-Up", KM_SUP }, { "S-Down", KM_SDOWN },
-    { "S-Left", KM_SLEFT }, { "S-Right", KM_SRIGHT }, { "C-Up", KM_CUP },
-    { "C-Down", KM_CDOWN }, { "C-Left", KM_CLEFT }, { "C-Right", KM_CRIGHT },
-    { "Return", 13 }, { "Esc", 27 }, { "Tab", 9 }, { "Space", ' ' },
-    { "Del", 127 }, { "BS", 8 }, { "S-BS", KM_SBS }, { "C-BS", KM_CBS },
-    { "Help", KM_HELP }, { "PgUp", KM_PGUP }, { "PgDn", KM_PGDN },
-    { "Home", KM_HOME }, { "End", KM_END }, { "Ins", KM_INS },
-};
-#define NKN ((int)(sizeof kn / sizeof kn[0]))
-
-/* A key from its text ("q", "<F5>", "<C-r>"), 0: not a key. */
-static int key_of(const char *s, int len)
+static UWORD key_kq(int k)
 {
-    int i;
-    if (len == 1)
-        return (UBYTE)s[0];
-    if (len < 3 || s[0] != '<' || s[len - 1] != '>')
-        return 0;
-    s++;
-    len -= 2;
-    for (i = 0; i < NKN; i++)
-        if ((int)strlen(kn[i].n) == len && !strncmp(kn[i].n, s, len))
-            return kn[i].k;
-    if (len == 3 && s[0] == 'C' && s[1] == '-')
-        return s[2] & 31;
-    if (s[0] == 'F' && len <= 3) {
-        int n = atoi(s + 1);
-        if (n >= 1 && n <= 10)
-            return KM_F1 + n - 1;
-        if (n == 11 || n == 12)
-            return KM_F11 + n - 11;
-    }
-    return 0;
-}
-
-static void key_name(int k, char *o)
-{
-    int i;
-    for (i = 0; i < NKN; i++)
-        if (kn[i].k == k) {
-            strcpy(o, "<");
-            strcat(o, kn[i].n);
-            strcat(o, ">");
-            return;
-        }
-    if (k >= KM_F1 && k < KM_F1 + 10) {
-        strcpy(o, "<F");
-        numstr_cat(o, k - KM_F1 + 1);
-        strcat(o, ">");
-    } else if (k == KM_F11 || k == KM_F12) {
-        strcpy(o, k == KM_F11 ? "<F11>" : "<F12>");
-    } else if (k > 0 && k < 32) {
-        strcpy(o, "<C-x>");
-        o[3] = k + 96;
-    } else {
-        o[0] = k;
-        o[1] = 0;
-    }
-}
-
-static void bind_line(char *l, int *ctx, int no)
-{
-    char *keys, *act;
-    int k, a, i, kl;
-    while (*l == ' ' || *l == '\t')
-        l++;
-    if (!*l || *l == ';' || *l == '#')
-        return;
-    if (*l == '[' && l[1] && strchr(l, ']') && !strchr(l, ' ')) {
-        *ctx = !strnicmp(l, "[panels]", 8) ? 1 : !strnicmp(l, "[line]", 6)
-               ? 2 : 0;
-        if (!*ctx && !kbad[0]) {
-            strcpy(kbad, "line ");
-            numstr_cat(kbad, no);
-            strcat(kbad, ": unknown section");
-        }
-        return;
-    }
-    keys = l;
-    while (*l && *l != ' ' && *l != '\t')
-        l++;
-    kl = l - keys;
-    while (*l == ' ' || *l == '\t')
-        l++;
-    act = l;
-    while (*l && *l != ' ' && *l != '\t')
-        l++;
-    *l = 0;
-    k = key_of(keys, kl);
-    for (a = 0; a < K_N; a++)
-        if ((acts[a].ctx == *ctx || !a) && !stricmp(acts[a].name, act))
-            break;
-    if (!k || a == K_N || !*ctx) {
-        if (!kbad[0]) {
-            strcpy(kbad, "line ");
-            numstr_cat(kbad, no);
-            strcat(kbad, " not understood");
-        }
-        return;
-    }
-    for (i = 0; i < nbd; i++)           /* a new binding replaces one */
-        if (bd[i].ctx == *ctx && bd[i].key == k)
-            break;
-    if (i == nbd) {
-        if (nbd == MAXB)
-            return;
-        nbd++;
-    }
-    bd[i].ctx = *ctx;
-    bd[i].key = k;
-    bd[i].act = a;
-}
-
-static void bind_text(char *t)
-{
-    int ctx = 1, no = 0;
-    char *e;
-    while (t && *t) {
-        int l;
-        if ((e = strchr(t, '\n')))
-            *e = 0;
-        l = strlen(t);
-        while (l && (t[l - 1] == '\r' || t[l - 1] == ' '))
-            t[--l] = 0;
-        bind_line(t, &ctx, ++no);
-        t = e ? e + 1 : NULL;
-    }
-}
-
-/* The built-in keys, then the file (written with them when missing). */
-void ui_keys(void)
-{
-    char *t;
-    BPTR f;
-    LONG n;
-    struct Process *me = (struct Process *)FindTask(NULL);
-    APTR wp = me->pr_WindowPtr;
-    nbd = 0;
-    kbad[0] = 0;
-    if ((t = AllocVec(sizeof defkeys, MEMF_ANY))) {
-        strcpy(t, defkeys);
-        bind_text(t);
-        FreeVec(t);
-    }
-    me->pr_WindowPtr = (APTR)-1;        /* no "insert volume" */
-    f = Open((STRPTR)KEYFILE, MODE_OLDFILE);
-    if (!f) {
-        if (IoErr() == ERROR_OBJECT_NOT_FOUND &&
-            (f = Open((STRPTR)KEYFILE, MODE_NEWFILE))) {
-            Write(f, (APTR)defkeys, sizeof defkeys - 1);
-            Close(f);
-        }
-        me->pr_WindowPtr = wp;
-        return;
-    }
-    me->pr_WindowPtr = wp;
-    Seek(f, 0, OFFSET_END);
-    n = Seek(f, 0, OFFSET_BEGINNING);
-    if (n < 0 || n > 16000)
-        n = 16000;
-    if ((t = AllocVec(n + 1, MEMF_ANY))) {
-        n = Read(f, t, n);
-        t[n > 0 ? n : 0] = 0;
-        bind_text(t);
-        FreeVec(t);
-    }
-    Close(f);
+    if (k >= KM_SUP && k <= KM_SRIGHT)
+        return KQ_S | (KM_UP + k - KM_SUP);
+    if (k >= KM_CUP && k <= KM_CRIGHT)
+        return KQ_C | (KM_UP + k - KM_CUP);
+    if (k == KM_SBS)
+        return KQ_S | 8;
+    if (k == KM_CBS)
+        return KQ_C | 8;
+    if (k > 0 && k < 32 && k != 8 && k != 9 && k != 13 && k != 27)
+        return KQ_C | (k + 96);         /* Ctrl+R: <C-r> */
+    return k;
 }
 
 static int find(int ctx, int k)
 {
-    int i;
-    for (i = 0; i < nbd; i++)
-        if (bd[i].ctx == ctx && bd[i].key == k)
-            return bd[i].act;
-    return K_NONE;
+    int a = keys_find(ctx == 1 ? KC_FILES : KC_FLINE, key_kq(k));
+    return a >= KA_FB_FIRST ? a - KA_FB_FIRST + 1 : K_NONE;
 }
 
 /* The first key bound to an action, as it is written on the keys
  * ("F5", "Esc", "':'"; "" none). */
 static void first_key(int ctx, int a, char *o)
 {
-    int i, l;
+    UWORD k = keys_first(KA_FB_FIRST + a - 1);
+    int l;
+    (void)ctx;
     o[0] = 0;
-    for (i = 0; i < nbd; i++)
-        if (bd[i].ctx == ctx && bd[i].act == a) {
-            key_name(bd[i].key, o);
-            l = strlen(o);
-            if (o[0] == '<' && l > 2) {
-                memmove(o, o + 1, l - 2);
-                o[l - 2] = 0;
-            } else if (l == 1) {
-                o[2] = '\'';
-                o[1] = o[0];
-                o[0] = '\'';
-                o[3] = 0;
-            }
-            return;
-        }
+    if (!k)
+        return;
+    keys_name(k, o, FALSE);
+    l = strlen(o);
+    if (o[0] == '<' && l > 2) {
+        memmove(o, o + 1, l - 2);
+        o[l - 2] = 0;
+    } else if (l == 1) {
+        o[2] = '\'';
+        o[1] = o[0];
+        o[0] = '\'';
+        o[3] = 0;
+    }
 }
 
 /* ---- writing into the tab ---- */
@@ -730,7 +547,7 @@ static void draw_msg(struct RConn *c)
     } else if (c->x) {
         struct Xfer *x = c->x;
         ULONG secs = (ticks50() - x->t0) / 50, pct = pct100(x->done, x->size);
-        char n[16];
+        char n[24];
         int fill, l;
         strcpy(t, x->dir == 2 ? " Sending " : " Receiving ");
         strncat(t, x->name, 60);
@@ -793,7 +610,7 @@ static void draw_msg(struct RConn *c)
         o_field(c->msg, strlen(c->msg) < (size_t)W ? (int)strlen(c->msg)
                                                    : W - 1, 3);
     } else {
-        char k1[12], k2[12], k3[12];
+        char k1[24], k2[24], k3[24];
         first_key(1, K_SWITCH, k1);
         first_key(1, K_COPY, k2);
         first_key(1, K_CMD, k3);
@@ -1279,8 +1096,8 @@ static const char cmdhelp[] =
 "  rename old new       rename on the host\n"
 "  bye                  hang up and close the tab\n"
 "  help                 this\n"
-"\nThe keys are in ENVARC:CTerm/files.keys: change them there (they\n"
-"count the next time a browser opens).\n";
+"\nThe keys are CTerm's: Settings, Keys, or ENVARC:CTerm/CTerm.keys\n"
+"([files] and [filesline]).\n";
 
 static void help(struct RConn *c)
 {
@@ -1292,14 +1109,14 @@ static void help(struct RConn *c)
                               "find a name as you type it):\n"
                             : "\nKeys while a line is typed:\n");
         for (a = 1; a < K_N; a++) {
-            char ks[60], k[12];
+            char ks[60], k[24];
             if (acts[a].ctx != ctx)
                 continue;
             ks[0] = 0;
-            for (i = 0; i < nbd; i++)
-                if (bd[i].ctx == ctx && bd[i].act == a &&
+            for (i = 0; i < keys_n; i++)
+                if (keys_binds[i].act == KA_FB_FIRST + a - 1 &&
                     strlen(ks) < 40) {
-                    key_name(bd[i].key, k);
+                    keys_name(keys_binds[i].key, k, FALSE);
                     if (ks[0])
                         strcat(ks, " ");
                     strcat(ks, k);
@@ -1316,9 +1133,9 @@ static void help(struct RConn *c)
         }
     }
     tx_add(&x, cmdhelp);
-    if (kbad[0]) {
-        tx_add(&x, "\nfiles.keys: ");
-        tx_add(&x, kbad);
+    if (keys_bad[0]) {
+        tx_add(&x, "\nCTerm.keys: ");
+        tx_add(&x, keys_bad);
         tx_add(&x, "\n");
     }
     if (x.t)

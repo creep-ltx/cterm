@@ -878,6 +878,74 @@ In the order the user and I agreed (2026-10-10):
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
 - Also: an ssh password login tried against a real server,
   dropping files on the window, emoji fallback, more stock-A1200 speed.
+- **Done 2026-10-11 (0.3b18): new tabs' characters, one key file, the
+  browser's drawing**
+  - **New tabs start in the default characters.** vt_set_amiga cleared
+    utf8 (and utf8_set), and shell_tab called it after tab_new's
+    vt_set_utf8: a new Shell tab read Latin-1 while its t_utf8 (and the
+    menu's tick, made once from the prefs) said UTF-8; the first choice
+    of the item "turned it off" (no change), the second on. Now
+    vt_set_amiga leaves the characters alone (the callers set them;
+    tests that want a Latin-1 Shell call vt_set_utf8(v, 0) first, the
+    fuzzer's mode 2 too). tab_new sets t_utf8/t_pcmode from saved_utf8/
+    saved_pc (PC BBS was never applied to a new tab); call_tab sets
+    UTF-8/Latin-1 back when the Call window's PC box is off.
+  - **The default is Settings' (Text: Characters).** The chooser shows
+    saved_utf8/saved_pc (it showed the shown tab's), Use/Save set them
+    (also from a phone book tab now), and the shown tab follows at once
+    unless it has its own (a phone book place's, the browser's). The
+    menu items UTF-8 and PC BBS change only the shown tab (UTF-8 set
+    saved_utf8 too, so a choice there leaked into new tabs and the
+    prefs).
+  - **The ticks follow the shown tab** (screen.c menu_ticks): the two
+    items' MenuItems found once after CreateMenus; the main loop compares
+    their CHECKED with shown->t_utf8/t_pcmode every round and only on a
+    difference takes the strip off (ClearMenuStrip, flags,
+    ResetMenuStrip). Covers tab switches, panes, new tabs, phone book
+    places, the browser's forced UTF-8, ARexx.
+  - **One key file.** The browser's 36 actions are CTerm's now:
+    keys_acts gets KC_FILES ([files], the panels) and KC_FLINE
+    ([filesline]) in fileui.c's K_* order (KA_FB_FIRST.. a compile-time
+    check in fileui.c), their defaults in defbinds (KQ form: `<C-r>` is
+    KQ_C|'r', `<S-BS>` KQ_S|8). Parts/Files keeps only labels and
+    descriptions; find() turns its key code (KM_SUP, a Ctrl letter as
+    its control character - browser_key unchanged) into the KQ form
+    and asks keys_find through PartEnv; F1's list and the key bar come
+    from keys_binds. PART_VERSION 6. keys_save writes five sections.
+  - **Migration:** keys_load reads CTerm.keys; when it names no
+    [files]/[filesline] action and ENVARC:CTerm/files.keys is there, that
+    file is read over the defaults (its [panels] and [line] are accepted
+    as section names, default section [files]), CTerm.keys is written
+    whole and files.keys renamed files.keys.old (never read again). No
+    files.keys: CTerm.keys is rewritten once so it lists the browser's
+    keys. Verified: a files.keys with an added `c copy` became `c copy`
+    under [files], and c copied the marked files.
+  - **Settings, Keys tab:** two more headings ("File browser: the
+    panels (its own)", "... a line typed"); kother/kclash: a key in two
+    sections is marked ! only where one hides the other - [window]
+    against [call]/[shell] as before, [window] against a browser section
+    unless the window action is a history key (those stand aside in a
+    browser tab). Verified: `<Tab> s` for switch typed in the field,
+    Saved, s switched panels; Shift+Up (window pageup and browser
+    pageup) not marked.
+  - **The late panel switch:** not reproduced, in 0.3b17 (a worktree
+    build) or 0.3b18, on the A1200+8 MB and the 030/50 configs, FTP and
+    SFTP, one pane or split, grabs right after the key or 1.5 s later:
+    to_side draws and end() refreshes. To be sure every key and click
+    shows at once whatever path the part takes, parts.c files_key and
+    files_mouse refresh the tab after the part returns (a no-op when
+    nothing changed).
+  - **Tested in FS-UAE** (headless, private drive, wasabid 1240,
+    tests/ftp/ftpd.py, tests/ssh/test-sshd.sh): default UTF-8: first tab
+    and a new Shell tab `type` a UTF-8 file and a Latin-1 file right
+    (look-ahead rule); menu ticks per tab after Right Amiga+1/2; the
+    Text tab set to Latin-1 (Use): a new Shell tab shows the UTF-8 file
+    as Latin-1 bytes and the Latin-1 file and `echo Å` right, unticked;
+    Saved, then a new boot: the first tab Latin-1 and unticked; a phone
+    book place with chars=latin1 unticked; the FTP browser tab ticked
+    UTF-8.
+    make test passes.
+
 - **Done 2026-10-11 (0.3b17): every key of CTerm's own configurable**
   (the user's rule for all their programs).
   - **The file:** `ENVARC:CTerm/CTerm.keys`, CFile's/Ahiru's format (KEYS
@@ -935,7 +1003,7 @@ In the order the user and I agreed (2026-10-10):
     keymap.c is now compiled on its own with `-fbbb=-` (src/keymap.o,
     outside LTO); Parts/Settings too. Same bug as fileui's (see the
     knowledge base).
-  - **Not done:** files.keys stays the browser's own file (read by
+  - **Not done (done in 0.3b18):** files.keys stays the browser's own file (read by
     Parts/Files when it loads; folding it in would put its defaults in
     CTerm); the Keys tab does not edit it. term_ask's typed answer
     (password, host key yes/no) keeps Return and Backspace.
@@ -990,7 +1058,7 @@ In the order the user and I agreed (2026-10-10):
     with the next key (seen in 0.3b16 as well, FS-UAE). A new Shell tab
     reads Latin-1 (vt_set_amiga) while Settings/UTF-8 shows ticked from
     the prefs: the first choice of the item turns it off, the second on
-    (seen 2026-10-11, older than 0.3b17).
+    (seen 2026-10-11, older than 0.3b17). Both: see 0.3b18.
 
 - **After the audit of 2026-10-10** (Knowledge/amiga/cterm-audit-2026-10-10.md;
   every finding fixed, commits b6f36fc..cefd2fd). Left open:

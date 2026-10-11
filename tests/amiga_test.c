@@ -29,6 +29,7 @@ int main(void)
     Vt *v = vt_new(40, 10, 100);
     char rep[64];
     int n, x, y, vis;
+    vt_set_utf8(v, 0);                  /* the Latin-1 Shell */
     vt_set_amiga(v, 1);
 
     feed(v, "one\ntwo");                         /* LF = new line */
@@ -114,11 +115,32 @@ int main(void)
         l = vt_line(v, 0, 0, &w);
         CHECK(w >= 2 && l[0].cp == 0xE5 && l[1].cp == 'z',
               "UTF-8 Shell: ESC % @ goes back to the tab's UTF-8");
-        vt_set_amiga(v, 1);             /* back to Latin-1, as the Shell starts */
+        vt_set_utf8(v, 0);              /* back to Latin-1 (the menu) */
         feed(v, "\x0c" "\x1b%G" "\xc3\xa5" "\x1b%@" "\xc3\xa5");
         l = vt_line(v, 0, 0, &w);
         CHECK(w >= 3 && l[0].cp == 0xE5 && l[1].cp == 0xC3 && l[2].cp == 0xA5,
               "Latin-1 Shell: ESC % G for a while, ESC % @ back to Latin-1");
+    }
+    {   /* a new Shell tab in UTF-8 (the default): vt_set_amiga after
+         * vt_set_utf8 keeps it, as the menu shows; Latin-1 stays Latin-1 */
+        Vt *u = vt_new(20, 4, 0);
+        int w;
+        const VtCell *l;
+        vt_set_utf8(u, 1);
+        vt_set_amiga(u, 1);
+        feed(u, "\xc3\x85" "\xe5" "\x9b" "2;1H" "z");
+        l = vt_line(u, 0, 0, &w);
+        CHECK(w >= 2 && l[0].cp == 0xC5 && l[1].cp == 0xE5 && at(u, 1, 0) == 'z',
+              "new UTF-8 Shell tab: UTF-8 letters, Latin-1 bytes, 9B CSI");
+        vt_free(u);
+        u = vt_new(20, 4, 0);
+        vt_set_utf8(u, 0);
+        vt_set_amiga(u, 1);
+        feed(u, "\xc5" "\xc3\xa5");
+        l = vt_line(u, 0, 0, &w);
+        CHECK(w >= 3 && l[0].cp == 0xC5 && l[1].cp == 0xC3 && l[2].cp == 0xA5,
+              "new Latin-1 Shell tab: bytes as Latin-1");
+        vt_free(u);
     }
     feed(v, "\x0c" "page");                      /* FF = clear page */
     CHECK(at(v, 0, 0) == 'p' && at(v, 0, 4) == ' ', "FF clears and homes");

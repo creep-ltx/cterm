@@ -235,9 +235,14 @@ static void colours_changed(void)
     redraw_all();
 }
 
+/* The characters setting is the default, what a new tab starts in; the
+ * shown tab follows it at once unless it has its own (a phone book
+ * place's, the file browser's). */
+static int defchars;
+
 static int chars_now(void)
 {
-    return pcmode ? 2 : utf8 ? 0 : 1;
+    return defchars;
 }
 
 static void set_chars(int k)
@@ -519,17 +524,33 @@ static const char *const kdesc[KA_N] = {
     "The line before (history)", "The line after (history)",
     "Find in the history", "Complete a name", "Enter the line",
     "End of input",
+    "The line above", "The line below", "A page up", "A page down",
+    "The first line", "The last line", "The Amiga's panel (left)",
+    "The host's panel (right)", "The other panel", "Into the drawer",
+    "The drawer above", "Mark or unmark, then down", "Turn the marks over",
+    "These keys (help)", "Read both drawers again",
+    "Copy the marked across", "Rename", "A new drawer",
+    "Delete the marked", "The messages", "Hang up, close the tab",
+    "Stop a transfer, a listing", "The command line", "Draw it all again",
+    "A letter left", "A letter right", "To the start", "To the end",
+    "Delete the letter before", "Delete the letter under",
+    "Delete to the start", "Done", "Nothing done (cancel)",
+    "Complete a name or command", "The command line before",
+    "The command line after",
 };
-static const char *const khead[3] = {
+typedef char kdesc_check[sizeof kdesc / sizeof kdesc[0] == KA_N ? 1 : -1];
+static const char *const khead[KC_N] = {
     "-- Everywhere (menus, tabs, history) --",
-    "-- Calling, transfers --", "-- The Shell's line, typed --" };
+    "-- Calling, transfers --", "-- The Shell's line, typed --",
+    "-- File browser: the panels (its own) --",
+    "-- File browser: a line typed (its own) --" };
 
 static struct List klist;               /* the rows */
 static struct ColumnInfo kcols[] = {
     { 60, (STRPTR)"What it does", 0 }, { 40, (STRPTR)"Keys", 0 },
     { -1, (STRPTR)~0, -1 }
 };
-static UBYTE krow[KA_N + 3];            /* each row's action (0: a heading) */
+static UBYTE krow[KA_N + KC_N];            /* each row's action (0: a heading) */
 static int kcur = -1;                   /* the action shown in the field */
 static int knrow;
 static struct KeyBind kept[MAXKB];      /* the keys at the start (Cancel) */
@@ -552,15 +573,29 @@ static void ktitle(const char *t, UWORD k)
         SetWindowTitles(setwin, (UBYTE *)ktitlebuf, (UBYTE *)~0);
 }
 
+/* Do actions a and b (two sections) both want key k? The window's keys
+ * come first everywhere; the file browser's act in its tab only, where
+ * the window's history keys stand aside: a browser key clashes with a
+ * window key but those. */
+static BOOL kclash(int a, int b)
+{
+    int ca = keys_acts[a].ctx, cb = keys_acts[b].ctx;
+    if (cb == KC_WINDOW) {
+        int t = a; a = b; b = t;
+        t = ca; ca = cb; cb = t;
+    }
+    if (ca != KC_WINDOW || cb == KC_WINDOW)
+        return FALSE;
+    return cb < KC_FILES || a < KA_PAGEUP || a > KA_HISTEND;
+}
+
 /* Action a's key k: another section's too? (the action, or 0) */
 static int kother(int a, UWORD k)
 {
     int i;
     for (i = 0; i < keys_n; i++)
         if (keys_binds[i].key == k && keys_binds[i].act != a &&
-            keys_acts[keys_binds[i].act].ctx != keys_acts[a].ctx &&
-            (keys_acts[a].ctx == KC_WINDOW ||
-             keys_acts[keys_binds[i].act].ctx == KC_WINDOW))
+            kclash(a, keys_binds[i].act))
             return keys_binds[i].act;
     return 0;
 }
@@ -599,7 +634,7 @@ static void klist_make(void)
     char t[64];
     NewList(&klist);
     knrow = 0;
-    for (c = KC_WINDOW; c <= KC_SHELL; c++) {
+    for (c = KC_WINDOW; c <= KC_N; c++) {
         struct Node *n = AllocListBrowserNode(2, LBNA_Flags, LBFLG_READONLY,
             LBNA_Column, 0, LBNCA_Text, (ULONG)khead[c - 1],
             LBNA_Column, 1, LBNCA_Text, (ULONG)"", TAG_END);
@@ -744,7 +779,7 @@ static BOOL keys_clash(void)
 static Object *page_keys(void)
 {
     Object *h, *p = r_page(),
-           *g = r_group("CTerm's own keys (the file browser's: files.keys)");
+           *g = r_group("CTerm's keys (CTerm.keys; the file browser's too)");
     r_add(g, r_chooser(S_ALT, altlabels, !altmeta), "Alt key");
     klist_make();
     kcur = -1;
@@ -802,6 +837,7 @@ static void open_settings_(void)
     snap.k_fontsize = fontsize;
     snap.k_linespace = linespace;
     snap.k_s_utf8 = utf8; snap.k_pc = pcmode;
+    defchars = saved_pc ? 2 : saved_utf8 ? 0 : 1;
     snap.k_bgsee = bgsee;
     strcpy(snap.k_bgfile, bgfile);
     CopyMem(keys_binds, kept, sizeof kept);   /* the keys, for Cancel */
@@ -969,10 +1005,8 @@ static void finish_settings_(int how)
         colours_changed();
         return;
     }
-    if (!T->t_bookname[0]) {            /* a phone book tab's are its own */
-        saved_utf8 = utf8;
-        saved_pc = pcmode;
-    }
+    saved_utf8 = defchars == 0;         /* the default: new tabs' */
+    saved_pc = defchars == 2;
     if (pend_mode != scrmode || pend_full != fullscreen ||
         pend_bar != scrollbar ||
         (pend_mode == SCR_OWN && (pend_id != ownmode ||
@@ -1090,8 +1124,11 @@ static int settings_gadget(int id)
         }
         break;
     case S_CHARS:
-        set_chars(get_attr(S_CHARS, CHOOSER_Selected));
-        tab_letters(FALSE);                 /* shown on closing */
+        defchars = get_attr(S_CHARS, CHOOSER_Selected);
+        if (!T->t_bookname[0] && !T->t_fui) {
+            set_chars(defchars);
+            tab_letters(FALSE);             /* shown on closing */
+        }
         break;
     case S_PCFONT: pcfont = get_attr(S_PCFONT, GA_Selected) != 0; break;
     case S_PICS:

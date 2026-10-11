@@ -302,6 +302,9 @@ void files_key(int k)
     pf.depth++;
     FP->key(k);
     files_done();
+    if (T)
+        refresh();                      /* what the key did, shown now
+                                         * (whatever path the part took) */
 }
 
 void files_mouse(int what, int r, int c, ULONG s, ULONG us)
@@ -311,6 +314,8 @@ void files_mouse(int what, int r, int c, ULONG s, ULONG us)
     pf.depth++;
     FP->mouse(what, r, c, s, us);
     files_done();
+    if (T)
+        refresh();
 }
 
 void files_resized(struct Tab *t)

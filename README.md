@@ -112,14 +112,11 @@ them on Linux.
   goes into a drawer, the wheel scrolls the panel under the pointer, a
   click on a function key's name does what it says. Shift and the mouse
   still mark text.
-- **Every key can be changed** in `ENVARC:CTerm/files.keys`, written
-  with the keys above the first time a browser opens. One key a line,
-  `KEYS ACTION` (as in CFile's and Ahiru's keys files): `<F5> copy`,
-  `c copy`, `<F5> none` takes a key away. `[panels]` are the panels'
-  keys, `[line]` those of a typed line (Left, Right, Backspace, Del,
-  Return, Esc, Tab completes, Up and Down bring back earlier command
-  lines). F1 lists them as they are; a change counts the next time a
-  browser opens. Only yes and no are always `y` and `n`.
+- **Every key can be changed**, in Settings (the Keys tab) or in
+  CTerm's one key file, `ENVARC:CTerm/CTerm.keys`: the sections
+  `[files]` (the panels) and `[filesline]` (a line typed: a name, the
+  command line). See Keys below. F1 lists them as they are. Only yes and
+  no are always `y` and `n`.
 - **The command line** (`:`) takes the commands of Linux's ftp and sftp,
   on the message line; names with a space go in "quotes", `#?` and `*`
   match any letters, `?` one, and Tab completes a name or a command:
@@ -539,7 +536,8 @@ CTerm says about itself).
 
 Every key that makes CTerm itself do something can be changed: the
 menus' shortcuts (and items that have none can get one), the tabs, the
-history, the Shell's line editing, giving up a call, calling again.
+history, the Shell's line editing, giving up a call, calling again, and
+the file browser's keys.
 
 **Two kinds of keys.** CTerm's own keys do something in CTerm. All the
 other keys go to the program in the tab, as on any terminal: the arrows,
@@ -549,11 +547,15 @@ so bash, vim, mc and Ed get what they expect. Those are not CTerm's to
 change. A key you give to CTerm no longer reaches the program; a key you
 take away from CTerm goes to the program again.
 
-**Where they are kept:** `ENVARC:CTerm/CTerm.keys`, a text file, written
-with the keys below the first time CTerm starts. The file browser's keys
-stay in their own file, `files.keys` (see Files on other computers); the
-two files are written the same way (as CFile's and Ahiru's keys files
-are).
+**Where they are kept:** all in one file, `ENVARC:CTerm/CTerm.keys`, a
+text file written with the keys below the first time CTerm starts (as
+CFile's and Ahiru's keys files are). It has five sections: `[window]`,
+`[call]`, `[shell]`, `[files]` and `[filesline]`. Each section's keys
+are its own, so one key can do one thing in the Shell's line and
+another in the file browser. Before 0.3b18 the file browser's keys were
+in a file of their own, `files.keys`: CTerm reads it into `CTerm.keys`
+once, then renames it `files.keys.old` (it is not read again; delete it
+when you like).
 
 **Changing them in Settings** (Settings..., the Keys tab): the list shows
 everything CTerm does on a key, and its keys. Choose a line, then
@@ -564,10 +566,13 @@ everything CTerm does on a key, and its keys. Choose a line, then
 - **None** takes the line's keys away; **Defaults** puts every key back
   as CTerm comes.
 
-A key that another line had is taken from it (the title says so). A key
-that is CTerm's in every tab and also the Shell's or the call's (say
-Return for Close tab) is marked `!`: the every-tab one wins; Save or Use
-says so once, and a second press keeps it. Save writes the file, Use
+The list has a heading for each section; the file browser's two
+sections are its own. A key that another line of the same section had
+is taken from it (the title says so). A key that is CTerm's in every
+tab and also the Shell's, the call's or the file browser's (say Return
+for Close tab) is marked `!`: the every-tab one wins; Save or Use says
+so once, and a second press keeps it. (The history's keys stand aside in
+a file browser, so Shift+Up is the panel's page up there.) Save writes the file, Use
 keeps the keys until CTerm quits, Cancel puts them back. The menus show
 the new keys at once: Right Amiga + a letter as the Amiga does, any
 other key written beside the item (`F9`, `Ctrl+Shift+F1`).
@@ -619,11 +624,42 @@ The keys CTerm comes with:
 | Tab | `complete` | complete a file name |
 | Return | `accept` | enter the line |
 | Ctrl+\ | `eof` | end of input (on an empty line) |
+| **The file browser's panels** `[files]` | | |
+| Up, Down | `up`, `down` | the bar up and down |
+| Shift+Up, PageUp / Shift+Down, PageDown | `pageup`, `pagedown` | a page up, a page down |
+| Ctrl+Up, Home / Ctrl+Down, End | `top`, `bottom` | the first line, the last |
+| Left, Right | `left`, `right` | the Amiga's panel, the host's |
+| Tab | `switch` | the other panel |
+| Return | `open` | into the drawer under the bar |
+| Backspace | `parent` | the drawer above |
+| Space, Insert | `mark` | mark or unmark, then down |
+| `*` | `invert` | the files' marks turned over |
+| F1, Help | `help` | the keys and the commands |
+| F2, Ctrl+R | `refresh` | both drawers read again |
+| F5 | `copy` | copy the marked (or the bar's) across |
+| F6 | `rename` | rename the one under the bar |
+| F7 | `mkdir` | a new drawer |
+| F8, Del | `delete` | delete the marked (asks first) |
+| F9 | `log` | the messages |
+| F10 | `quit` | hang up and close the tab (asks first) |
+| Esc | `stop` | stop a transfer or a listing; forget a search |
+| `:` | `command` | the command line |
+| Ctrl+L | `redraw` | draw everything again |
+| **A line typed in the file browser** `[filesline]` | | |
+| Left, Right | `left`, `right` | a letter left, right |
+| Shift+Left, Ctrl+A, Home | `start` | to the start |
+| Shift+Right, Ctrl+E, End | `end` | to the end |
+| Backspace, Del | `back`, `delete` | delete the letter before, under the cursor |
+| Shift+Backspace, Ctrl+U | `kill` | delete to the start |
+| Return, Esc | `accept`, `cancel` | done; nothing done |
+| Tab | `complete` | complete a name or a command |
+| Up, Down | `older`, `newer` | the command lines before, after |
 
 The Shell's line keys count while the Shell (or a program) reads a line;
 a program that takes the keys itself (Ed, More) gets them as they are.
 In a file browser tab CTerm's keys come first, but for the history's
-(the panels page themselves), then the browser's own. Ctrl+C to Ctrl+F
+(the panels page themselves), then the browser's own; Right Amiga and
+Alt keys do not reach the browser (Alt types its character there). Ctrl+C to Ctrl+F
 stay the Amiga's break keys, and yes and no in questions are y and n.
 
 
@@ -639,7 +675,11 @@ like the system's settings programs):
   the mouse to scroll back.
 - **Text:** an Amiga font or TrueType, the TrueType size, line spacing,
   the characters (UTF-8, Latin-1, PC BBS), and whether PC BBS mode uses
-  the PC's own font.
+  the PC's own font. The characters are what every new tab starts in
+  (a phone book place's own characters win for its tab); the shown tab
+  follows them at once. Settings/UTF-8 and Settings/PC BBS in the menu
+  change only the shown tab, and their ticks always show what the shown
+  tab reads.
 - **Colours:** a theme (Nord, Black, Workbench, Amber, Green, Light), and
   your own text and background colour on top of it.
 - **Keys:** what the Alt key does (Meta for programs on other

@@ -27,7 +27,7 @@ int main(int argc,char**argv){
   Vt*v=vt_new(cols,rows,rand()%3?20:0);
   vt_decode=ppm; vt_decode_free=ppmfree;
   vt_set_pictures(v,rand()%4!=0,rand()%2?4000:200000); vt_set_cell_px(v,1+rand()%9,1+rand()%17,0);
-  if(mode==1)vt_set_cp437(v,1); if(mode==2)vt_set_amiga(v,1); if(mode==3)vt_set_utf8(v,0);
+  if(mode==1)vt_set_cp437(v,1); if(mode==2){vt_set_utf8(v,0);vt_set_amiga(v,1);} if(mode==3)vt_set_utf8(v,0);
   if(mode==4){vt_set_amiga(v,1);vt_set_utf8(v,1);}   /* the Amiga Shell in UTF-8 */
   for(k=0;k<400;k++){
    int r=rand()%100; VtChanges c; char rb[64];

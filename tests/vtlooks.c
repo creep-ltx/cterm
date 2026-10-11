@@ -32,7 +32,7 @@ int main(int argc, char **argv)
     int n = fread(buf, 1, sizeof buf, f), i, y, k = 0;
     Vt *v = vt_new(cols, rows, getenv("HIST") ? atoi(getenv("HIST")) : 300);
     fclose(f);
-    if (argc > 5) vt_set_amiga(v, 1);
+    if (argc > 5) { vt_set_utf8(v, 0); vt_set_amiga(v, 1); }
     if (chunk <= 0) chunk = n;
     for (i = 0; i < n; i += chunk) {
         vt_write(v, buf + i, n - i < chunk ? n - i : chunk);

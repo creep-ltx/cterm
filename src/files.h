@@ -150,7 +150,6 @@ void ui_note(struct RConn *c, const char *text, BOOL red);
 void ui_progress(struct RConn *c);
 void ui_key(struct RConn *c, int k);
 void ui_mouse(struct RConn *c, int what, int r, int col, ULONG s, ULONG us);
-void ui_keys(void);                     /* the key file, read */
 void ui_free(struct RConn *c);
 
 /* ftp.c */

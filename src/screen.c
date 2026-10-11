@@ -72,6 +72,7 @@ static struct NewMenu newmenu[] = {
     { NM_END, 0, 0, 0, 0, 0 },
 };
 struct Window *setwin;
+static struct MenuItem *it_utf8, *it_pc;    /* their ticks: menu_ticks */
 
 /* The menus again: their keys changed (CTerm.keys, Settings). */
 void remake_menus(void)
@@ -148,9 +149,42 @@ static void make_menus(void)
         else n->nm_Flags &= ~CHECKED;
     }
     visual = GetVisualInfo(scr, TAG_END);
+    it_utf8 = it_pc = NULL;
     if (visual && (menu = CreateMenus(newmenu, TAG_END)) &&
-        LayoutMenus(menu, visual, GTMN_NewLookMenus, TRUE, TAG_END))
+        LayoutMenus(menu, visual, GTMN_NewLookMenus, TRUE, TAG_END)) {
+        struct Menu *m;
+        struct MenuItem *it;
+        for (m = menu; m; m = m->NextMenu)
+            for (it = m->FirstItem; it; it = it->NextItem)
+                if ((ULONG)GTMENUITEM_USERDATA(it) == M_UTF8)
+                    it_utf8 = it;
+                else if ((ULONG)GTMENUITEM_USERDATA(it) == M_PC)
+                    it_pc = it;
         SetMenuStrip(win, menu);
+    }
+}
+
+/* The UTF-8 and PC BBS ticks as the shown tab reads: a tab switch, a
+ * pane switch, a new tab, a phone book place's characters. Cheap when
+ * they are right (the main loop calls it every round); the strip comes
+ * off for a change only (never while the menu is open: this runs in
+ * CTerm's own loop, between messages). */
+void menu_ticks(void)
+{
+    BOOL u, p, attached;
+    if (!win || !shown || !it_utf8 || !it_pc)
+        return;
+    p = shown->t_pcmode;
+    u = shown->t_utf8 && !p;
+    if (!(it_utf8->Flags & CHECKED) == !u && !(it_pc->Flags & CHECKED) == !p)
+        return;
+    attached = win->MenuStrip == menu;
+    if (attached)
+        ClearMenuStrip(win);
+    if (u) it_utf8->Flags |= CHECKED; else it_utf8->Flags &= ~CHECKED;
+    if (p) it_pc->Flags |= CHECKED; else it_pc->Flags &= ~CHECKED;
+    if (attached)
+        ResetMenuStrip(win, menu);
 }
 
 static BOOL open_own_screen(void)
@@ -517,8 +551,8 @@ BOOL menu_pick(ULONG id)
 #endif
         break;
     case M_UTF8:
-        utf8 = saved_utf8 = !utf8;
-        pcmode = FALSE;
+        utf8 = pcmode || !utf8;         /* this tab's; the default is */
+        pcmode = FALSE;                 /* Settings' (Text) */
         tab_letters(TRUE);
         vt_set_utf8(vt, utf8);
         painter_forget();

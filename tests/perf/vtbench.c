@@ -36,6 +36,7 @@ int main(int argc, char **argv)
     c = 33;
     for (i = 0; i < 300; i++) { longl[i] = c; if (++c > 126) c = 33; }
     vt_set_utf8(vt, 0);
+    vt_set_utf8(vt, 0);
     vt_set_amiga(vt, 1);
     /* warm up: fill the screen so scrolls happen */
     for (i = 0; i < 150; i++)

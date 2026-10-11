@@ -278,7 +278,8 @@ struct Pane {
 #define KQ_A 0x2000                     /* Right Amiga */
 #define KQ_MODS 0x3C00
 #define KQ_KEY 0x03FF
-enum { KC_WINDOW = 1, KC_CALL, KC_SHELL };      /* the file's sections */
+enum { KC_WINDOW = 1, KC_CALL, KC_SHELL,         /* the file's sections */
+       KC_FILES, KC_FLINE, KC_N = KC_FLINE };   /* the file browser's */
 enum { KA_NONE, KA_NEWTAB, KA_CALL, KA_BOOK, KA_SERIAL, KA_ANSWER, KA_SFTP,
        KA_CLOSETAB, KA_LOG, KA_LOGSTOP, KA_SENDUSER, KA_SENDPASS, KA_REXX,
        KA_HIDE, KA_ABOUT, KA_SPEED, KA_QUIT, KA_COPY, KA_PASTE, KA_YRECV,
@@ -293,6 +294,8 @@ enum { KA_NONE, KA_NEWTAB, KA_CALL, KA_BOOK, KA_SERIAL, KA_ANSWER, KA_SFTP,
        KA_ED_WORDRIGHT, KA_ED_BACK, KA_ED_DELETE, KA_ED_WORDBACK,
        KA_ED_KILLSTART, KA_ED_KILLEND, KA_ED_CLEAR, KA_ED_OLDER,
        KA_ED_NEWER, KA_ED_SEARCH, KA_ED_COMPLETE, KA_ED_ACCEPT, KA_ED_EOF,
+       /* the file browser's ([files], [filesline]): fileui.c's K_* order */
+       KA_FB_FIRST, KA_FB_LAST = KA_FB_FIRST + 35,
        KA_N };                          /* KA_ED_*: console.h's CE_* order */
 struct KeyAct {
     const char *name;                   /* in the file */
@@ -510,6 +513,7 @@ void send_str(const char *s);
 void send_typed(const UBYTE *b, LONG n);
 BOOL key(struct IntuiMessage *m);         /* FALSE: Quit */
 void remake_menus(void);
+void menu_ticks(void);
 void bitmap_metrics(void);
 BOOL load_font(void);
 void save_prefs(void);

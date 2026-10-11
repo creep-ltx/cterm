@@ -118,7 +118,7 @@ BOOL key(struct IntuiMessage *m)
     k = keys_code(code, q, prev);
     if (T->t_rf && !(code & IECODE_UP_PREFIX)) {
         /* a file browser's tab: CTerm's window keys but the history's
-         * (the panels page themselves), then the browser's (files.keys),
+         * (the panels page themselves), then the browser's ([files]),
          * also during a transfer (its stop key) */
         a = keys_find(KC_WINDOW, k);
         if (a && (a < KA_PAGEUP || a > KA_HISTEND))

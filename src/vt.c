@@ -3068,14 +3068,16 @@ void vt_set_cp437(Vt *v, int on)
     }
 }
 
-/* The Amiga console's ways, for the local Shell: Latin-1 with 0x9B as
- * CSI, LF as a new line, FF a clear page, VT a line up, and its own
- * sequences (window bounds report, cursor rendition, raw events). */
+/* The Amiga console's ways, for the local Shell: 0x9B as CSI, LF as a
+ * new line, FF a clear page, VT a line up, and its own sequences (window
+ * bounds report, cursor rendition, raw events). The characters stay as
+ * vt_set_utf8 / vt_set_cp437 set them (the tab's: the default, or the
+ * menu's); it used to drop UTF-8 here, so a new Shell tab read Latin-1
+ * while the menu showed UTF-8. */
 void vt_set_amiga(Vt *v, int on)
 {
     v->amigamode = on;
     if (on) {
-        v->utf8 = v->utf8_set = 0;
         v->uneed = v->hlen = 0;
         v->lnm = 1;
     } else

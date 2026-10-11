@@ -2,8 +2,9 @@
  * keymap - CTerm's own keys: every action CTerm itself does on a key
  * (the menus, tabs, panes, the history, the Shell's line editor, giving
  * up a call) is bound in ENVARC:CTerm/CTerm.keys, written with the keys
- * below when there is none. The format is CFile's and Ahiru's (and the
- * file browser's files.keys): one key a line, KEYS ACTION; [sections];
+ * below when there is none. The format is CFile's and Ahiru's: one key
+ * a line, KEYS ACTION; [sections] (the file browser's too: [files],
+ * [filesline] - its own files.keys until 0.3b18, read in once);
  * `;` or `#` starts a comment; ACTION none takes a key away.
  *
  * What the terminal sends to a program (arrows, function keys, Alt as
@@ -101,6 +102,43 @@ const struct KeyAct keys_acts[] = {
     { "complete", KC_SHELL, 0 },
     { "accept", KC_SHELL, 0 },
     { "eof", KC_SHELL, 0 },
+    /* the file browser's (Parts/Files, fileui.c's K_* order) */
+    { "up", KC_FILES, 0 },
+    { "down", KC_FILES, 0 },
+    { "pageup", KC_FILES, 0 },
+    { "pagedown", KC_FILES, 0 },
+    { "top", KC_FILES, 0 },
+    { "bottom", KC_FILES, 0 },
+    { "left", KC_FILES, 0 },
+    { "right", KC_FILES, 0 },
+    { "switch", KC_FILES, 0 },
+    { "open", KC_FILES, 0 },
+    { "parent", KC_FILES, 0 },
+    { "mark", KC_FILES, 0 },
+    { "invert", KC_FILES, 0 },
+    { "help", KC_FILES, 0 },
+    { "refresh", KC_FILES, 0 },
+    { "copy", KC_FILES, 0 },
+    { "rename", KC_FILES, 0 },
+    { "mkdir", KC_FILES, 0 },
+    { "delete", KC_FILES, 0 },
+    { "log", KC_FILES, 0 },
+    { "quit", KC_FILES, 0 },
+    { "stop", KC_FILES, 0 },
+    { "command", KC_FILES, 0 },
+    { "redraw", KC_FILES, 0 },
+    { "left", KC_FLINE, 0 },
+    { "right", KC_FLINE, 0 },
+    { "start", KC_FLINE, 0 },
+    { "end", KC_FLINE, 0 },
+    { "back", KC_FLINE, 0 },
+    { "delete", KC_FLINE, 0 },
+    { "kill", KC_FLINE, 0 },
+    { "accept", KC_FLINE, 0 },
+    { "cancel", KC_FLINE, 0 },
+    { "complete", KC_FLINE, 0 },
+    { "older", KC_FLINE, 0 },
+    { "newer", KC_FLINE, 0 },
 };
 
 /* (one entry an action, in the enum's order) */
@@ -132,6 +170,27 @@ static const struct KeyBind defbinds[] = {
     { C('x'), KA_ED_CLEAR }, { KM_UP, KA_ED_OLDER }, { KM_DOWN, KA_ED_NEWER },
     { C('r'), KA_ED_SEARCH }, { 9, KA_ED_COMPLETE }, { 13, KA_ED_ACCEPT },
     { C('\\'), KA_ED_EOF },
+#define F(n) (KA_FB_FIRST + (n))
+#define S(c) (KQ_S | (c))
+    /* [files]: the panels */
+    { KM_UP, F(0) }, { KM_DOWN, F(1) }, { S(KM_UP), F(2) },
+    { KM_PGUP, F(2) }, { S(KM_DOWN), F(3) }, { KM_PGDN, F(3) },
+    { C(KM_UP), F(4) }, { KM_HOME, F(4) }, { C(KM_DOWN), F(5) },
+    { KM_END, F(5) }, { KM_LEFT, F(6) }, { KM_RIGHT, F(7) }, { 9, F(8) },
+    { 13, F(9) }, { 8, F(10) }, { ' ', F(11) }, { KM_INS, F(11) },
+    { '*', F(12) }, { KM_F1, F(13) }, { KM_HELP, F(13) },
+    { KM_F1 + 1, F(14) }, { C('r'), F(14) }, { KM_F1 + 4, F(15) },
+    { KM_F1 + 5, F(16) }, { KM_F1 + 6, F(17) }, { KM_F1 + 7, F(18) },
+    { 127, F(18) }, { KM_F1 + 8, F(19) }, { KM_F1 + 9, F(20) },
+    { 27, F(21) }, { ':', F(22) }, { C('l'), F(23) },
+    /* [filesline]: a line typed in the browser */
+    { KM_LEFT, F(24) }, { KM_RIGHT, F(25) }, { S(KM_LEFT), F(26) },
+    { C('a'), F(26) }, { KM_HOME, F(26) }, { S(KM_RIGHT), F(27) },
+    { C('e'), F(27) }, { KM_END, F(27) }, { 8, F(28) }, { 127, F(29) },
+    { S(8), F(30) }, { C('u'), F(30) }, { 13, F(31) }, { 27, F(32) },
+    { 9, F(33) }, { KM_UP, F(34) }, { KM_DOWN, F(35) },
+#undef F
+#undef S
 };
 #undef A
 #undef C
@@ -141,7 +200,12 @@ struct KeyBind keys_binds[MAXKB];
 int keys_n;
 char keys_bad[80];                      /* the key file's first bad line */
 
-static const char *const secnames[] = { "window", "call", "shell" };
+static const char *const secnames[] = { "window", "call", "shell", "files",
+                                        "filesline",
+                                        /* files.keys's, read once */
+                                        "panels", "line" };
+#define KEYFILE_OLD "ENVARC:CTerm/files.keys"
+#define KEYFILE_GONE "ENVARC:CTerm/files.keys.old"
 
 /* named keys: their names in the file (CFile's, and a PC keyboard's) */
 static const struct { const char *n; UWORD k; } kn[] = {
@@ -399,10 +463,10 @@ static void key_line(char *l, int *ctx, int no, int pass, UBYTE *named)
         return;
     if (*l == '[' && l[1] && strchr(l, ']') && !strchr(l, ' ')) {
         *ctx = 0;
-        for (i = 0; i < 3; i++)
+        for (i = 0; i < 7; i++)
             if (!strnicmp(l + 1, secnames[i], strlen(secnames[i])) &&
                 l[1 + strlen(secnames[i])] == ']')
-                *ctx = i + 1;
+                *ctx = i < KC_N ? i + 1 : i - 1;    /* [panels] [line] */
         if (!*ctx && !keys_bad[0] && pass) {
             strcpy(keys_bad, "line ");
             numstr_cat(keys_bad, no);
@@ -442,9 +506,9 @@ static void key_line(char *l, int *ctx, int no, int pass, UBYTE *named)
         keys_bind(*ctx, k, a);
 }
 
-static void key_text(char *t, int pass, UBYTE *named)
+static void key_text(char *t, int ctx, int pass, UBYTE *named)
 {
-    int ctx = KC_WINDOW, no = 0;
+    int no = 0;
     char *e;
     while (t && *t) {
         int l;
@@ -460,30 +524,20 @@ static void key_text(char *t, int pass, UBYTE *named)
     }
 }
 
-/* The built-in keys, then the file: an action it names has the file's
- * keys only; the others (new ones since it was written) keep theirs.
- * No file: written with the built-in keys. */
-void keys_load(void)
+/* A key file's text (NULL: none; *gone: it is not there). */
+static char *key_read(const char *name, BOOL *gone)
 {
-    char *t;
+    char *t = NULL;
     BPTR f;
     LONG n;
-    UBYTE named[KA_N];
     struct Process *me = (struct Process *)FindTask(NULL);
     APTR wp = me->pr_WindowPtr;
-    keys_defaults();
-    keys_bad[0] = 0;
     me->pr_WindowPtr = (APTR)-1;        /* no "insert volume" */
-    f = Open((STRPTR)KEYFILE, MODE_OLDFILE);
-    if (!f) {
-        if (IoErr() == ERROR_OBJECT_NOT_FOUND && keys_save()) {
-            userkey[0] = 'U';
-            passkey[0] = 'P';
-        }
-        me->pr_WindowPtr = wp;
-        return;
-    }
+    f = Open((STRPTR)name, MODE_OLDFILE);
+    *gone = !f && IoErr() == ERROR_OBJECT_NOT_FOUND;
     me->pr_WindowPtr = wp;
+    if (!f)
+        return NULL;
     Seek(f, 0, OFFSET_END);
     n = Seek(f, 0, OFFSET_BEGINNING);
     if (n < 0 || n > 16000)
@@ -491,17 +545,70 @@ void keys_load(void)
     if ((t = AllocVec(n + 1, MEMF_ANY))) {
         n = Read(f, t, n);
         t[n > 0 ? n : 0] = 0;
-        memset(named, 0, sizeof named);
-        key_text(t, 0, named);
-        for (n = 1; n < KA_N; n++)
-            if (named[n])
-                keys_unbind(n);
-        key_text(t, 1, named);
-        FreeVec(t);
     }
     Close(f);
-    userkey[0] = 'U';                   /* the old settings' keys: in the */
-    passkey[0] = 'P';                   /* file now */
+    return t;
+}
+
+/* A file's keys over the built-in ones: an action it names has its
+ * keys only. ctx: the section before the first [section]. */
+static void key_apply(char *t, int ctx, UBYTE *named)
+{
+    int a;
+    memset(named, 0, KA_N);
+    key_text(t, ctx, 0, named);
+    for (a = 1; a < KA_N; a++)
+        if (named[a])
+            keys_unbind(a);
+    key_text(t, ctx, 1, named);
+}
+
+/* The built-in keys, then the file: an action it names has the file's
+ * keys only; the others (new ones since it was written) keep theirs.
+ * No file: written with the built-in keys. The file browser's keys
+ * were files.keys of their own until 0.3b18: when CTerm.keys has no
+ * [files] or [filesline] yet, files.keys is read into it once, written
+ * whole, and renamed files.keys.old (left for the person, not read
+ * again). */
+void keys_load(void)
+{
+    char *t, bad[80];
+    BOOL gone, oldgone, infile, browser = FALSE;
+    UBYTE named[KA_N];
+    int a;
+    keys_defaults();
+    keys_bad[0] = 0;
+    t = key_read(KEYFILE, &gone);
+    if (!t && !gone)
+        return;                         /* there, but not readable: kept */
+    if ((infile = t != NULL)) {
+        key_apply(t, KC_WINDOW, named);
+        FreeVec(t);
+        for (a = KA_FB_FIRST; a <= KA_FB_LAST; a++)
+            if (named[a])
+                browser = TRUE;
+    }
+    if (!browser) {
+        BOOL old = FALSE;
+        if ((t = key_read(KEYFILE_OLD, &oldgone))) {
+            strcpy(bad, keys_bad);      /* its bad lines are not said */
+            key_apply(t, KC_FILES, named);  /* [panels] if it names none */
+            FreeVec(t);
+            strcpy(keys_bad, bad);
+            old = TRUE;
+        }
+        if (keys_save()) {              /* written whole, the browser's in */
+            infile = TRUE;
+            if (old) {
+                DeleteFile((STRPTR)KEYFILE_GONE);
+                Rename((STRPTR)KEYFILE_OLD, (STRPTR)KEYFILE_GONE);
+            }
+        }
+    }
+    if (infile) {
+        userkey[0] = 'U';               /* the old settings' keys: in the */
+        passkey[0] = 'P';               /* file now */
+    }
 }
 
 static void kput(BPTR f, const char *s)
@@ -533,12 +640,21 @@ BOOL keys_save(void)
          "; <S-Up> <C-S-Tab>. 'none action': the action has no key; 'KEYS\n"
          "; none': the key does nothing of CTerm's. A key no action has goes\n"
          "; to the program (the Shell, the host), as on any terminal.\n"
-         "; The file browser's keys are in files.keys.\n");
-    for (c = 1; c <= 3; c++) {
+         "; Each section's keys are its own: a key may be in two sections.\n"
+         "; [window]'s come first, in every tab (but its history keys in\n"
+         "; the file browser).\n");
+    for (c = 1; c <= KC_N; c++) {
         kput(f, c == KC_WINDOW ? "\n; in every tab (menus, tabs, history)\n"
              : c == KC_CALL ? "\n; while a call is made or a transfer runs; "
                               "after a call ended\n"
-             : "\n; the Amiga Shell's line, as it is typed\n");
+             : c == KC_SHELL ? "\n; the Amiga Shell's line, as it is typed\n"
+             : c == KC_FILES ? "\n; the file browser's panels (FTP, SFTP). "
+                               "Letters no key has find a\n; name as they are "
+                               "typed; yes and no are always y and n. Right\n"
+                               "; Amiga and Alt do not come here (Alt types "
+                               "its character)\n"
+             : "\n; a line typed in the file browser (a name, the command "
+               "line)\n");
         kput(f, "[");
         kput(f, secnames[c - 1]);
         kput(f, "]\n");

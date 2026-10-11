@@ -1588,6 +1588,5 @@ APTR part_main(void)
 {
     static struct FilesPart p = { f_call, f_menu, f_key, f_mouse,
                                   f_resized, f_tab_gone, f_rexx, f_idle };
-    ui_keys();
     return &p;
 }

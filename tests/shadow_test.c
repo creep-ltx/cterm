@@ -38,7 +38,7 @@ static int run(const char *file, int cols, int rows, int amiga, int chunk)
     n = fread(buf, 1, sizeof buf, f);
     fclose(f);
     v = vt_new(cols, rows, 50);
-    if (amiga) vt_set_amiga(v, 1);
+    if (amiga) { vt_set_utf8(v, 0); vt_set_amiga(v, 1); }
     memset(sh, 0, sizeof sh);
     vt_take_changes(v, &c);
     for (i = 0; i < n && !bad; i += chunk) {

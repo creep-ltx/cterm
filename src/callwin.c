@@ -104,9 +104,13 @@ static void call_tab(const char *host, BOOL pc, BOOL ssh)
     strcpy(dialtitle, ssh ? "CTerm: ssh " : "CTerm: ");
     strncat(dialtitle, dialhost, sizeof dialtitle - 20);
     sshmode = ssh;
-    pcmode = pc;
-    if (pc)
-        vt_set_cp437(vt, 1);
+    if (pc != pcmode) {                 /* the window's choice wins */
+        pcmode = pc;
+        if (pc)
+            vt_set_cp437(vt, 1);
+        else
+            vt_set_utf8(vt, utf8 = saved_utf8);
+    }
     tab_show(ntabs - 1);
     say("\x1b[2m[calling ");
     say(dialhost);

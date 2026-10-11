@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b17 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b18 (11.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -725,8 +725,13 @@ struct Tab *tab_new(void)
     }
     t->t_sock = t->t_lfd = -1;
     t->t_local = TRUE;
-    t->t_utf8 = saved_utf8;
+    /* the default characters (Settings, Text); a phone book place, a
+     * call or the browser may change them after */
+    t->t_utf8 = saved_utf8 && !saved_pc;
+    t->t_pcmode = saved_pc;
     vt_set_utf8(t->t_vt, t->t_utf8);
+    if (t->t_pcmode)
+        vt_set_cp437(t->t_vt, 1);
     tabs[ntabs++] = t;
     pics_tab(t);
     return t;
@@ -1240,6 +1245,7 @@ BOOL loop_round(LONG xfd, LONG ms)
     title_update();
     if (win && !win->MenuStrip && menu)
         SetMenuStrip(win, menu);    /* Ed has gone */
+    menu_ticks();                   /* the shown tab's characters */
     if (con_render_due() && owed)
         draw_now();
     if (hostdata)
