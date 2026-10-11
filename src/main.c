@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b16 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b17 (11.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -543,14 +543,6 @@ static void save_prefs_(char *buf)
     if (!pcfont) strcat(buf, "\npcfont=0");
     if (!altmeta) strcat(buf, "\naltmeta=0");
     if (!pics) strcat(buf, "\npictures=0");
-    if (userkey[0] != 'U') {
-        strcat(buf, "\nkeyuser=");
-        strcat(buf, userkey[0] ? userkey : "-");
-    }
-    if (passkey[0] != 'P') {
-        strcat(buf, "\nkeypass=");
-        strcat(buf, passkey[0] ? passkey : "-");
-    }
     if (dldir[0]) { strcat(buf, "\ndldir="); strcat(buf, dldir); }
     if (uldir[0]) { strcat(buf, "\nuldir="); strcat(buf, uldir); }
     if (bgfile[0]) {
@@ -889,7 +881,7 @@ void tab_hangup(void)
     if (T->t_rf)
         files_tab_gone(T);
     rexx_tab_over(T);
-    say("\r\n\x1b[0;2m[hung up - Return calls again]\x1b[0m\r\n");
+    say_key("\r\n\x1b[0;2m[hung up - ", KA_REDIAL, " calls again]\x1b[0m\r\n");
 }
 
 /* Everyone out: the Shells are told the input ended, hosts hung up on. */
@@ -1005,10 +997,15 @@ static void run(void)
         say(T->t_serial && !T->t_st.phone[0] ? "\x1b[2m[opening "
                                            : "\x1b[2m[calling ");
         say(dialhost);
-        say("... Esc gives up]\x1b[0m\r\n");
+        say("... ");
+        say(keys_word(KA_STOP));
+        say(" gives up]\x1b[0m\r\n");
         refresh();
-        if (!connect_out())
-            say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+        if (!connect_out()) {
+            say("\x1b[2m[");
+            say(keys_word(KA_REDIAL));
+            say(" calls again]\x1b[0m\r\n");
+        }
         else
             rexx_after_call();          /* its place's login script */
     } else {
@@ -1603,6 +1600,8 @@ static int cterm_main(int argc, char **argv)
     CyberGfxBase = OpenLibrary("cybergraphics.library", 40);
     ML("libs");
     load_prefs();
+    keys_load();                        /* after the prefs: their old
+                                           login keys, once */
     ML("prefs");
     panes_init(tabs[0]);
     apply_theme();

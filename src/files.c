@@ -1365,11 +1365,11 @@ static void f_menu_(void)
     tab_show(ntabs - 1);
     say("\x1b[2m[calling ");
     say(dialhost);
-    say(" for SFTP... Esc gives up]\x1b[0m\r\n");
+    say_key(" for SFTP... ", KA_STOP, " gives up]\x1b[0m\r\n");
     refresh();
     f_call_();
     if (!callok)
-        say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+        say_key("\x1b[2m[", KA_REDIAL, " calls again]\x1b[0m\r\n");
     refresh();
 }
 

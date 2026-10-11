@@ -777,8 +777,12 @@ static __attribute__((cold, noinline)) const UBYTE *pic_tile(ULONG cp, int *tw, 
     return p->rgb + ((long)py * p->w + px) * 3;
 }
 
-/* A picture cell into a row of ARGB rw pixels wide */
-static __attribute__((cold, noinline)) void pic_argb(ULONG *d, int rw, ULONG cp)
+/* A picture cell into a row of ARGB rw pixels wide. What the tile does
+ * not cover (a picture's last row or column of cells, one gone) is the
+ * background: bk, the picture behind the text at this cell (its rows
+ * bkw apart), or NULL - the plain colour. */
+static __attribute__((cold, noinline)) void pic_argb(ULONG *d, int rw, ULONG cp,
+                                                     const ULONG *bk, int bkw)
 {
     int tw = 0, th = 0, st = 0, x, y;
     const UBYTE *s = pic_tile(cp, &tw, &th, &st);
@@ -791,8 +795,13 @@ static __attribute__((cold, noinline)) void pic_argb(ULONG *d, int rw, ULONG cp)
             for (; x < tw; x++, q += 3)
                 d[x] = (ULONG)q[0] << 16 | (ULONG)q[1] << 8 | q[2];
         }
-        for (; x < cw; x++)
-            d[x] = defbg;
+        if (bk) {
+            for (; x < cw; x++)
+                d[x] = bk[x];
+            bk += bkw;
+        } else
+            for (; x < cw; x++)
+                d[x] = defbg;
     }
 }
 
@@ -833,7 +842,7 @@ static __attribute__((cold, noinline)) void pic_put(int r, int a, int b)
     for (x = a; x <= b; x++) {
         ULONG cp = line && x < w ? line[x].cp : 0;
         if (deep)
-            pic_argb((ULONG *)buf + (x - a) * cw, rw, cp);
+            pic_argb((ULONG *)buf + (x - a) * cw, rw, cp, NULL, 0);
         else
             pic_pens8(buf + (x - a) * cw, rw, cp, ox + x * cw, y);
     }
@@ -1998,7 +2007,8 @@ static void paint_row(int r)
         if (cp == VT_WIDE_TAIL)
             continue;                   /* drawn with its left half */
         if (rpics && VT_IS_PIC(cp)) {
-            pic_argb(rowbuf + x * cw, rw, cp);
+            pic_argb(rowbuf + x * cw, rw, cp, bk ? backdrop + (oy + r * ch -
+                     bky) * bkw + (ox + x * cw - bkx) : NULL, bkw);
             continue;
         }
         if (x + 1 < cols && x + 1 < w && line && line[x + 1].cp == VT_WIDE_TAIL)

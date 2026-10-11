@@ -85,6 +85,11 @@ struct Vt {
     int uneed;
     uint8_t ubuf[4];                /* the sequence's bytes so far */
     int ulen;
+    uint8_t hold[24];               /* the Amiga Shell in UTF-8: a 2-byte
+                                       lead, then 9B and what came after
+                                       it, held until it is clear whether
+                                       the 9B is CSI (held()) */
+    int hlen;
 
     uint8_t *dirty;
     uint16_t *dx0, *dx1;            /* a dirty row's changed columns */
@@ -110,6 +115,10 @@ struct Vt {
     int npics, pics_cap, pic_id, pic_last;
     int sdm, sright;                    /* DECSET 80: sixels do not scroll;
                                            8452: the cursor right of one */
+    int picnl, picx, picy, picl;        /* an iTerm2 picture just placed,
+                                           the cursor below it (there,
+                                           its line this long): a new
+                                           line now is not a second one */
     struct Sixel *sx;                   /* a sixel picture coming in */
     struct FileIn *fi;                  /* an iTerm2 file coming in */
 };
@@ -118,6 +127,7 @@ struct Vt {
 
 static int pen_gc(Vt *v);
 static void pic_gc(Vt *v, long need);
+static int pic_nl(Vt *v);
 static void sixel_end(Vt *v, int keep);
 static void file_end(Vt *v, int keep);
 
@@ -861,7 +871,7 @@ static void full_reset(Vt *v)
         sixel_end(v, 0);
         file_end(v, 0);
     }
-    v->sdm = v->sright = 0;
+    v->sdm = v->sright = v->picnl = 0;
     v->pen_nomem = 0;
     reset_pen(v);
     use_alt(v, 0, 0);
@@ -1438,8 +1448,8 @@ static COLD int pic_add(Vt *v, VtPic *p)
 }
 
 /* At the cursor (sixel scrolling off: the screen's top left), as rows of
- * tiles; the screen scrolls for it. The cursor goes below it (sixel), or
- * right of its last row (8452, iTerm2). */
+ * tiles; the screen scrolls for it. The cursor goes to the line below it
+ * (sixel, iTerm2), or right of its last row (sixel with 8452). */
 static COLD void pic_place(Vt *v, VtPic *p, int right)
 {
     int nc = (p->w + p->cw - 1) / p->cw, nr = (p->h + p->ch - 1) / p->ch;
@@ -1474,7 +1484,7 @@ static COLD void pic_place(Vt *v, VtPic *p, int right)
     }
     if (fixed)
         return;                         /* the cursor stays */
-    if (right || v->sright) {
+    if (v->sright && !right) {
         v->x = x0 + nx;
         if (v->x >= v->cols) {
             v->x = v->cols - 1;
@@ -1483,7 +1493,25 @@ static COLD void pic_place(Vt *v, VtPic *p, int right)
     } else {
         linefeed(v);
         v->x = x0;
+        if ((v->picnl = right)) {       /* iTerm2's: see pic_nl */
+            v->picx = v->x;
+            v->picy = v->y;
+            v->picl = (int)RLEN(row(v, v->y));
+        }
     }
+}
+
+/* iTerm2 leaves the cursor right of a picture's last row, and imgcat
+ * (ShowPic) then writes a new line; here the cursor is on the line below
+ * already (a prompt never lands beside the picture), so that new line
+ * (CR LF too) is not a second one - while the cursor is still there and
+ * nothing was written on that line. TRUE: the LF is taken. */
+static COLD int pic_nl(Vt *v)
+{
+    int keep = v->y == v->picy && (v->x == v->picx || v->x == 0) &&
+               (int)RLEN(row(v, v->y)) == v->picl;
+    v->picnl = 0;
+    return keep;
 }
 
 /* ---- sixel ---- */
@@ -2026,6 +2054,8 @@ static void control(Vt *v, int c)
         }
         /* fall through */
     case 10:
+        if (v->picnl && pic_nl(v))
+            break;
         linefeed(v);
         if (v->lnm) v->x = 0;
         break;
@@ -2137,17 +2167,72 @@ static void not_utf8(Vt *v, const uint8_t *b, int n)
             c1(v, b[i]);
 }
 
+/* What an Amiga console CSI may end with (the ROM Kernel Manual's
+ * console sequences, Ed's private ones, xterm's that CTerm takes in the
+ * Shell): sp, after a space (CSI 0 SP p, CSI 0 SP q); params, after
+ * parameters. Without any, only the common ones (cursor moves, erase,
+ * insert and delete, SGR): "ś" then "n" is a letter and an n. */
+static COLD int amiga_final(int c, int params, int sp)
+{
+    if (sp)
+        return c == 'p' || c == 'q' || c == 'r' || c == 'v';
+    if (!params)
+        return (c >= '@' && c <= 'H') || (c >= 'J' && c <= 'M') ||
+               c == 'P' || c == 'S' || c == 'T' || c == 'Z' || c == 'm';
+    return (c >= '@' && c <= 'M') || c == 'P' || c == 'S' || c == 'T' ||
+           c == 'W' || c == 'X' || c == 'Z' || c == 'f' || c == 'g' ||
+           c == 'h' || c == 'l' || c == 'm' || c == 'n' ||
+           (c >= 'p' && c <= '~');
+}
+
+/* The Amiga Shell in UTF-8: a lead C2-DF then 9B is either a Latin-1
+ * letter (Ä, Å, Ö) and the console's CSI (C5 9B K: Å, erase to the end)
+ * or one UTF-8 letter whose second byte is 9B (D0 9B: Л; C5 9B: ś).
+ * The bytes after the 9B decide: a whole, plausible Amiga CSI makes it
+ * the letter and CSI, anything else the UTF-8 letter, and those bytes
+ * go on as they are. c: the next byte; held across writes. */
+static COLD void held(Vt *v, int c)
+{
+    uint8_t keep[sizeof v->hold];
+    int i, k = v->hlen, sp = v->hold[k - 1] == ' ', csi;
+    if (k < (int)sizeof v->hold && !sp &&
+        ((c >= '0' && c <= '9') || c == ';' || c == ' ' ||
+         ((c == '>' || c == '?') && k <= 2))) {
+        v->hold[v->hlen++] = (uint8_t)c;
+        return;
+    }
+    csi = amiga_final(c, k - sp > 1, sp);
+    memcpy(keep, v->hold, k);
+    v->hlen = 0;
+    v->uneed = 0;
+    if (csi) {
+        not_utf8(v, v->ubuf, 1);        /* the lead, a Latin-1 letter */
+        i = 0;                          /* then 9B: CSI */
+    } else {
+        ground_char(v, ((uint32_t)(v->ubuf[0] & 0x1F) << 6) | 0x1B);
+        i = 1;                          /* the rest as it is */
+    }
+    for (; i < k; i++)
+        byte(v, keep[i]);
+    byte(v, c);
+}
+
 static void byte(Vt *v, int c)
 {
     switch (v->state) {
     case S_GROUND:
         if (v->utf8 && c >= 0x80) {
             if (v->uneed) {
-                /* in the Amiga Shell a Latin-1 letter C2-DF (Ä, Å, Ö)
-                 * then the console's 9B CSI is not a 2-byte character
-                 * (C5 9B K: Å, erase to the end - not "śK") */
-                if ((c & 0xC0) == 0x80 &&
-                    !(c == 0x9B && v->amigamode && v->umin == 0x80)) {
+                if (v->hlen) {          /* (held bytes: uneed stays 1) */
+                    held(v, c);
+                    return;
+                }
+                if (c == 0x9B && v->amigamode && v->umin == 0x80) {
+                    v->hold[0] = (uint8_t)c;    /* CSI or a letter: the */
+                    v->hlen = 1;                /* next bytes say */
+                    return;
+                }
+                if ((c & 0xC0) == 0x80) {
                     v->uacc = (v->uacc << 6) | (c & 0x3F);
                     v->ubuf[v->ulen++] = (uint8_t)c;
                     if (--v->uneed == 0) {
@@ -2183,6 +2268,10 @@ static void byte(Vt *v, int c)
             return;
         }
         if (v->uneed) {
+            if (v->hlen) {
+                held(v, c);
+                return;
+            }
             v->uneed = 0;
             not_utf8(v, v->ubuf, v->ulen);
             if (v->state != S_GROUND) {
@@ -2475,7 +2564,7 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
         /* a run of new lines: one scroll of them all (scroll-nl, blank
          * lines from programs) instead of a scroll per line */
         if (c == 10 && v->state == S_GROUND && !v->uneed && i + 1 < len &&
-            buf[i + 1] == 10 && v->y <= v->bot) {
+            buf[i + 1] == 10 && v->y <= v->bot && !v->picnl) {
             int k = 1, d, s, h = v->bot - v->top + 1;
             while (i + k < len && buf[i + k] == 10)
                 k++;
@@ -2965,7 +3054,7 @@ void vt_resize(Vt *v, int cols, int rows)
 void vt_set_utf8(Vt *v, int on)
 {
     v->utf8 = v->utf8_set = on;
-    v->uneed = 0;
+    v->uneed = v->hlen = 0;
     v->cp437 = v->cp437_set = 0;
 }
 
@@ -2975,7 +3064,7 @@ void vt_set_cp437(Vt *v, int on)
     v->cp437 = v->cp437_set = on;
     if (on) {
         v->utf8 = v->utf8_set = 0;
-        v->uneed = 0;
+        v->uneed = v->hlen = 0;
     }
 }
 
@@ -2987,7 +3076,7 @@ void vt_set_amiga(Vt *v, int on)
     v->amigamode = on;
     if (on) {
         v->utf8 = v->utf8_set = 0;
-        v->uneed = 0;
+        v->uneed = v->hlen = 0;
         v->lnm = 1;
     } else
         v->lnm = 0;

@@ -39,6 +39,13 @@ static Object *page_screen(void);
 static Object *page_text(void);
 static Object *page_colours(void);
 static Object *page_keys(void);
+static void klist_free(void);
+static void key_shown(void);
+static void key_typed(void);
+static void keys_changed(void);
+static void ktitle(const char *t, UWORD k);
+static BOOL keys_clash(void);
+static BOOL kgrab, kwarned;             /* waiting for a key; warned once */
 static Object *page_modem(void);
 static void finish_settings_(int how);
 static void finish_settings(int how);
@@ -75,7 +82,7 @@ static struct {                         /* what Cancel goes back to */
     BOOL k_pics;
     ULONG k_myfg, k_mybg;
     char k_ttfile[160], k_fontname[48];
-    char k_userkey[2], k_passkey[2], k_dldir[160], k_uldir[160];
+    char k_dldir[160], k_uldir[160];
     SerLine k_serdef;
     Modem k_modem;
 } snap;
@@ -365,6 +372,8 @@ static void close_settings_(void)
     }
     setwin = NULL;
     memset(sg, 0, sizeof sg);
+    klist_free();
+    kgrab = FALSE;
     if (settabs.lh_Head)
         while ((n = RemHead(&settabs)))
             FreeClickTabNode(n);
@@ -479,21 +488,288 @@ static Object *page_colours(void)
     return r_wrap(p);
 }
 
+/* ---- the keys (CTerm.keys): a list of the actions and their keys ----
+ * A row chosen, its keys in the field below: typed (as in the file:
+ * <A-t> <F11>), or a key pressed after "Press a key", or none. A key
+ * taken from another action of the same section is said in the title;
+ * a key that is also another section's is marked ! in the list (the
+ * window's keys come first). */
+
+static const char *const kdesc[KA_N] = {
+    NULL, "New Shell tab", "Call...", "Phone book...", "Serial terminal",
+    "Answer call (ATA)", "Open SFTP browser", "Close tab", "Start log...",
+    "Stop log", "Send user name", "Send password", "Run ARexx script...",
+    "Hide window", "About", "Speed test", "Quit", "Copy", "Paste",
+    "Receive with Ymodem", "Receive with Xmodem...", "Send with Ymodem...",
+    "Send with Xmodem...", "Send with Hydra...", "Show transfers...",
+    "Split left/right", "Split top/bottom", "Next pane", "Close pane",
+    "Settings...", "Amiga font...", "TrueType font...", "Bigger text",
+    "Smaller text", "Screen: Workbench window", "Screen: own, 16 colours",
+    "Screen: own, 256 colours", "Screen: own, like Workbench",
+    "Full screen", "Scroll bar", "UTF-8", "PC BBS (CP437)",
+    "Tab 1", "Tab 2", "Tab 3", "Tab 4", "Tab 5", "Tab 6", "Tab 7", "Tab 8",
+    "Tab 9", "Next tab", "Previous tab", "History: a page up",
+    "History: a page down", "History: a line up", "History: a line down",
+    "History: the top", "History: back to the end",
+    "Stop a transfer, give up a call", "Call again (a call ended)",
+    "A letter left", "A letter right", "To the start", "To the end",
+    "A word left", "A word right", "Delete the letter before",
+    "Delete the letter under", "Delete the word before",
+    "Delete to the start", "Delete to the end", "Clear the line",
+    "The line before (history)", "The line after (history)",
+    "Find in the history", "Complete a name", "Enter the line",
+    "End of input",
+};
+static const char *const khead[3] = {
+    "-- Everywhere (menus, tabs, history) --",
+    "-- Calling, transfers --", "-- The Shell's line, typed --" };
+
+static struct List klist;               /* the rows */
+static struct ColumnInfo kcols[] = {
+    { 60, (STRPTR)"What it does", 0 }, { 40, (STRPTR)"Keys", 0 },
+    { -1, (STRPTR)~0, -1 }
+};
+static UBYTE krow[KA_N + 3];            /* each row's action (0: a heading) */
+static int kcur = -1;                   /* the action shown in the field */
+static int knrow;
+static struct KeyBind kept[MAXKB];      /* the keys at the start (Cancel) */
+static int nkept;
+static char ktitlebuf[100];
+static struct Hook khook;
+
+static void ktitle(const char *t, UWORD k)
+{
+    strcpy(ktitlebuf, "CTerm Settings");
+    if (t) {
+        strcat(ktitlebuf, ": ");
+        if (k) {
+            keys_name(k, ktitlebuf + strlen(ktitlebuf), TRUE);
+            strcat(ktitlebuf, " ");
+        }
+        strncat(ktitlebuf, t, sizeof ktitlebuf - strlen(ktitlebuf) - 1);
+    }
+    if (setwin)
+        SetWindowTitles(setwin, (UBYTE *)ktitlebuf, (UBYTE *)~0);
+}
+
+/* Action a's key k: another section's too? (the action, or 0) */
+static int kother(int a, UWORD k)
+{
+    int i;
+    for (i = 0; i < keys_n; i++)
+        if (keys_binds[i].key == k && keys_binds[i].act != a &&
+            keys_acts[keys_binds[i].act].ctx != keys_acts[a].ctx &&
+            (keys_acts[a].ctx == KC_WINDOW ||
+             keys_acts[keys_binds[i].act].ctx == KC_WINDOW))
+            return keys_binds[i].act;
+    return 0;
+}
+
+/* Action a's keys: in words for the list (o: 64 bytes; "!" first when
+ * one is also another section's), or as the file has them */
+static void ktext(int a, char *o, BOOL plain)
+{
+    int i;
+    char n[24];
+    o[0] = 0;
+    for (i = 0; i < keys_n; i++)
+        if (keys_binds[i].act == a) {
+            keys_name(keys_binds[i].key, n, plain);
+            if (strlen(o) + strlen(n) + 4 >= 64)
+                break;
+            if (o[0])
+                strcat(o, plain ? ", " : " ");
+            if (plain && kother(a, keys_binds[i].key))
+                strcat(o, "! ");
+            strcat(o, n);
+        }
+}
+
+static void klist_free(void)
+{
+    struct Node *n;
+    if (klist.lh_Head)
+        while ((n = RemHead(&klist)))
+            FreeListBrowserNode(n);
+}
+
+static void klist_make(void)
+{
+    int a, c;
+    char t[64];
+    NewList(&klist);
+    knrow = 0;
+    for (c = KC_WINDOW; c <= KC_SHELL; c++) {
+        struct Node *n = AllocListBrowserNode(2, LBNA_Flags, LBFLG_READONLY,
+            LBNA_Column, 0, LBNCA_Text, (ULONG)khead[c - 1],
+            LBNA_Column, 1, LBNCA_Text, (ULONG)"", TAG_END);
+        if (n)
+            AddTail(&klist, n), krow[knrow++] = 0;
+        for (a = 1; a < KA_N; a++) {
+            if (keys_acts[a].ctx != c)
+                continue;
+            ktext(a, t, TRUE);
+            n = AllocListBrowserNode(2, LBNA_Column, 0, LBNCA_Text,
+                (ULONG)kdesc[a], LBNA_Column, 1, LBNCA_CopyText, TRUE,
+                LBNCA_Text, (ULONG)t, TAG_END);
+            if (n)
+                AddTail(&klist, n), krow[knrow++] = a;
+        }
+    }
+}
+
+/* The field: the chosen action's keys, as the file writes them */
+static void key_shown(void)
+{
+    LONG r = get_attr(S_KLIST, LISTBROWSER_Selected);
+    char t[64];
+    kcur = r >= 0 && r < knrow ? krow[r] : 0;
+    ktext(kcur, t, FALSE);
+    set_attr(S_KTEXT, STRINGA_TextVal, (ULONG)(kcur ? t : ""));
+    ktitle(kcur ? keys_acts[kcur].name : NULL, 0);
+}
+
+/* The list again, after a change: the same row chosen */
+static void keys_changed(void)
+{
+    LONG r = get_attr(S_KLIST, LISTBROWSER_Selected);
+    LONG top = get_attr(S_KLIST, LISTBROWSER_Top);
+    set_attr(S_KLIST, LISTBROWSER_Labels, ~0UL);
+    klist_free();
+    klist_make();
+    set_attr(S_KLIST, LISTBROWSER_Labels, (ULONG)&klist);
+    set_attr(S_KLIST, LISTBROWSER_Selected, (ULONG)r);
+    set_attr(S_KLIST, LISTBROWSER_Top, (ULONG)top);
+    if (kcur > 0) {
+        char t[64];
+        ktext(kcur, t, FALSE);
+        set_attr(S_KTEXT, STRINGA_TextVal, (ULONG)t);
+    }
+    kwarned = FALSE;
+}
+
+/* k given to action a: the action that had it in a's section, or
+ * another section's that has it too, is said in the title */
+static void key_give(int a, UWORD k)
+{
+    int had = keys_find(keys_acts[a].ctx, k), o = 0;
+    keys_bind(0, k, a);
+    if (had && had != a)
+        ktitle("taken from ", k);
+    else if ((o = kother(a, k)))
+        ktitle(keys_acts[a].ctx == KC_WINDOW ? "comes first, before "
+                                             : "is first ", k);
+    if ((had && had != a) || o) {
+        strncat(ktitlebuf, kdesc[o ? o : had],
+                sizeof ktitlebuf - strlen(ktitlebuf) - 1);
+        SetWindowTitles(setwin, (UBYTE *)ktitlebuf, (UBYTE *)~0);
+    }
+}
+
+/* Keys typed in the field: all of them, or nothing changes */
+static void key_typed(void)
+{
+    const char *t = (const char *)get_attr(S_KTEXT, STRINGA_TextVal);
+    UWORD ks[8];
+    int n = 0, l;
+    if (kcur <= 0 || !t)
+        return;
+    while (*t) {
+        while (*t == ' ' || *t == ',')
+            t++;
+        for (l = 0; t[l] && t[l] != ' ' && !(t[l] == ',' && l); l++)
+            ;
+        if (!l)
+            break;
+        if (n == 8 || !(ks[n++] = keys_parse(t, l))) {
+            beep();
+            ktitle("not a key (as in the file: <A-t> <C-r> <F5> <S-Up>)",
+                   0);
+            return;
+        }
+        t += l;
+    }
+    keys_unbind(kcur);
+    ktitle(keys_acts[kcur].name, 0);
+    for (l = 0; l < n; l++)
+        key_give(kcur, ks[l]);
+    keys_changed();
+}
+
+/* The window's raw keys, while a key is waited for: kept for
+ * settings_events (the window's work is not done here) */
+static UWORD kgot;
+static ULONG key_hook(register struct Hook *h __asm("a0"),
+                      register APTR o __asm("a2"),
+                      register struct IntuiMessage *m __asm("a1"))
+{
+    (void)h; (void)o;
+    if (kgrab && m->Class == IDCMP_RAWKEY && !kgot)
+        kgot = keys_code(m->Code, m->Qualifier,
+                         m->IAddress ? *((APTR *)m->IAddress) : NULL);
+    return 0;                           /* 0: a qualifier, a release */
+}
+
+/* The key pressed for the chosen action */
+static void key_pressed(void)
+{
+    UWORD k = kgot;
+    kgot = 0;
+    if (!kgrab || kcur <= 0)
+        return;
+    kgrab = FALSE;
+    keys_unbind(kcur);
+    ktitle(keys_acts[kcur].name, 0);
+    key_give(kcur, k);
+    keys_changed();
+}
+
+/* Use or Save with a key two sections share: said once (marked ! in the
+ * list); pressed again, done */
+static BOOL keys_clash(void)
+{
+    int i, o;
+    for (i = 0; i < keys_n && !kwarned; i++)
+        if ((o = kother(keys_binds[i].act, keys_binds[i].key))) {
+            kwarned = TRUE;
+            beep();
+            set_attr(S_TABS, CLICKTAB_Current, 3);
+            ktitle("is two actions' (marked !) - again to keep it",
+                   keys_binds[i].key);
+            return TRUE;
+        }
+    return FALSE;
+}
+
 static Object *page_keys(void)
 {
-    Object *p = r_page(), *g = r_group("Keys");
+    Object *h, *p = r_page(),
+           *g = r_group("CTerm's own keys (the file browser's: files.keys)");
     r_add(g, r_chooser(S_ALT, altlabels, !altmeta), "Alt key");
-    r_put(p, g);
-    g = r_group("Right Amiga + a letter: the phone book's login");
-    /* MaxChars counts the closing zero: 2 for one letter */
-    if (g && r_string(S_KUSER, userkey, 2, FALSE))
-        SetAttrs(g, LAYOUT_AddChild, (ULONG)sg[S_KUSER], CHILD_MaxWidth, 40,
-                 CHILD_Label, (ULONG)r_label("Send user name"), TAG_END);
-    if (g && r_string(S_KPASS, passkey, 2, FALSE))
-        SetAttrs(g, LAYOUT_AddChild, (ULONG)sg[S_KPASS], CHILD_MaxWidth, 40,
-                 CHILD_Label, (ULONG)r_label("Send password"), TAG_END);
-    r_put(p, g);
-    return r_wrap(p);
+    klist_make();
+    kcur = -1;
+    sg[S_KLIST] = ListBrowserObject, GA_ID, S_KLIST, GA_RelVerify, TRUE,
+        LISTBROWSER_Labels, (ULONG)&klist, LISTBROWSER_ColumnInfo,
+        (ULONG)kcols, LISTBROWSER_ColumnTitles, TRUE,
+        LISTBROWSER_ShowSelected, TRUE, LISTBROWSER_AutoFit, TRUE, End;
+    if (g && sg[S_KLIST])
+        SetAttrs(g, LAYOUT_AddChild, (ULONG)sg[S_KLIST],
+                 CHILD_MinHeight, 5 * (scr->RastPort.TxHeight + 2) + 4,
+                 TAG_END);
+    h = HLayoutObject, End;
+    r_add(h, r_string(S_KTEXT, "", 64, FALSE), "Keys");
+    if (h && r_button(S_KPRESS, "Press a key") && r_button(S_KNONE, "None")
+        && r_button(S_KDEF, "Defaults"))
+        SetAttrs(h, LAYOUT_AddChild, (ULONG)sg[S_KPRESS],
+                 CHILD_WeightedWidth, 0, LAYOUT_AddChild, (ULONG)sg[S_KNONE],
+                 CHILD_WeightedWidth, 0, LAYOUT_AddChild, (ULONG)sg[S_KDEF],
+                 CHILD_WeightedWidth, 0, TAG_END);
+    if (g && h)
+        SetAttrs(g, LAYOUT_AddChild, (ULONG)h, CHILD_WeightedHeight, 0,
+                 TAG_END);
+    if (p && g)                         /* the list takes the page's height */
+        SetAttrs(p, LAYOUT_AddChild, (ULONG)g, TAG_END);
+    return p;
 }
 
 static void open_settings_(void)
@@ -528,8 +804,9 @@ static void open_settings_(void)
     snap.k_s_utf8 = utf8; snap.k_pc = pcmode;
     snap.k_bgsee = bgsee;
     strcpy(snap.k_bgfile, bgfile);
-    strcpy(snap.k_userkey, userkey);
-    strcpy(snap.k_passkey, passkey);
+    CopyMem(keys_binds, kept, sizeof kept);   /* the keys, for Cancel */
+    nkept = keys_n;
+    kgrab = kwarned = FALSE;
     strcpy(snap.k_dldir, dldir);
     strcpy(snap.k_uldir, uldir);
     snap.k_serdef = serdef;
@@ -542,6 +819,7 @@ static void open_settings_(void)
     pend_full = fullscreen;
     pend_bar = scrollbar;
 
+    khook.h_Entry = (ULONG (*)())key_hook;
     NewList(&settabs);
     for (i = 0; tablabels[i]; i++) {
         struct Node *n = AllocClickTabNode(TNA_Text, (ULONG)tablabels[i],
@@ -597,7 +875,9 @@ static void open_settings_(void)
         scr == ownscr ? WA_CustomScreen : WA_PubScreen, (ULONG)scr,
         WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE,
         WA_SizeGadget, TRUE, WA_Activate, TRUE,
-        WINDOW_Position, WPOS_CENTERSCREEN, WINDOW_Layout, (ULONG)root, End;
+        WINDOW_Position, WPOS_CENTERSCREEN, WINDOW_Layout, (ULONG)root,
+        WINDOW_IDCMPHook, (ULONG)&khook, WINDOW_IDCMPHookBits, IDCMP_RAWKEY,
+        End;
     if (!setobj) {
         DisposeObject(root);
         memset(sg, 0, sizeof sg);
@@ -607,6 +887,8 @@ static void open_settings_(void)
     setwin = (struct Window *)DoMethod(setobj, WM_OPEN);
     if (!setwin)
         set_close();
+    else if (keys_bad[0])
+        ktitle(keys_bad, 0);            /* CTerm.keys: a line not taken */
 }
 
 /* Use (1), Save (2) or Cancel (3). */
@@ -621,10 +903,6 @@ static void finish_settings_(int how)
     const char *t;
     BOOL go = TRUE;
     if (how != 3) {
-        if ((t = (const char *)get_attr(S_KUSER, STRINGA_TextVal)))
-            userkey[0] = toupper((UBYTE)t[0]);
-        if ((t = (const char *)get_attr(S_KPASS, STRINGA_TextVal)))
-            passkey[0] = toupper((UBYTE)t[0]);
         if ((t = (const char *)get_attr(S_DLDIR, GETFILE_Drawer))) {
             strncpy(dldir, t, sizeof dldir - 1);
             dldir[sizeof dldir - 1] = 0;
@@ -657,6 +935,8 @@ static void finish_settings_(int how)
                        snap.k_fontsize != fontsize ||
                        snap.k_linespace != linespace;
         theme = snap.k_theme;
+        CopyMem(kept, keys_binds, sizeof kept);
+        keys_n = nkept;
         serdef = snap.k_serdef;
         modem = snap.k_modem;
         pcfont = snap.k_pcfont;
@@ -722,56 +1002,9 @@ static void finish_settings_(int how)
     envonly = used_only;
     save_prefs();
     envonly = FALSE;
-    remake_menus();                     /* the login keys */
-}
-
-/* The login key typed in gadget id, as it would be kept (0: none). */
-static char key_typed(int id)
-{
-    const char *t = (const char *)get_attr(id, STRINGA_TextVal);
-    return t ? toupper((UBYTE)t[0]) : 0;
-}
-
-/* Does key k (Right Amiga + it) do something else already: a menu's,
- * a tab's number, the other login key? The menus are walked as they are,
- * so a new shortcut there is seen too. */
-static BOOL key_taken(char k, char other)
-{
-    struct Menu *m;
-    struct MenuItem *it, *sub;
-    if (!k || k == '-')
-        return FALSE;
-    if ((k >= '0' && k <= '9') || k == other)
-        return TRUE;
-    for (m = menu; m; m = m->NextMenu)
-        for (it = m->FirstItem; it; it = it->NextItem) {
-            ULONG id = (ULONG)GTMENUITEM_USERDATA(it);
-            if (id != M_SENDUSER && id != M_SENDPASS &&
-                (it->Flags & COMMSEQ) && toupper((UBYTE)it->Command) == k)
-                return TRUE;
-            for (sub = it->SubItem; sub; sub = sub->NextItem)
-                if ((sub->Flags & COMMSEQ) &&
-                    toupper((UBYTE)sub->Command) == k)
-                    return TRUE;
-        }
-    return FALSE;
-}
-
-/* Use or Save with a login key another shortcut has: refused, the window
- * says why and stays (else that key would steal, say, Quit). */
-static BOOL keys_clash(void)
-{
-    char u = key_typed(S_KUSER), p = key_typed(S_KPASS);
-    int bad = key_taken(u, p) ? S_KUSER : key_taken(p, u) ? S_KPASS : 0;
-    if (!bad)
-        return FALSE;
-    beep();
-    SetWindowTitles(setwin, (UBYTE *)"CTerm Settings: that key is taken "
-                    "(Keys tab)", (UBYTE *)~0);
-    set_attr(S_TABS, CLICKTAB_Current, 3);
-    ActivateLayoutGadget((struct Gadget *)setlayout, setwin, NULL,
-                         (ULONG)sg[bad]);
-    return TRUE;
+    if (how == 2 && !keys_save())       /* the keys: ENVARC: (Use: kept */
+        beep();                         /* until CTerm quits) */
+    remake_menus();                     /* the keys */
 }
 
 /* One control was used: 1 Use, 2 Save, 3 Cancel, 0 stay open. */
@@ -937,6 +1170,26 @@ static int settings_gadget(int id)
             set_attr(S_SERLINE, GA_Text, (ULONG)linetext);
         }
         break;
+    case S_KLIST: kgrab = FALSE; key_shown(); break;
+    case S_KTEXT: key_typed(); break;
+    case S_KPRESS:
+        if (kcur > 0) {
+            kgrab = !kgrab;
+            ktitle(kgrab ? "press the new key (this button again: no change)"
+                         : NULL, 0);
+        }
+        break;
+    case S_KNONE:
+        if (kcur > 0) {
+            keys_unbind(kcur);
+            keys_changed();
+        }
+        break;
+    case S_KDEF:
+        keys_defaults();
+        keys_changed();
+        ktitle("the keys CTerm comes with", 0);
+        break;
     case S_SAVE: return keys_clash() ? 0 : 2;
     case S_USE: return keys_clash() ? 0 : 1;
     case S_CANCEL: return 3;
@@ -957,9 +1210,13 @@ static void settings_events_(void)
             how = 3;
             break;
         case WMHI_GADGETUP:
+            if ((kgrab || kgot) && (res & WMHI_GADGETMASK) != S_KPRESS)
+                break;                  /* a key pressed for the list */
             how = settings_gadget(res & WMHI_GADGETMASK);
             break;
         }
+        if (kgot)
+            key_pressed();
     }
     if (how)
         finish_settings(how);

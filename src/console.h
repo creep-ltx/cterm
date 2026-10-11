@@ -23,6 +23,11 @@ BOOL con_raw(struct Con *c);            /* raw: Ed, More may hold win */
 void con_window_moved(struct Window *old, struct Window *now);
 void con_window_back(struct Window *now, struct Con **cs, int n);
 void con_keys(struct Con *c, const UBYTE *b, LONG n);  /* typed bytes */
+/* The line editor's actions, in the order of CTerm.keys' [shell] (keys.c) */
+enum { CE_LEFT, CE_RIGHT, CE_START, CE_END, CE_WORDLEFT, CE_WORDRIGHT,
+       CE_BACK, CE_DELETE, CE_WORDBACK, CE_KILLSTART, CE_KILLEND, CE_CLEAR,
+       CE_OLDER, CE_NEWER, CE_SEARCH, CE_COMPLETE, CE_ACCEPT, CE_EOF, CE_N };
+void con_edit(struct Con *c, int what);  /* cooked: an editing key */
 void con_reply(struct Con *c, const UBYTE *b, LONG n); /* DSR replies... */
 BOOL con_paste(struct Con *c, const UBYTE *b, LONG n); /* as text */
 void con_close_gadget(struct Con *c);   /* the window's close gadget */

@@ -23,7 +23,7 @@
 
 #define SERMOD_MAGIC   0x43545331UL     /* "CTS1": this interface */
 #define SERMOD_HEAD    0x4354534cUL     /* "CTSL": the header's mark */
-#define SERMOD_VERSION 1UL              /* SerEnv, SerMod, SerTab, SerLine
+#define SERMOD_VERSION 2UL              /* SerEnv, SerMod, SerTab, SerLine
                                          * and Modem's shapes */
 
 struct SerEnv {
@@ -44,6 +44,8 @@ struct SerEnv {
     void (*now)(struct timeval *tv);
     void (*num)(char *out, LONG n);     /* a number, at out's end */
     void (*linetext)(const SerLine *l, char *out, int max);
+    const char *(*keyword)(int which);  /* a key's name in words: 0 the
+                                         * stop key's (Esc), 1 redial's */
 };
 
 struct SerMod {

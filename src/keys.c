@@ -3,7 +3,6 @@
  */
 #include "cterm.h"
 
-static BOOL redial_key(const char *b);
 static void raw_report(int cls, int code, int qual);
 static void browser_key(UWORD code, UWORD q, APTR prev);
 static BOOL wheelmsgs;                  /* Intuition sends the wheel as
@@ -11,32 +10,62 @@ static BOOL wheelmsgs;                  /* Intuition sends the wheel as
 static BOOL wheelkey;                   /* ... one, made a key */
 static void bar_pull(int y);
 
-/* After a call ended: Return calls again; other keys do nothing. A
- * file browser's tab: Return opens its browser (calling again first if
- * the call ended). */
-static BOOL redial_key(const char *b)
+/* After a call ended: the redial key (Return) calls again; other keys
+ * do nothing. A file browser's tab: it opens its browser (calling again
+ * first if the call ended). */
+static void redial(void)
 {
     if (T->t_fkind) {
-        if (b[0] == '\r')
-            files_call();
+        files_call();
+        return;
+    }
+    say(T->t_serial && !T->t_st.phone[0] ? "\x1b[2m[opening "
+                                       : "\x1b[2m[calling ");
+    say(dialhost);
+    say("... ");
+    say(keys_word(KA_STOP));
+    say(" gives up]\x1b[0m\r\n");
+    refresh();
+    if (connect_out()) {
+        if (!T->t_serial)               /* a line says its own */
+            say("\x1b[2m[connected]\x1b[0m\r\n");
+        rexx_after_call();              /* its place's login script */
+    } else {
+        say("\x1b[2m[");
+        say(keys_word(KA_REDIAL));
+        say(" calls again]\x1b[0m\r\n");
+    }
+    refresh();                          /* the screen waited with the call */
+}
+
+/* One of the [window] actions: a menu item's, a tab, the history. */
+static BOOL window_key(int a)
+{
+    int i;
+    if (keys_acts[a].menu)
+        return menu_pick(keys_acts[a].menu);
+    if (a >= KA_TAB1 && a <= KA_TAB9) {
+        if (a - KA_TAB1 < ntabs)
+            tab_show(a - KA_TAB1);
         return TRUE;
     }
-    if (local || !dialhost[0] || linked)
-        return FALSE;
-    if (b[0] == '\r') {
-        say(T->t_serial && !T->t_st.phone[0] ? "\x1b[2m[opening "
-                                           : "\x1b[2m[calling ");
-        say(dialhost);
-        say("... Esc gives up]\x1b[0m\r\n");
-        refresh();
-        if (connect_out()) {
-            if (!T->t_serial)           /* a line says its own */
-                say("\x1b[2m[connected]\x1b[0m\r\n");
-            rexx_after_call();          /* its place's login script */
-        }
-        else
-            say("\x1b[2m[Return calls again]\x1b[0m\r\n");
-        refresh();                      /* the screen waited with the call */
+    for (i = 0; i < ntabs && tabs[i] != T; i++)
+        ;
+    switch (a) {
+    case KA_NEXTTAB:
+        if (ntabs > 1)
+            tab_show((i + 1) % ntabs);
+        break;
+    case KA_PREVTAB:
+        if (ntabs > 1)
+            tab_show((i + ntabs - 1) % ntabs);
+        break;
+    case KA_PAGEUP: scroll_view(back + rows - 1); break;
+    case KA_PAGEDOWN: scroll_view(back - (rows - 1)); break;
+    case KA_LINEUP: scroll_view(back + 1); break;
+    case KA_LINEDOWN: scroll_view(back - 1); break;
+    case KA_HISTTOP: scroll_view(vt_history(vt)); break;
+    case KA_HISTEND: scroll_view(0); break;
     }
     return TRUE;
 }
@@ -68,15 +97,16 @@ void send_typed(const UBYTE *b, LONG n)
         send_data(out, k);
 }
 
-void key(struct IntuiMessage *m)
+BOOL key(struct IntuiMessage *m)
 {
-    UWORD code = m->Code, q = m->Qualifier;
+    UWORD code = m->Code, q = m->Qualifier, k;
+    APTR prev = m->IAddress ? *((APTR *)m->IAddress) : NULL;
     BOOL shift = (q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT)) != 0;
     BOOL ctrl = (q & IEQUALIFIER_CONTROL) != 0;
     /* Alt is Meta in a host's tab (the setting); the local Shell keeps
      * the Amiga's Alt characters */
     BOOL meta = altmeta && (q & (IEQUALIFIER_LALT | IEQUALIFIER_RALT));
-    int mod = 1 + (shift ? 1 : 0) + (meta ? 2 : 0) + (ctrl ? 4 : 0);
+    int mod = 1 + (shift ? 1 : 0) + (meta ? 2 : 0) + (ctrl ? 4 : 0), a;
     char buf[16];
     LONG n;
     static const char *const fkeys[10] = {
@@ -84,37 +114,41 @@ void key(struct IntuiMessage *m)
         "\x1b[18~", "\x1b[19~", "\x1b[20~", "\x1b[21~"
     };
     if ((code == 0x7A || code == 0x7B) && wheelmsgs && !wheelkey)
-        return;                         /* the wheel comes as its message */
-    if (T->t_rf && !(code & IECODE_UP_PREFIX) &&
-        !(q & IEQUALIFIER_RCOMMAND)) {
-        /* a file browser's tab: its keys are the browser's, also
-         * during a transfer (its stop key) */
-        browser_key(code, q, m->IAddress ? *((APTR *)m->IAddress) : NULL);
-        return;
+        return TRUE;                    /* the wheel comes as its message */
+    k = keys_code(code, q, prev);
+    if (T->t_rf && !(code & IECODE_UP_PREFIX)) {
+        /* a file browser's tab: CTerm's window keys but the history's
+         * (the panels page themselves), then the browser's (files.keys),
+         * also during a transfer (its stop key) */
+        a = keys_find(KC_WINDOW, k);
+        if (a && (a < KA_PAGEUP || a > KA_HISTEND))
+            return window_key(a);
+        if (!(q & IEQUALIFIER_RCOMMAND))
+            browser_key(code, q, prev);
+        return TRUE;
     }
     if (shown && shown->t_xfer) {
-        /* a transfer has the line: Esc stops it, other keys wait, but
-         * Right Amiga keys (tabs, menus) still work */
-        if (code == 0x45)
+        /* a transfer has the line: the stop key stops it, other keys
+         * wait, but Right Amiga keys (tabs, menus) still work */
+        if (keys_find(KC_CALL, k) == KA_STOP)
             shown->t_xfer->stop = 1;
         if (!(q & IEQUALIFIER_RCOMMAND))
-            return;
+            return TRUE;
     }
-
     if (code & IECODE_UP_PREFIX)
-        return;
-    if ((q & IEQUALIFIER_RCOMMAND) && code >= 0x01 && code <= 0x09) {
-        tab_show(code - 0x01);          /* Right Amiga + 1..9: that tab */
-        return;
-    }
+        return TRUE;
+    if ((a = keys_find(KC_WINDOW, k)))
+        return window_key(a);           /* CTerm's own, in every tab */
     if (local) {
-        /* the Amiga Shell: the keymap's own bytes, as CON: gives them;
-         * only the scrollback keys stay CTerm's */
-        if (code == 0x7A) { scroll_view(back + 3); return; }
-        if (code == 0x7B) { scroll_view(back - 3); return; }
-        if (shift && (code == 0x4C || code == 0x4D)) {
-            scroll_view(back + (code == 0x4C ? rows - 1 : -(rows - 1)));
-            return;
+        /* the Amiga Shell: its line editor's keys ([shell]) while it
+         * edits a line; else the keymap's own bytes, as CON: gives them */
+        if (code == 0x7A) { scroll_view(back + 3); return TRUE; }
+        if (code == 0x7B) { scroll_view(back - 3); return TRUE; }
+        if (T->con && !con_raw(T->con) && (a = keys_find(KC_SHELL, k))) {
+            if (back)
+                scroll_view(0);
+            con_edit(T->con, a - KA_ED_LEFT);
+            return TRUE;
         }
         {
             struct InputEvent ie;
@@ -122,7 +156,7 @@ void key(struct IntuiMessage *m)
             ie.ie_Class = IECLASS_RAWKEY;
             ie.ie_Code = code;
             ie.ie_Qualifier = q;
-            ie.ie_EventAddress = m->IAddress ? *((APTR *)m->IAddress) : NULL;
+            ie.ie_EventAddress = prev;
             n = MapRawKey(&ie, (STRPTR)buf, sizeof buf, NULL);
         }
         if (n > 0) {
@@ -130,7 +164,14 @@ void key(struct IntuiMessage *m)
                 scroll_view(0);
             con_keys(T->con, (UBYTE *)buf, n);
         }
-        return;
+        return TRUE;
+    }
+    if (code != 0x7A && code != 0x7B &&
+        (T->t_fkind || (dialhost[0] && !linked))) {
+        /* the call ended: only the redial key does something */
+        if (keys_find(KC_CALL, k) == KA_REDIAL)
+            redial();
+        return TRUE;
     }
     switch (code) {
     case 0x7A: case 0x7B:                                /* the wheel */
@@ -138,17 +179,13 @@ void key(struct IntuiMessage *m)
             int r, c;
             mouse_cell(win->MouseX, win->MouseY, &r, &c);
             mouse_send(code == 0x7A ? 64 : 65, r, c, FALSE, q);
-            return;
+            return TRUE;
         }
         scroll_view(back + (code == 0x7A ? 3 : -3));
-        return;
+        return TRUE;
     case 0x4C: case 0x4D: case 0x4E: case 0x4F: {        /* arrows */
         static const char dirs[4] = { 'A', 'B', 'C', 'D' };
         char d = dirs[code - 0x4C];
-        if (mod == 2 && (code == 0x4C || code == 0x4D)) {   /* shift alone */
-            scroll_view(back + (code == 0x4C ? rows - 1 : -(rows - 1)));
-            return;
-        }
         if (mod > 1)                    /* xterm: ESC [ 1 ; mod X */
             buf[0] = 0x1b, buf[1] = '[', buf[2] = '1', buf[3] = ';',
             buf[4] = '0' + mod, buf[5] = d, buf[6] = 0;
@@ -188,26 +225,26 @@ void key(struct IntuiMessage *m)
             ie.ie_Code = code;
             ie.ie_Qualifier = meta ? q & ~(IEQUALIFIER_LALT | IEQUALIFIER_RALT)
                                    : q;
-            ie.ie_EventAddress = m->IAddress ? *((APTR *)m->IAddress) : NULL;
+            ie.ie_EventAddress = prev;
             n = MapRawKey(&ie, (STRPTR)buf + 1, sizeof buf - 1, NULL);
         }
         if (n <= 0)
-            return;
+            return TRUE;
         if (back)
             scroll_view(0);
         if (meta) {
             buf[0] = 0x1b;
             n++;
         }
-        if (!redial_key(buf + 1))
-            send_typed((UBYTE *)(meta ? buf : buf + 1), n);
-        return;
+        send_typed((UBYTE *)(meta ? buf : buf + 1), n);
+        return TRUE;
     }
     if (back)
         scroll_view(0);
-    if (!redial_key(buf))
-        send_str(buf);
+    send_str(buf);
+    return TRUE;
 }
+
 /* A file browser's tab (Parts/Files): the key as its panels take it -
  * a character as the keymap gives it, KM_* for the rest; the wheel
  * scrolls the panel under the pointer. */
@@ -420,7 +457,8 @@ BOOL window_events(void)
             APTR prev = m->IAddress ? *((APTR *)m->IAddress) : NULL;
             copy.IAddress = &prev;
             ReplyMsg((struct Message *)m);
-            key(&copy);
+            if (!key(&copy))
+                go = FALSE;             /* its key was Quit's */
             continue;
         }
         ReplyMsg((struct Message *)m);

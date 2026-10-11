@@ -12,27 +12,27 @@ static void ask_switch(int mode, int depth, BOOL full, BOOL bar);
 
 static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
-    {  NM_ITEM, (STRPTR)"New Shell tab", (STRPTR)"T", 0, 0, (APTR)M_NEWTAB },
-    {  NM_ITEM, (STRPTR)"Call...", (STRPTR)"K", 0, 0, (APTR)M_CALL },
-    {  NM_ITEM, (STRPTR)"Phone book...", (STRPTR)"B", 0, 0, (APTR)M_BOOK },
+    {  NM_ITEM, (STRPTR)"New Shell tab", 0, 0, 0, (APTR)M_NEWTAB },
+    {  NM_ITEM, (STRPTR)"Call...", 0, 0, 0, (APTR)M_CALL },
+    {  NM_ITEM, (STRPTR)"Phone book...", 0, 0, 0, (APTR)M_BOOK },
     {  NM_ITEM, (STRPTR)"Serial terminal", 0, 0, 0, (APTR)M_SERIAL },
     {  NM_ITEM, (STRPTR)"Answer call (ATA)", 0, 0, 0, (APTR)M_ANSWER },
     {  NM_ITEM, (STRPTR)"Open SFTP browser", 0, 0, 0, (APTR)M_SFTP },
-    {  NM_ITEM, (STRPTR)"Close tab", (STRPTR)"W", 0, 0, (APTR)M_CLOSETAB },
-    {  NM_ITEM, (STRPTR)"Start log...", (STRPTR)"L", 0, 0, (APTR)M_LOG },
+    {  NM_ITEM, (STRPTR)"Close tab", 0, 0, 0, (APTR)M_CLOSETAB },
+    {  NM_ITEM, (STRPTR)"Start log...", 0, 0, 0, (APTR)M_LOG },
     {  NM_ITEM, (STRPTR)"Stop log", 0, 0, 0, (APTR)M_LOGSTOP },
-    {  NM_ITEM, (STRPTR)"Send user name", (STRPTR)"U", 0, 0,
+    {  NM_ITEM, (STRPTR)"Send user name", 0, 0, 0,
        (APTR)M_SENDUSER },
-    {  NM_ITEM, (STRPTR)"Send password", (STRPTR)"P", 0, 0,
+    {  NM_ITEM, (STRPTR)"Send password", 0, 0, 0,
        (APTR)M_SENDPASS },
     {  NM_ITEM, (STRPTR)"Run ARexx script...", 0, 0, 0, (APTR)M_REXX },
     {  NM_ITEM, (STRPTR)"Hide window", 0, 0, 0, (APTR)M_HIDE },
     {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
     {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
-    {  NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
+    {  NM_ITEM, (STRPTR)"Quit", 0, 0, 0, (APTR)M_QUIT },
     { NM_TITLE, (STRPTR)"Edit", 0, 0, 0, 0 },
-    {  NM_ITEM, (STRPTR)"Copy", (STRPTR)"C", 0, 0, (APTR)M_COPY },
-    {  NM_ITEM, (STRPTR)"Paste", (STRPTR)"V", 0, 0, (APTR)M_PASTE },
+    {  NM_ITEM, (STRPTR)"Copy", 0, 0, 0, (APTR)M_COPY },
+    {  NM_ITEM, (STRPTR)"Paste", 0, 0, 0, (APTR)M_PASTE },
     { NM_TITLE, (STRPTR)"Transfer", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Receive with Ymodem", 0, 0, 0, (APTR)M_YRECV },
     {  NM_ITEM, (STRPTR)"Receive with Xmodem...", 0, 0, 0, (APTR)M_XRECV },
@@ -47,13 +47,13 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Next pane", 0, 0, 0, (APTR)M_NEXTPANE },
     {  NM_ITEM, (STRPTR)"Close pane", 0, 0, 0, (APTR)M_CLOSEPANE },
     { NM_TITLE, (STRPTR)"Settings", 0, 0, 0, 0 },
-    {  NM_ITEM, (STRPTR)"Settings...", (STRPTR)"S", 0, 0, (APTR)M_SETTINGS },
+    {  NM_ITEM, (STRPTR)"Settings...", 0, 0, 0, (APTR)M_SETTINGS },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Amiga font...", 0, 0, 0, (APTR)M_FONT },
     {  NM_ITEM, (STRPTR)"TrueType font...", 0, 0, 0,
        (APTR)M_TTFONT },
-    {  NM_ITEM, (STRPTR)"Bigger text", (STRPTR)"+", 0, 0, (APTR)M_BIGGER },
-    {  NM_ITEM, (STRPTR)"Smaller text", (STRPTR)"-", 0, 0, (APTR)M_SMALLER },
+    {  NM_ITEM, (STRPTR)"Bigger text", 0, 0, 0, (APTR)M_BIGGER },
+    {  NM_ITEM, (STRPTR)"Smaller text", 0, 0, 0, (APTR)M_SMALLER },
     {  NM_ITEM, (STRPTR)"Screen", 0, 0, 0, 0 },
     {   NM_SUB, (STRPTR)"Workbench window", 0, CHECKIT, ~1, (APTR)M_SCR_WB },
     {   NM_SUB, (STRPTR)"Own screen, 16 colours", 0, CHECKIT, ~2,
@@ -62,7 +62,7 @@ static struct NewMenu newmenu[] = {
         (APTR)M_SCR_256 },
     {   NM_SUB, (STRPTR)"Own screen, like Workbench", 0, CHECKIT, ~8,
         (APTR)M_SCR_DEEP },
-    {  NM_ITEM, (STRPTR)"Full screen", (STRPTR)"F", CHECKIT | MENUTOGGLE, 0,
+    {  NM_ITEM, (STRPTR)"Full screen", 0, CHECKIT | MENUTOGGLE, 0,
        (APTR)M_FULL },
     {  NM_ITEM, (STRPTR)"Scroll bar", 0, CHECKIT | MENUTOGGLE, 0,
        (APTR)M_BAR },
@@ -73,7 +73,7 @@ static struct NewMenu newmenu[] = {
 };
 struct Window *setwin;
 
-/* The menus again: their keys changed. */
+/* The menus again: their keys changed (CTerm.keys, Settings). */
 void remake_menus(void)
 {
     if (!win)
@@ -90,12 +90,45 @@ void remake_menus(void)
     make_menus();
 }
 
+/* A menu item's shortcut from CTerm.keys: Right Amiga + a character as
+ * Intuition's own shortcut; any other key written beside it in words
+ * (keys.c does it). */
+static void menu_key(struct NewMenu *n, ULONG id)
+{
+    static char mk[sizeof newmenu / sizeof newmenu[0]][24];
+    char *o = mk[n - newmenu];
+    int a, i;
+    n->nm_CommKey = NULL;
+    n->nm_Flags &= ~NM_COMMANDSTRING;
+    for (a = 1; a < KA_N && keys_acts[a].menu != id; a++)
+        ;
+    if (a == KA_N)
+        return;
+    for (i = 0; i < keys_n; i++)     /* Right Amiga + a character */
+        if (keys_binds[i].act == a && (keys_binds[i].key & KQ_MODS) == KQ_A &&
+            (keys_binds[i].key & KQ_KEY) > ' ' &&
+            (keys_binds[i].key & KQ_KEY) < 256) {
+            UBYTE c = keys_binds[i].key & KQ_KEY;
+            o[0] = c >= 'a' && c <= 'z' ? c - 32 : c;
+            o[1] = 0;
+            n->nm_CommKey = (STRPTR)o;
+            return;
+        }
+    if (!keys_first(a))
+        return;
+    keys_name(keys_first(a), o, TRUE);
+    n->nm_CommKey = (STRPTR)o;
+    n->nm_Flags |= NM_COMMANDSTRING;
+}
+
 static void make_menus(void)
 {
     struct NewMenu *n;
     for (n = newmenu; n->nm_Type != NM_END; n++) {
         ULONG id = (ULONG)n->nm_UserData;
         BOOL on;
+        if (id && n->nm_Type != NM_TITLE)
+            menu_key(n, id);
         switch (id) {
         case M_SCR_WB: on = scrmode == SCR_WB; break;
         case M_SCR_16: on = scrmode == SCR_OWN && owndepth == 4; break;
@@ -109,14 +142,6 @@ static void make_menus(void)
         case M_BAR: on = scrollbar; break;
         case M_UTF8: on = utf8 && !pcmode; break;
         case M_PC: on = pcmode; break;
-        case M_SENDUSER:                /* their keys are the person's */
-            n->nm_CommKey = (STRPTR)(userkey[0] && userkey[0] != '-'
-                                     ? userkey : NULL);
-            continue;
-        case M_SENDPASS:
-            n->nm_CommKey = (STRPTR)(passkey[0] && passkey[0] != '-'
-                                     ? passkey : NULL);
-            continue;
         default: continue;
         }
         if (on) n->nm_Flags |= CHECKED;

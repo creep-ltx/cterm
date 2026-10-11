@@ -247,10 +247,26 @@ int main(void)
         const VtPic *p = vt_pic(v, cell(v, 0, 0, 0));
         CHECK(p && p->w == 16 && p->h == 16, "iTerm2: width=2 cells, in shape");
         CHECK(VT_IS_PIC(cell(v, 0, 1, 0)) && !VT_IS_PIC(cell(v, 1, 0, 0)) &&
-              x == 2 && y == 1, "iTerm2: placed, cursor right of it (then imgcat's LF)");
+              x == 0 && y == 1, "iTerm2: placed, the cursor below it (imgcat's LF: not a second)");
         CHECK(pix(v, 0, 0, 0, 0) == 0xFFFFFF && pix(v, 0, 1, 7, 0) == 0x000000,
               "iTerm2: pixels");
     }
+    feed(v, "\n");
+    vt_cursor(v, &x, &y, &vis);
+    CHECK(y == 2, "iTerm2: the next new line counts");
+    feed(v, "\x1b[H\x1b[2J");
+    feedn(v, s, n - 1);                 /* without imgcat's LF */
+    feed(v, "\r\n");
+    vt_cursor(v, &x, &y, &vis);
+    CHECK(x == 0 && y == 1, "iTerm2: CR LF after it is not a second line");
+    feed(v, "\x1b[H\x1b[2J");
+    feedn(v, s, n - 1);
+    feed(v, "$ ");                      /* no new line: a prompt below it */
+    vt_cursor(v, &x, &y, &vis);
+    CHECK(x == 2 && y == 1 && cell(v, 1, 0, 0) == '$', "iTerm2: a prompt goes below it");
+    feed(v, "\r\n");                   /* text on the line: its LF counts */
+    vt_cursor(v, &x, &y, &vis);
+    CHECK(x == 0 && y == 2, "iTerm2: a new line after text below it counts");
     free(s);
     feed(v, "\x1b[H\x1b[2J");
     s = slurp("python3 tests/pictures/mksixel.py iterm /tmp/pic_test.ppm 'width=100%;height=1'", &n);

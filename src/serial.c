@@ -174,10 +174,15 @@ static void e_replies(void)
     host_clip();
 }
 
+static const char *e_keyword(int which)
+{
+    return keys_word(which ? KA_REDIAL : KA_STOP);
+}
+
 static struct SerEnv senv = { NULL, &modem, say, e_text, refresh, e_column,
                               e_sigs, e_serve, transfer_take, e_xfer_on,
                               e_replies, term_now, numstr_cat,
-                              ser_line_text };
+                              ser_line_text, e_keyword };
 
 /* The file in memory: TRUE when it is. Missing or of another version:
  * said in the tab. */

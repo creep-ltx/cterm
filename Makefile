@@ -23,13 +23,19 @@ HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h 
 # CTerm: everything but ssh (small enough for a stock A1200)
 # -flto: the parts (split into files) inlined across files again - the
 # split had cost a stock A1200 ~1 s of conbench's 42 (measured 2026-10-10)
-CTerm: $(SRC) $(HDR) src/ppaint.o
-	$(CC) $(CFLAGS) -flto -DNO_SSH $(SRC) src/ppaint.o -o CTerm
+CTerm: $(SRC) $(HDR) src/ppaint.o src/keymap.o
+	$(CC) $(CFLAGS) -flto -DNO_SSH $(SRC) src/ppaint.o src/keymap.o -o CTerm
+
+# The keys (keymap.c) on their own, without bebbo's backend pass: it
+# compiled keys_find's loop as cmp.w (a0)+ and then a0 used as if it had
+# not moved (Knowledge/amiga/toolchain-and-testing.md, -fbbb=-)
+src/keymap.o: src/keymap.c $(HDR)
+	$(CC) $(CFLAGS) -fbbb=- -c src/keymap.c -o $@
 
 # CTermSSH: the same with ssh (libssh2 on AmiSSL), started by CTerm for ssh
-CTermSSH: $(SRC) $(HDR) src/ssh.c src/ppaint.o $(TP)/lib/libssh2.a
+CTermSSH: $(SRC) $(HDR) src/ssh.c src/ppaint.o src/keymap.o $(TP)/lib/libssh2.a
 	$(CC) $(CFLAGS) $(SSHINC) -c src/ssh.c -o src/ssh.o
-	$(CC) $(CFLAGS) -flto $(SRC) src/ssh.o src/ppaint.o $(SSHLIB) -o CTermSSH
+	$(CC) $(CFLAGS) -flto $(SRC) src/ssh.o src/ppaint.o src/keymap.o $(SSHLIB) -o CTermSSH
 
 # The hand-written inner loops (vasm, Motorola syntax)
 src/ppaint.o: src/ppaint.s
@@ -114,6 +120,7 @@ Parts/SpeedTest: src/partstart.c src/bench.c $(PARTHDR)
 Parts/Pictures: src/partstart.c src/pics.c $(PARTHDR)
 	$(call partlink,src/pics.c)
 Parts/Files: PARTFLAGS += -fbbb=-
+Parts/Settings: PARTFLAGS += -fbbb=-
 Parts/Files: src/partstart.c src/files.c src/fileui.c src/ftp.c src/files.h src/ssh.h $(PARTHDR)
 	$(call partlink,src/files.c src/fileui.c src/ftp.c)
 

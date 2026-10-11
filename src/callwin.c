@@ -110,10 +110,10 @@ static void call_tab(const char *host, BOOL pc, BOOL ssh)
     tab_show(ntabs - 1);
     say("\x1b[2m[calling ");
     say(dialhost);
-    say("... Esc gives up]\x1b[0m\r\n");
+    say_key("... ", KA_STOP, " gives up]\x1b[0m\r\n");
     refresh();
     if (!connect_out())
-        say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+        say_key("\x1b[2m[", KA_REDIAL, " calls again]\x1b[0m\r\n");
     refresh();
 }
 

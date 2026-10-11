@@ -47,7 +47,7 @@ static void window_chore(struct IntuiMessage *m)
         window_resized();
 }
 
-/* Esc or the close gadget, while a call waits: give up. */
+/* The stop key (Esc) or the close gadget, while a call waits: give up. */
 static BOOL user_gives_up(void)
 {
     struct IntuiMessage *m;
@@ -56,7 +56,9 @@ static BOOL user_gives_up(void)
         ULONG cl = m->Class;
         UWORD code = m->Code;
         if ((cl == IDCMP_CLOSEWINDOW && code != 1) ||   /* 1: iconify */
-            (cl == IDCMP_RAWKEY && code == 0x45)) {
+            (cl == IDCMP_RAWKEY &&
+             keys_is(KA_STOP, code, m->Qualifier,
+                    m->IAddress ? *((APTR *)m->IAddress) : NULL))) {
             ReplyMsg((struct Message *)m);
             out = TRUE;
         } else
@@ -783,7 +785,7 @@ void hung_up(void)
         CloseSocket(sock);
     sock = -1;
     if (dialhost[0]) {
-        say("\r\n\x1b[0;2m[the connection closed - Return calls again]"
+        say_key("\r\n\x1b[0;2m[the connection closed - ", KA_REDIAL, " calls again]"
             "\x1b[0m\r\n");
         return;
     }
@@ -892,10 +894,10 @@ void call_place(const BookEntry *e, BOOL newtab)
     tab_show(ntabs - 1);
     say("\x1b[2m[calling ");
     say(e->name[0] ? e->name : dialhost);
-    say("... Esc gives up]\x1b[0m\r\n");
+    say_key("... ", KA_STOP, " gives up]\x1b[0m\r\n");
     refresh();
     if (!connect_out())
-        say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+        say_key("\x1b[2m[", KA_REDIAL, " calls again]\x1b[0m\r\n");
     else
         rexx_after_call();              /* its login script */
     refresh();
@@ -952,11 +954,11 @@ int call_rexx(const char *what, struct Tab **made)
     say(T->t_serial && !T->t_st.phone[0] ? "\x1b[2m[opening "
                                          : "\x1b[2m[calling ");
     say(i >= 0 ? book[i].name : dialhost);
-    say("... Esc gives up]\x1b[0m\r\n");
+    say_key("... ", KA_STOP, " gives up]\x1b[0m\r\n");
     refresh();
     ok = connect_out();
     if (!ok)
-        say("\x1b[2m[Return calls again]\x1b[0m\r\n");
+        say_key("\x1b[2m[", KA_REDIAL, " calls again]\x1b[0m\r\n");
     refresh();
     return ok ? 0 : 10;
 }

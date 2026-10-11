@@ -248,7 +248,7 @@ closes the book. Each place has
   the file browser (see Files on other computers);
 - your user name and password. At the host's prompt, Project/Send user
   name (Right Amiga+U) and Send password (Right Amiga+P) type them with
-  Return; the keys can be changed on the Keys tab. An ssh login is given
+  Return; the keys can be changed (see Keys). An ssh login is given
   the saved password by itself, once;
 - the letters (CTerm's setting, an Amiga font, TrueType, or the PC's VGA
   font) and the characters (UTF-8, Latin-1, PC BBS);
@@ -348,9 +348,10 @@ gone when no tab holds a picture any more).
 Several terminals in one window. Project/New Shell tab (Right Amiga+T)
 opens another Amiga Shell; Project/Call... opens a call in a new tab (or,
 unticked, a window of its own). A row of tab names appears above the
-text: click one, or press Right Amiga+1 to 9. Project/Close tab (Right
-Amiga+W) ends the shown tab's Shell or hangs up its host. Tabs you are
-not looking at keep running.
+text: click one, or press Right Amiga+1 to 9 (Ctrl+Tab: the next one,
+Ctrl+Shift+Tab: the one before). Project/Close tab (Right Amiga+W) ends
+the shown tab's Shell or hangs up its host. Tabs you are not looking at
+keep running.
 
 ## Panes: several terminals in sight at once
 
@@ -534,6 +535,98 @@ quotes into capitals.
 (a board's login, for the phone book's Script) and `info.rexx` (what
 CTerm says about itself).
 
+## Keys
+
+Every key that makes CTerm itself do something can be changed: the
+menus' shortcuts (and items that have none can get one), the tabs, the
+history, the Shell's line editing, giving up a call, calling again.
+
+**Two kinds of keys.** CTerm's own keys do something in CTerm. All the
+other keys go to the program in the tab, as on any terminal: the arrows,
+the function keys, Alt as Meta and the rest are sent the way the
+VT100/xterm standard (or, in the Amiga Shell, the Amiga console) says,
+so bash, vim, mc and Ed get what they expect. Those are not CTerm's to
+change. A key you give to CTerm no longer reaches the program; a key you
+take away from CTerm goes to the program again.
+
+**Where they are kept:** `ENVARC:CTerm/CTerm.keys`, a text file, written
+with the keys below the first time CTerm starts. The file browser's keys
+stay in their own file, `files.keys` (see Files on other computers); the
+two files are written the same way (as CFile's and Ahiru's keys files
+are).
+
+**Changing them in Settings** (Settings..., the Keys tab): the list shows
+everything CTerm does on a key, and its keys. Choose a line, then
+
+- **Press a key**, then the key you want (it replaces the line's keys);
+- or type the keys in the Keys field as the file writes them
+  (`<A-n> <F9>`) and press Return - one action can have several;
+- **None** takes the line's keys away; **Defaults** puts every key back
+  as CTerm comes.
+
+A key that another line had is taken from it (the title says so). A key
+that is CTerm's in every tab and also the Shell's or the call's (say
+Return for Close tab) is marked `!`: the every-tab one wins; Save or Use
+says so once, and a second press keeps it. Save writes the file, Use
+keeps the keys until CTerm quits, Cancel puts them back. The menus show
+the new keys at once: Right Amiga + a letter as the Amiga does, any
+other key written beside the item (`F9`, `Ctrl+Shift+F1`).
+
+**Changing them in the file:** one key a line, `KEYS ACTION`. A key is a
+character, or a name in `<>`: `<Up> <Down> <Left> <Right> <Return>
+<Esc> <Tab> <Space> <Del> <BS> <Help> <F1>`..`<F12> <PgUp> <PgDn> <Home>
+<End> <Ins>`, with any of `A-` (Right Amiga), `C-` (Ctrl), `M-` (Alt),
+`S-` (Shift, with the names) in front: `<A-t>`, `<C-r>`, `<S-Up>`,
+`<C-S-Tab>`. `none ACTION` gives an action no key; `KEY none` takes a
+key away from CTerm. Lines starting with `;` are notes. A change in the
+file counts the next time CTerm starts.
+
+The keys CTerm comes with:
+
+| Key | Action | What it does |
+|---|---|---|
+| **In every tab** `[window]` | | |
+| Right Amiga+T | `newtab` | Project/New Shell tab |
+| Right Amiga+K | `call` | Project/Call... |
+| Right Amiga+B | `phonebook` | Project/Phone book... |
+| Right Amiga+W | `closetab` | Project/Close tab |
+| Right Amiga+L | `log` | Project/Start log... |
+| Right Amiga+U, P | `senduser`, `sendpass` | Project/Send user name, Send password |
+| Right Amiga+Q | `quit` | Project/Quit |
+| Right Amiga+C, V | `copy`, `paste` | Edit/Copy, Paste |
+| Right Amiga+S | `settings` | Settings/Settings... |
+| Right Amiga + `+`, `-` | `bigger`, `smaller` | Settings/Bigger text, Smaller text |
+| Right Amiga+F | `fullscreen` | Settings/Full screen |
+| Right Amiga+1 to 9 | `tab1` .. `tab9` | that tab |
+| Ctrl+Tab, Ctrl+Shift+Tab | `nexttab`, `prevtab` | the next tab, the one before |
+| Shift+Up, Shift+Down | `pageup`, `pagedown` | the history a page up, down |
+| (none) | `serial`, `answer`, `sftp`, `logstop`, `rexx`, `hide`, `about`, `speedtest`, `yrecv`, `xrecv`, `ysend`, `xsend`, `hsend`, `transfers`, `splitside`, `splitunder`, `nextpane`, `closepane`, `font`, `ttfont`, `workbench`, `screen16`, `screen256`, `screendeep`, `scrollbar`, `utf8`, `pcbbs` | the other menu items, in the menus' order |
+| (none) | `lineup`, `linedown`, `historytop`, `historyend` | the history a line up, down; its top; back to the end |
+| **Calling and transfers** `[call]` | | |
+| Esc | `stop` | stops a transfer; gives up a call being made |
+| Return | `redial` | calls again, after a call ended |
+| **The Amiga Shell's line, as you type it** `[shell]` | | |
+| Left, Right | `left`, `right` | a letter left, right |
+| Shift+Left, Ctrl+A | `start` | to the start |
+| Shift+Right, Ctrl+E | `end` | to the end |
+| Ctrl+Left, Ctrl+Right | `wordleft`, `wordright` | a word left, right |
+| Backspace, Del | `back`, `delete` | delete the letter before, under the cursor |
+| Ctrl+W | `wordback` | delete the word before |
+| Ctrl+U, Ctrl+K | `killstart`, `killend` | delete to the start, to the end |
+| Ctrl+X | `clear` | clear the line |
+| Up, Down | `older`, `newer` | the lines typed before (the history) |
+| Ctrl+R | `search` | the line before that holds what is typed (again: the one before that) |
+| Tab | `complete` | complete a file name |
+| Return | `accept` | enter the line |
+| Ctrl+\ | `eof` | end of input (on an empty line) |
+
+The Shell's line keys count while the Shell (or a program) reads a line;
+a program that takes the keys itself (Ed, More) gets them as they are.
+In a file browser tab CTerm's keys come first, but for the history's
+(the panels page themselves), then the browser's own. Ctrl+C to Ctrl+F
+stay the Amiga's break keys, and yes and no in questions are y and n.
+
+
 ## Settings
 
 Settings/Settings... (Right Amiga+S) opens one window for everything,
@@ -550,8 +643,8 @@ like the system's settings programs):
 - **Colours:** a theme (Nord, Black, Workbench, Amber, Green, Light), and
   your own text and background colour on top of it.
 - **Keys:** what the Alt key does (Meta for programs on other
-  computers, or the Amiga's own Alt characters), and the letters for
-  sending the phone book's user name and password.
+  computers, or the Amiga's own Alt characters), and every key of
+  CTerm's own (see Keys above).
 - **Files:** where downloads go and where the upload requester opens.
 - **Modem:** the modem every dial-up place uses (init strings, dialling,
   hanging up, how long a call may take, redialling, answering) and the

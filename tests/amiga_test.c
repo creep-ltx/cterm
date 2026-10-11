@@ -73,6 +73,38 @@ int main(void)
         l = vt_line(v, 0, 0, &w);
         CHECK(w >= 4 && l[2].cp == 0xC5 && l[3].cp == 'z',
               "UTF-8 Shell: Å then 9B K / Ä then 9B D, not ś / ě");
+        /* ... unless what follows the 9B is no Amiga CSI: then it is the
+         * UTF-8 letter whose second byte is 9B (Л D0 9B, ś C5 9B) */
+        feed(v, "\x0c" "\xd0\x9b" "\xd0\xb8\xd1\x81" "z");     /* Лис */
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 4 && l[0].cp == 0x41B && l[1].cp == 0x438 &&
+              l[2].cp == 0x441 && l[3].cp == 'z', "UTF-8 Shell: Л then Cyrillic");
+        feed(v, "\x0c" "\xc5\x9b" "nieg" "\xc5\x9b" "\r\n" "\xd0\x9b" "2026 ok");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 6 && l[0].cp == 0x15B && l[1].cp == 'n' && l[4].cp == 'g' &&
+              l[5].cp == 0x15B, "UTF-8 Shell: ś then ASCII text, ś then CR");
+        l = vt_line(v, 1, 0, &w);
+        CHECK(w >= 8 && l[0].cp == 0x41B && l[1].cp == '2' && l[5].cp == ' ' &&
+              l[6].cp == 'o', "UTF-8 Shell: Л then digits and a space");
+        feed(v, "\x0c" "abc" "\xc5" "\x9b" "K" "\r\n" "xy" "\xc4" "\x9b" "1D" "z");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 4 && l[3].cp == 0xC5, "UTF-8 Shell: Å then CSI K");
+        l = vt_line(v, 1, 0, &w);
+        CHECK(w >= 3 && l[0].cp == 'x' && l[1].cp == 'y' && l[2].cp == 'z',
+              "UTF-8 Shell: Ä then CSI 1 D (z over the Ä)");
+        feed(v, "\x0c" "\xc5\x9b");     /* the 9B ends one write... */
+        feed(v, "1;33m" "q" "\xd0\x9b");
+        feed(v, "\xd0\xb0" "\xc4\x9b");
+        feed(v, "3");
+        feed(v, ";1H" "w");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 5 && l[0].cp == 0xC5 && l[1].cp == 'q' && l[2].cp == 0x41B &&
+              l[3].cp == 0x430 && l[4].cp == 0xC4, "UTF-8 Shell: 9B held across writes");
+        CHECK(at(v, 2, 0) == 'w', "UTF-8 Shell: ... its CSI split over writes");
+        feed(v, "\x0c" "\xc5\x9b" "0 p" "\xd0\x9b" " x");
+        l = vt_line(v, 0, 0, &w);
+        CHECK(w >= 3 && l[0].cp == 0xC5 && l[1].cp == 0x41B && l[2].cp == ' ' &&
+              l[3].cp == 'x', "UTF-8 Shell: CSI 0 SP p; Л then a space");
         feed(v, "\x0c" "\xe2\x80\x9b" "\xe2\x9b\x94" "z");
         l = vt_line(v, 0, 0, &w);
         CHECK(w >= 3 && l[0].cp == 0x201B && l[1].cp == 0x26D4 &&

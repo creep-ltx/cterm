@@ -455,8 +455,9 @@ In the order the user and I agreed (2026-10-10):
     cleared top to bottom (panes above each other).
   - **ARexx:** PANE SIDE/UNDER/NEXT/SELECT n/CLOSE/COUNT/CURRENT (queued
     like TAB; the ARexx tab follows the active pane).
-  - **No keys** for the pane items (the rule: keys must be the person's
-    to change); menu items, the mouse and ARexx.
+  - **No keys** for the pane items at first (the rule: keys must be the
+    person's to change); since 0.3b17 every item can be given one in
+    CTerm.keys (none by default).
   - **Also fixed:** the title followed T (a transfer ending in a tab not
     shown set its own title); now it is always the shown tab's.
   - **Tested in FS-UAE** (A1200 with fast RAM, verified 2026-10-11):
@@ -877,7 +878,116 @@ In the order the user and I agreed (2026-10-10):
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
 - Also: an ssh password login tried against a real server,
   dropping files on the window, emoji fallback, more stock-A1200 speed.
-- Keys configurable (the rule for all the user's programs).
+- **Done 2026-10-11 (0.3b17): every key of CTerm's own configurable**
+  (the user's rule for all their programs).
+  - **The file:** `ENVARC:CTerm/CTerm.keys`, CFile's/Ahiru's format (KEYS
+    ACTION, `[sections]`, `;` notes, `KEY none`), extended with
+    qualifiers in the name: `<A-t>` Right Amiga, `<C-r>` Ctrl, `<M-b>`
+    Alt, `<S-Up>` Shift (names only; Shift is in a character), combined
+    (`<C-S-Tab>`), and `none ACTION` for an action with no key. Written
+    whole when missing (every action, `none` lines for the unbound), so
+    it documents itself. An action the file names has the file's keys
+    only; actions it never names (new ones in a later CTerm) keep the
+    built-in keys. Old prefs `keyuser=`/`keypass=` become the first
+    file's send keys, then are dropped from the prefs.
+  - **Sections:** `[window]` (every menu item - 41, the ones without a
+    shortcut too -, tab1..9, nexttab/prevtab, the history: pageup,
+    pagedown, lineup, linedown, historytop, historyend), `[call]` (stop:
+    a transfer, giving up a call; redial after a call ended), `[shell]`
+    (the local Shell's line editor: left right start end wordleft
+    wordright back delete wordback killstart killend clear older newer
+    search complete accept eof). Order in key(): the file browser tab
+    (window keys but the history's, then files.keys), a running
+    transfer (stop; non-Amiga keys wait), `[window]`, the Shell's line
+    while cooked (`[shell]`, else the keymap's bytes as before), a call
+    that ended (`[call]` redial only), then the terminal's own keys to
+    the host. What goes to the host (arrows, F-keys, Alt=Meta) is the
+    terminal standard's and not in the file.
+  - **A key** (keymap.c `keys_code`): the raw key, named keys (KM_*,
+    13 27 9 8 127 ' ') with their Shift, else MapRawKey without Ctrl,
+    Alt and Amiga - the character with Shift in it, letters lower-cased
+    under Ctrl/Amiga - and KQ_* bits. Left Amiga is never CTerm's. One
+    linear lookup per key press (49 bindings); no cost on output.
+  - **Menus:** a Right Amiga + character binding becomes the item's
+    CommKey (Intuition handles it: MENUPICK, no RAWKEY); any other key
+    is shown with NM_COMMANDSTRING ("F9", "Ctrl+Shift+F1") and handled
+    by key() -> menu_pick(). Remade on Use/Save.
+  - **Settings, Keys tab** (Parts/Settings): a listbrowser (action, its
+    keys in words; headings per section), a Keys field (typed as in the
+    file, Return), Press a key (window.class WINDOW_IDCMPHook with
+    IDCMP_RAWKEY: the hook only notes the key, settings_events does the
+    work; GADGETUPs while waiting are dropped - a key could hit a
+    button's `_S` shortcut), None, Defaults. A key taken from another
+    action of its section: said in the title; a `[window]` key that is
+    also a `[call]`/`[shell]` key: marked `!`, warned once on Save/Use.
+    Save writes the file, Use keeps them until quit, Cancel restores the
+    copy taken at open. Messages that name keys ("Esc gives up",
+    "Return calls again") name the bound key (say_key, Protocols/Serial
+    through SerEnv.keyword, SERMOD_VERSION 2). PART_VERSION 5.
+  - **The line editor** (console.c con_edit): new word moves, word
+    delete, kill to start/end, start/end on Ctrl+A/E, history search
+    (Ctrl+R: the next older line holding what was typed when the search
+    began). Ctrl-J still ends a line; Ctrl-C..F stay break keys.
+  - **A compiler trap (verified, assembly read):** keys_find's loop over
+    `{UWORD key; UBYTE act}` compiled (main program, -O2 -flto) as
+    `cmp.w (a0)+,d3` then `move.b 2(a0)` and `addq.l #4,a0`: the wrong
+    field and a stride of 6 - no lookup ever matched, wrong actions ran.
+    keymap.c is now compiled on its own with `-fbbb=-` (src/keymap.o,
+    outside LTO); Parts/Settings too. Same bug as fileui's (see the
+    knowledge base).
+  - **Not done:** files.keys stays the browser's own file (read by
+    Parts/Files when it loads; folding it in would put its defaults in
+    CTerm); the Keys tab does not edit it. term_ask's typed answer
+    (password, host key yes/no) keeps Return and Backspace.
+  - **Tested in FS-UAE** (A1200 + 8 MB fast, private drive, wasabid on
+    1243; verified 2026-10-11): the file written on first start with an
+    old `keyuser=J` migrated to `<A-j> senduser`; menus show Right
+    Amiga letters and `F9`/`Ctrl+Shift+F1` for others; F9 opened a tab,
+    F10 moved tabs, Right Amiga+A (given to About) printed it, Right
+    Amiga+T unbound typed a t; Ctrl+Tab/Ctrl+Shift+Tab; the Shell line:
+    Ctrl+W, Ctrl+R, Ctrl+Left, Ctrl+A/E, Shift+Left + Ctrl+K, Ctrl+U;
+    redial bound to F6: "F6 calls again", Return ignored, F6 called;
+    Settings: Press a key (Right Amiga+N), taking a key from another
+    action, `<A-w> <Return>` typed (marked `!`, warned once), Defaults,
+    Save (file rewritten, F8 then opened Call...). The FTP browser's
+    keys still move the bar and switch panels.
+  - **Cost:** CTerm 215,388 -> 224,600 bytes (keymap.o 5.9 KB, the
+    line editor's new actions, the vt lookahead); Parts/Settings 20,420
+    -> 25,252; Protocols/Serial 10,140 -> 10,244. CTerm idle (fast
+    config, Avail FLUSH, same boot): 0.3b16 451,656 (418,720 the first
+    time), 0.3b17 461,720 twice - about 10 KB more (the code, the key
+    table, the menus' key texts). conbench CONF=fast (3 runs each):
+    0.3b16 17.06, 17.20, 17.10 s; 0.3b17 17.04, 16.98, 17.20 s. A first
+    try that checked "a picture just placed" at the top of vt_write's
+    byte loop cost 17.34, 17.34, 17.42 s: the check went into the LF
+    control code, and the held-9B test under the unfinished-sequence
+    branches.
+- **0.3b17, three fixes found testing 0.3b16:**
+  - **UTF-8 in the Amiga Shell, a lead C2-DF then 9B** (vt.c held()):
+    the 9B and what follows are held (across writes too) until it is
+    clear: a whole, plausible Amiga CSI (digits, `;`, a leading `>`/`?`,
+    one space before p q r v; a final the console uses - with no
+    parameters only @ A-H J-M P S T Z m) makes it the Latin-1 letter and
+    CSI (Å + CSI K, Ä + CSI 1 D); anything else is the UTF-8 letter
+    (Л, ś, ě, Û...) and the held bytes go on as text. Cold code, off the
+    hot paths (they skip while a sequence is unfinished). A letter last
+    in a write waits for the next byte before it shows. amiga_test has
+    the cases; the fuzzer got a fifth mode (Amiga Shell + UTF-8) and
+    `D0 9B`, `C5 9B`, `9B >?`, `9B 0 SP p` fragments.
+  - **The cursor after an iTerm2 picture:** on the line below at the
+    picture's left column (as sixel), not right of its last row - a
+    prompt never lands beside it. imgcat and ShowPic write a new line
+    after the picture; that one (CR LF too) is taken (pic_nl, in the LF
+    control only, not the byte loop) while the cursor is still there and
+    nothing was written on its line.
+  - **A backdrop behind picture cells** (RTG, paint_row): what a tile
+    does not cover (the bottom of a picture's last row when the picture
+    is not a whole number of cells high, the right of its last column,
+    a picture whose memory went) was the plain background colour, a
+    solid band right above the prompt; now the backdrop shows there as
+    behind text. Read and fixed, not run: FS-UAE has no RTG here.
+  - **Left open:** in the file browser a panel switch (Tab) shows only
+    with the next key (seen in 0.3b16 as well, FS-UAE).
 
 - **After the audit of 2026-10-10** (Knowledge/amiga/cterm-audit-2026-10-10.md;
   every finding fixed, commits b6f36fc..cefd2fd). Left open:
@@ -967,7 +1077,7 @@ In the order the user and I agreed (2026-10-10):
   one-cell stand-in. Left open: the pen table never shrinks (~450 KB per
   tab at the cap) and walks all history per new look when full; a 2-byte
   UTF-8 letter ending in 9B (Û, ś, ě) cannot come from an Amiga program
-  in a UTF-8 Shell.
+  in a UTF-8 Shell (0.3b17: it can - the bytes after the 9B decide).
 
 Speed on a stock A1200 (FS-UAE, conbench): 99 s at first, 39.6 s on
 2026-10-10, CCON 26.0 s; on the PiStorm A1200 4.45 s against CCON's 4.26.
@@ -1036,7 +1146,7 @@ call that uses ~0.5 KB (the Shell itself is a process of its own).
 
 | | 0.3b7 | 0.3b8 | 0.3b12 | 0.3b13 | 0.3b14 |
 |---|---|---|---|---|---|
-| CTerm (bytes) | 202,960 | 231,176 | 251,788 | 198,556 | 202,348 (0.3b15: 203,644; 0.3b16: 215,324) |
+| CTerm (bytes) | 202,960 | 231,176 | 251,788 | 198,556 | 202,348 (0.3b15: 203,644; 0.3b16: 215,324; 0.3b17: 224,600) |
 | free, CTerm idle, stock A1200 (2 MB chip) | 85,752 | 60,056 | 39,960 | 119,408 | |
 | free, CTerm idle, A1200 + 8 MB fast | | | 8,413,512 | 8,496,696 | |
 | CTerm idle takes, A1200 + 8 MB fast (2026-10-11, same boot) | | | | 442,304, 438,448 | 440,968, 440,968 |

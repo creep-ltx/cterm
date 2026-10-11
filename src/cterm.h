@@ -269,6 +269,59 @@ struct Pane {
 #define KM_END 331
 #define KM_INS 332
 
+/* CTerm's own keys (keymap.c, ENVARC:CTerm/CTerm.keys): a key is the
+ * keymap's character (Shift in it) or a named key (KM_*, 13, 27, 9, 8,
+ * 127, ' '), and these qualifiers (Shift only with named keys) */
+#define KQ_S 0x0400                     /* Shift */
+#define KQ_C 0x0800                     /* Ctrl */
+#define KQ_M 0x1000                     /* Alt */
+#define KQ_A 0x2000                     /* Right Amiga */
+#define KQ_MODS 0x3C00
+#define KQ_KEY 0x03FF
+enum { KC_WINDOW = 1, KC_CALL, KC_SHELL };      /* the file's sections */
+enum { KA_NONE, KA_NEWTAB, KA_CALL, KA_BOOK, KA_SERIAL, KA_ANSWER, KA_SFTP,
+       KA_CLOSETAB, KA_LOG, KA_LOGSTOP, KA_SENDUSER, KA_SENDPASS, KA_REXX,
+       KA_HIDE, KA_ABOUT, KA_SPEED, KA_QUIT, KA_COPY, KA_PASTE, KA_YRECV,
+       KA_XRECV, KA_YSEND, KA_XSEND, KA_HSEND, KA_XWIN, KA_SPLITH,
+       KA_SPLITV, KA_NEXTPANE, KA_CLOSEPANE, KA_SETTINGS, KA_FONT,
+       KA_TTFONT, KA_BIGGER, KA_SMALLER, KA_SCR_WB, KA_SCR_16, KA_SCR_256,
+       KA_SCR_DEEP, KA_FULL, KA_BAR, KA_UTF8, KA_PC,
+       KA_TAB1, KA_TAB9 = KA_TAB1 + 8, KA_NEXTTAB, KA_PREVTAB, KA_PAGEUP,
+       KA_PAGEDOWN, KA_LINEUP, KA_LINEDOWN, KA_HISTTOP, KA_HISTEND,
+       KA_STOP, KA_REDIAL,
+       KA_ED_LEFT, KA_ED_RIGHT, KA_ED_START, KA_ED_END, KA_ED_WORDLEFT,
+       KA_ED_WORDRIGHT, KA_ED_BACK, KA_ED_DELETE, KA_ED_WORDBACK,
+       KA_ED_KILLSTART, KA_ED_KILLEND, KA_ED_CLEAR, KA_ED_OLDER,
+       KA_ED_NEWER, KA_ED_SEARCH, KA_ED_COMPLETE, KA_ED_ACCEPT, KA_ED_EOF,
+       KA_N };                          /* KA_ED_*: console.h's CE_* order */
+struct KeyAct {
+    const char *name;                   /* in the file */
+    UBYTE ctx;                          /* its section, KC_* */
+    UBYTE menu;                         /* its menu item (M_*), or 0 */
+};
+struct KeyBind {
+    UWORD key;
+    UBYTE act;
+};
+#define MAXKB 160
+extern const struct KeyAct keys_acts[];
+extern struct KeyBind keys_binds[MAXKB];
+extern int keys_n;
+extern char keys_bad[80];
+UWORD keys_code(UWORD code, UWORD q, APTR prev);
+UWORD keys_parse(const char *s, int len);
+void keys_name(UWORD k, char *o, BOOL plain);    /* o: 24 bytes */
+int keys_find(int ctx, UWORD k);
+BOOL keys_is(int a, UWORD code, UWORD q, APTR prev);
+UWORD keys_first(int a);
+const char *keys_word(int a);            /* its first key in words */
+void say_key(const char *before, int a, const char *after);
+void keys_bind(int ctx, UWORD k, int a);
+void keys_unbind(int a);
+void keys_defaults(void);
+void keys_load(void);
+BOOL keys_save(void);
+
 /* The tab has its host or line: something to send to. */
 #define linked    (sock >= 0 || T->t_st.ser != NULL)
 
@@ -292,7 +345,8 @@ struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT, S_ALT, S_THEME, S_PART,
-       S_R, S_G, S_B, S_RESET, S_PIC, S_NOPIC, S_SEE, S_KUSER, S_KPASS,
+       S_R, S_G, S_B, S_RESET, S_PIC, S_NOPIC, S_SEE, S_KLIST, S_KTEXT,
+       S_KPRESS, S_KNONE, S_KDEF,
        S_DLDIR, S_ULDIR,
        S_MINIT, S_MINIT2, S_MDIALK, S_MDIAL, S_MSUFFIX, S_MHANG, S_MHANGCMD,
        S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE, S_PICS,
@@ -454,7 +508,7 @@ void connected(void);
 void hung_up(void);
 void send_str(const char *s);
 void send_typed(const UBYTE *b, LONG n);
-void key(struct IntuiMessage *m);
+BOOL key(struct IntuiMessage *m);         /* FALSE: Quit */
 void remake_menus(void);
 void bitmap_metrics(void);
 BOOL load_font(void);

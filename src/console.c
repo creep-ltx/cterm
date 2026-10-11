@@ -78,6 +78,7 @@ struct Con {
     int x0, y0;                         /* where it starts on screen */
     UBYTE *hist[HISTMAX];
     int nhist, hpos;
+    UBYTE spat[64];                     /* a history search's text, or "" */
 
     /* a paste not yet taken: fed in as the reader asks for it */
     UBYTE *paste;
@@ -583,71 +584,169 @@ static void complete(struct Con *c)
     redraw_line(c);
 }
 
-/* One key's bytes, cooked. */
+/* A typed key's bytes, cooked: its letters into the line. The editing
+ * keys come as actions (con_edit); Ctrl-J still ends the line. */
 static void edit_key(struct Con *c, const UBYTE *b, LONG n)
 {
-    UBYTE k0 = b[0];
-    if (k0 == 0x9B && n >= 2) {         /* cursor keys */
-        UBYTE k = b[1];
-        begin_line(c);
-        if (k == 'A' && c->nhist) {                 /* up: history */
+    if (b[0] == 0x9B)
+        return;                         /* a key no action has */
+    while (n-- > 0) {
+        UBYTE ch = *b++;
+        if (ch == '\n') {
+            begin_line(c);
+            finish_line(c);
+        } else if (ch >= 0x20 && !(ch >= 0x80 && ch < 0xA0) &&
+                   c->llen < LINEMAX - 1) {
+            c->spat[0] = 0;             /* a search starts afresh */
+            insert_char(c, ch);
+        }
+    }
+}
+
+static BOOL word_ch(UBYTE ch)
+{
+    return ch != ' ' && ch != '/' && ch != ':' && ch != '"';
+}
+
+/* Does history line h hold the text s (any case)? */
+static BOOL holds(const UBYTE *h, const UBYTE *s)
+{
+    int i, n = strlen((const char *)s);
+    for (; *h; h++) {
+        for (i = 0; i < n; i++)         /* (h's 0 never matches s) */
+            if (lower(h[i]) != lower(s[i]))
+                break;
+        if (i == n)
+            return TRUE;
+    }
+    return n == 0;
+}
+
+/* Delete the letters a..b-1 of the line; the cursor to a. */
+static void cut(struct Con *c, int a, int b)
+{
+    if (a >= b)
+        return;
+    memmove(c->line + a, c->line + b, c->llen - b);
+    c->llen -= b - a;
+    c->lcur = a;
+    redraw_line(c);
+}
+
+/* One of the line editor's actions (CE_*: CTerm.keys' [shell]); a key
+ * at a time: small before quick. */
+__attribute__((optimize("Os"))) void con_edit(struct Con *c, int what)
+{
+    int i;
+    if (!c)
+        return;
+    if (c->rawmode) {
+        if (what == CE_ACCEPT)
+            con_keys(c, (const UBYTE *)"\r", 1);
+        return;
+    }
+    begin_line(c);
+    if (what != CE_SEARCH)
+        c->spat[0] = 0;
+    switch (what) {
+    case CE_LEFT:
+        if (c->lcur > 0) {
+            c->lcur--;
+            redraw_line(c);
+        }
+        break;
+    case CE_RIGHT:
+        if (c->lcur < c->llen) {
+            c->lcur++;
+            redraw_line(c);
+        }
+        break;
+    case CE_START: c->lcur = 0; redraw_line(c); break;
+    case CE_END: c->lcur = c->llen; redraw_line(c); break;
+    case CE_WORDLEFT:
+        for (i = c->lcur; i > 0 && !word_ch(c->line[i - 1]); i--)
+            ;
+        for (; i > 0 && word_ch(c->line[i - 1]); i--)
+            ;
+        c->lcur = i;
+        redraw_line(c);
+        break;
+    case CE_WORDRIGHT:
+        for (i = c->lcur; i < c->llen && !word_ch(c->line[i]); i++)
+            ;
+        for (; i < c->llen && word_ch(c->line[i]); i++)
+            ;
+        c->lcur = i;
+        redraw_line(c);
+        break;
+    case CE_BACK:
+        if (c->lcur > 0)
+            cut(c, c->lcur - 1, c->lcur);
+        break;
+    case CE_DELETE:
+        if (c->lcur < c->llen)
+            cut(c, c->lcur, c->lcur + 1);
+        break;
+    case CE_WORDBACK:
+        for (i = c->lcur; i > 0 && !word_ch(c->line[i - 1]); i--)
+            ;
+        for (; i > 0 && word_ch(c->line[i - 1]); i--)
+            ;
+        cut(c, i, c->lcur);
+        break;
+    case CE_KILLSTART: cut(c, 0, c->lcur); break;
+    case CE_KILLEND:
+        c->llen = c->lcur;
+        redraw_line(c);
+        break;
+    case CE_CLEAR: set_line(c, (const UBYTE *)""); break;
+    case CE_OLDER:
+        if (c->nhist) {
             c->hpos = c->hpos < 0 ? c->nhist - 1
                     : (c->hpos > 0 ? c->hpos - 1 : 0);
             set_line(c, c->hist[c->hpos]);
-        } else if (k == 'B' && c->hpos >= 0) {      /* down */
+        }
+        break;
+    case CE_NEWER:
+        if (c->hpos >= 0) {
             if (++c->hpos >= c->nhist) {
                 c->hpos = -1;
                 set_line(c, (const UBYTE *)"");
             } else
                 set_line(c, c->hist[c->hpos]);
-        } else if (k == 'C' && c->lcur < c->llen) {
-            c->lcur++;
-            redraw_line(c);
-        } else if (k == 'D' && c->lcur > 0) {
-            c->lcur--;
-            redraw_line(c);
-        } else if (k == ' ' && n >= 3) {            /* shift: ends */
-            c->lcur = b[2] == 'A' ? 0 : c->llen;
-            redraw_line(c);
         }
-        return;
-    }
-    while (n-- > 0) {
-        UBYTE ch = *b++;
-        if (ch == '\r' || ch == '\n') {
-            begin_line(c);
-            finish_line(c);
-        } else if (ch == 8) {                       /* backspace */
-            begin_line(c);
-            if (c->lcur > 0) {
-                memmove(c->line + c->lcur - 1, c->line + c->lcur,
-                        c->llen - c->lcur);
-                c->lcur--;
-                c->llen--;
-                redraw_line(c);
-            }
-        } else if (ch == 0x7F) {                    /* del */
-            begin_line(c);
-            if (c->lcur < c->llen) {
-                memmove(c->line + c->lcur, c->line + c->lcur + 1,
-                        c->llen - c->lcur - 1);
-                c->llen--;
-                redraw_line(c);
-            }
-        } else if (ch == '\t') {                    /* tab: complete */
-            complete(c);
-        } else if (ch == 0x18) {                    /* ctrl-x: clear */
-            begin_line(c);
-            set_line(c, (const UBYTE *)"");
-        } else if (ch == 0x1C) {                    /* ctrl-\: end */
-            if (!c->editing || c->llen == 0) {
-                c->eof_pending = TRUE;
-                serve(c);
-            }
-        } else if (ch >= 0x20 && !(ch >= 0x80 && ch < 0xA0) &&
-                   c->llen < LINEMAX - 1) {
-            insert_char(c, ch);
+        break;
+    case CE_SEARCH:
+        /* the next older line holding what was typed when the search
+         * began (pressed again: the one before that) */
+        if (!c->spat[0]) {
+            i = c->llen < (int)sizeof c->spat - 1 ? c->llen
+                                                  : (int)sizeof c->spat - 1;
+            CopyMem(c->line, c->spat, i);
+            c->spat[i] = 0;
+            c->hpos = -1;
+            if (!i)
+                break;                  /* nothing typed: nothing to find */
         }
+        for (i = (c->hpos < 0 ? c->nhist : c->hpos) - 1; i >= 0; i--)
+            if (holds(c->hist[i], c->spat))
+                break;
+        if (i < 0)
+            beep();
+        else {
+            c->hpos = i;
+            set_line(c, c->hist[i]);
+        }
+        break;
+    case CE_COMPLETE: complete(c); break;
+    case CE_ACCEPT: finish_line(c); break;
+    case CE_EOF:
+        if (c->llen == 0) {
+            c->editing = FALSE;
+            c->eof_pending = TRUE;
+            serve(c);
+        }
+        break;
     }
 }
 

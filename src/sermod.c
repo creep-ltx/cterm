@@ -775,7 +775,7 @@ static BOOL sm_call(SerTab *t)
             return TRUE;
         }
         if ((r == R_BUSY || r == R_NOANSWER) && tries < modem.redial) {
-            char m[80];
+            char m[96];
             strcpy(m, r == R_BUSY ? "busy" : "no answer");
             strcat(m, " - calling again in ");
             numcat(m, modem.pause);
@@ -783,7 +783,9 @@ static BOOL sm_call(SerTab *t)
             numcat(m, tries + 2);
             strcat(m, " of ");
             numcat(m, modem.redial + 1);
-            strcat(m, "), Esc stops");
+            strcat(m, "), ");
+            strncat(m, env->keyword(0), 23);
+            strcat(m, " stops");
             status(m, NULL);
             if (ser_wait(s, NULL, FALSE, modem.pause * 1000) < 0) {
                 status("given up", NULL);
@@ -842,8 +844,9 @@ static void call_over(SerTab *t, struct Ser *s)
     if (t->phone[0]) {
         t->ser = NULL;
         ser_close(s);
-        say("\r\n\x1b[0;2m[the carrier is gone - Return calls again]"
-            "\x1b[0m\r\n");
+        say("\r\n\x1b[0;2m[the carrier is gone - ");
+        say(env->keyword(1));
+        say(" calls again]\x1b[0m\r\n");
     } else
         say("\r\n\x1b[0;2m[the call ended]\x1b[0m\r\n");
 }
