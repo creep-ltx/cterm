@@ -987,7 +987,10 @@ In the order the user and I agreed (2026-10-10):
     solid band right above the prompt; now the backdrop shows there as
     behind text. Read and fixed, not run: FS-UAE has no RTG here.
   - **Left open:** in the file browser a panel switch (Tab) shows only
-    with the next key (seen in 0.3b16 as well, FS-UAE).
+    with the next key (seen in 0.3b16 as well, FS-UAE). A new Shell tab
+    reads Latin-1 (vt_set_amiga) while Settings/UTF-8 shows ticked from
+    the prefs: the first choice of the item turns it off, the second on
+    (seen 2026-10-11, older than 0.3b17).
 
 - **After the audit of 2026-10-10** (Knowledge/amiga/cterm-audit-2026-10-10.md;
   every finding fixed, commits b6f36fc..cefd2fd). Left open:
