@@ -537,13 +537,27 @@ static const char *const kdesc[KA_N] = {
     "Delete to the start", "Done", "Nothing done (cancel)",
     "Complete a name or command", "The command line before",
     "The command line after",
+    "A new Shell in a new pane", "Close the pane and its tab",
+    "Focus the pane to the left", "Focus the pane to the right",
+    "Focus the pane above", "Focus the pane below",
+    "Move the pane left", "Move the pane right", "Move the pane up",
+    "Move the pane down", "New panes side by side",
+    "New panes one below the other", "The pane fills the window (again: back)",
+    "All panes to tabs", "All tabs to panes",
+    "Tab 1 in this pane", "Tab 2 in this pane", "Tab 3 in this pane",
+    "Tab 4 in this pane", "Tab 5 in this pane", "Tab 6 in this pane",
+    "Tab 7 in this pane", "Tab 8 in this pane", "Tab 9 in this pane",
 };
 typedef char kdesc_check[sizeof kdesc / sizeof kdesc[0] == KA_N ? 1 : -1];
 static const char *const khead[KC_N] = {
     "-- Everywhere (menus, tabs, history) --",
     "-- Calling, transfers --", "-- The Shell's line, typed --",
     "-- File browser: the panels (its own) --",
-    "-- File browser: a line typed (its own) --" };
+    "-- File browser: a line typed (its own) --",
+    "-- Panes, the i3 way (everywhere) --" };
+/* the order the list has them in (the file's) */
+static const UBYTE korder[KC_N] = { KC_WINDOW, KC_PANES, KC_CALL, KC_SHELL,
+                                    KC_FILES, KC_FLINE };
 
 static struct List klist;               /* the rows */
 static struct ColumnInfo kcols[] = {
@@ -577,16 +591,27 @@ static void ktitle(const char *t, UWORD k)
  * come first everywhere; the file browser's act in its tab only, where
  * the window's history keys stand aside: a browser key clashes with a
  * window key but those. */
+#define KGLOBAL(c) ((c) == KC_WINDOW || (c) == KC_PANES)
 static BOOL kclash(int a, int b)
 {
     int ca = keys_acts[a].ctx, cb = keys_acts[b].ctx;
-    if (cb == KC_WINDOW) {
+    if (ca == cb || (!KGLOBAL(ca) && !KGLOBAL(cb)))
+        return FALSE;
+    if (!KGLOBAL(ca)) {
         int t = a; a = b; b = t;
         t = ca; ca = cb; cb = t;
     }
-    if (ca != KC_WINDOW || cb == KC_WINDOW)
-        return FALSE;
-    return cb < KC_FILES || a < KA_PAGEUP || a > KA_HISTEND;
+    if (KGLOBAL(cb))
+        return TRUE;                    /* [window] and [panes] */
+    return ca != KC_WINDOW || (cb != KC_FILES && cb != KC_FLINE) ||
+           a < KA_PAGEUP || a > KA_HISTEND;
+}
+
+/* Does a's key come before b's (where both are wanted)? */
+static BOOL kfirst(int a, int b)
+{
+    int ca = keys_acts[a].ctx, cb = keys_acts[b].ctx;
+    return ca == KC_WINDOW || (ca == KC_PANES && cb != KC_WINDOW);
 }
 
 /* Action a's key k: another section's too? (the action, or 0) */
@@ -605,7 +630,7 @@ static int kother(int a, UWORD k)
 static void ktext(int a, char *o, BOOL plain)
 {
     int i;
-    char n[24];
+    char n[40];
     o[0] = 0;
     for (i = 0; i < keys_n; i++)
         if (keys_binds[i].act == a) {
@@ -630,11 +655,12 @@ static void klist_free(void)
 
 static void klist_make(void)
 {
-    int a, c;
+    int a, c, o;
     char t[64];
     NewList(&klist);
     knrow = 0;
-    for (c = KC_WINDOW; c <= KC_N; c++) {
+    for (o = 0; o < KC_N; o++) {
+        c = korder[o];
         struct Node *n = AllocListBrowserNode(2, LBNA_Flags, LBFLG_READONLY,
             LBNA_Column, 0, LBNCA_Text, (ULONG)khead[c - 1],
             LBNA_Column, 1, LBNCA_Text, (ULONG)"", TAG_END);
@@ -692,8 +718,7 @@ static void key_give(int a, UWORD k)
     if (had && had != a)
         ktitle("taken from ", k);
     else if ((o = kother(a, k)))
-        ktitle(keys_acts[a].ctx == KC_WINDOW ? "comes first, before "
-                                             : "is first ", k);
+        ktitle(kfirst(a, o) ? "comes first, before " : "is first ", k);
     if ((had && had != a) || o) {
         strncat(ktitlebuf, kdesc[o ? o : had],
                 sizeof ktitlebuf - strlen(ktitlebuf) - 1);

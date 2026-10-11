@@ -52,7 +52,8 @@ struct Con {
     void *user;                         /* the tab: given to the term_ calls */
     struct MsgPort *conport;
     struct Task *maintask;
-    LONG endbit;
+    LONG endbit;                        /* (shared by all, consig) */
+    volatile BOOL child_done;           /* its helper has ended */
     struct FileHandle *infh;
     char startcmd[256];
     BOOL child_running, started;        /* started: the Shell closes infh */
@@ -98,6 +99,7 @@ static void child_entry(void)
     Close(MKBADDR(c->infh));
     /* tell CTerm, and leave without returning to its code first */
     Forbid();
+    c->child_done = TRUE;               /* (the signal is everyone's) */
     Signal(c->maintask, 1UL << c->endbit);
 }
 
@@ -888,9 +890,8 @@ void con_handle(struct Con *c, ULONG sigs)
     struct Message *m;
     if (!c->conport)
         return;
-    if (c->endbit >= 0 && (sigs & (1UL << c->endbit))) {
+    if (c->child_done)
         c->child_running = FALSE;
-    }
     while ((m = GetMsg(c->conport))) {
         struct DosPacket *p = (struct DosPacket *)m->mn_Node.ln_Name;
         struct MsgPort *from = p->dp_Port;
@@ -1036,14 +1037,36 @@ void con_handle(struct Con *c, ULONG sigs)
 /* A port made by hand, not CreateMsgPort: when its tab closes the port
  * stays (a process left behind may still open "*" on it) but its signal
  * goes back, and only a port of our own can be freed without one. */
+/* The consoles' signals: one for all their ports and one for all their
+ * helpers' ends (two each ran out at seven Shells: a task has 16), each
+ * console looks at its own port and flag when it is set. */
+static BYTE sigport = -1, sigend = -1;
+static int nport, nend;
+
+static BYTE sig_get(BYTE *sb, int *n)
+{
+    if (*sb < 0 && (*sb = AllocSignal(-1)) < 0)
+        return -1;
+    (*n)++;
+    return *sb;
+}
+
+static void sig_put(BYTE *sb, int *n)
+{
+    if (*n > 0 && !--*n && *sb >= 0) {
+        FreeSignal(*sb);
+        *sb = -1;
+    }
+}
+
 static struct MsgPort *port_new(void)
 {
     struct MsgPort *p;
-    BYTE sb = AllocSignal(-1);
+    BYTE sb = sig_get(&sigport, &nport);
     if (sb < 0)
         return NULL;
     if (!(p = AllocVec(sizeof *p, MEMF_PUBLIC | MEMF_CLEAR))) {
-        FreeSignal(sb);
+        sig_put(&sigport, &nport);
         return NULL;
     }
     p->mp_Node.ln_Type = NT_MSGPORT;
@@ -1107,7 +1130,7 @@ void con_retire(struct Con *c)
         Disable();                      /* no PutMsg between the two */
         port->mp_Flags = PA_IGNORE;
         Enable();
-        FreeSignal(port->mp_SigBit);
+        sig_put(&sigport, &nport);
         refuse(port);
         port->mp_Node.ln_Succ = (struct Node *)spent;
         spent = port;
@@ -1126,7 +1149,7 @@ struct Con *con_start(const char *startup, void *user)
     c->hpos = -1;
     c->maintask = FindTask(NULL);
     c->conport = port_new();
-    c->endbit = AllocSignal(-1);
+    c->endbit = sig_get(&sigend, &nend);
     c->infh = AllocDosObject(DOS_FILEHANDLE, NULL);
     if (!c->conport || c->endbit < 0 || !c->infh) {
         con_free(c);
@@ -1192,11 +1215,11 @@ void con_free(struct Con *c)
     if (c->infh && !c->started)
         FreeDosObject(DOS_FILEHANDLE, c->infh);
     if (c->conport) {
-        FreeSignal(c->conport->mp_SigBit);
+        sig_put(&sigport, &nport);
         FreeVec(c->conport);
     }
     if (c->endbit >= 0)
-        FreeSignal(c->endbit);
+        sig_put(&sigend, &nend);
     for (i = 0; i < c->nhist; i++)
         FreeVec(c->hist[i]);
     paste_drop(c);

@@ -70,6 +70,34 @@ static BOOL window_key(int a)
     return TRUE;
 }
 
+/* One of the [panes] actions: i3's keys (pane.c); a beep when there
+ * is nothing to do (no pane that way, no room). */
+static BOOL panes_key(int a)
+{
+    BOOL ok;
+    if (keys_acts[a].menu)
+        return menu_pick(keys_acts[a].menu);
+    ok = a >= KA_P_SHOW1 && a <= KA_P_SHOW9 &&
+         pane_do(PO_SHOW, a - KA_P_SHOW1 + 1);
+    if (!ok)
+        beep();
+    return TRUE;
+}
+
+/* A key of [window] or [panes], from the commodity (the keys Intuition
+ * takes before the window: Amiga + the arrows). FALSE: Quit. */
+BOOL key_action(UWORD k)
+{
+    int a;
+    if (!win)
+        return TRUE;
+    if ((a = keys_find(KC_WINDOW, k)))
+        return window_key(a);
+    if ((a = keys_find(KC_PANES, k)))
+        return panes_key(a);
+    return TRUE;
+}
+
 void send_str(const char *s)
 {
     send_data((const UBYTE *)s, strlen(s));
@@ -116,6 +144,9 @@ BOOL key(struct IntuiMessage *m)
     if ((code == 0x7A || code == 0x7B) && wheelmsgs && !wheelkey)
         return TRUE;                    /* the wheel comes as its message */
     k = keys_code(code, q, prev);
+    if (!(code & IECODE_UP_PREFIX) && !keys_find(KC_WINDOW, k) &&
+        (a = keys_find(KC_PANES, k)))
+        return panes_key(a);            /* i3's, in every tab, always */
     if (T->t_rf && !(code & IECODE_UP_PREFIX)) {
         /* a file browser's tab: CTerm's window keys but the history's
          * (the panels page themselves), then the browser's ([files]),
@@ -511,6 +542,8 @@ BOOL window_events(void)
         }
         case IDCMP_ACTIVEWINDOW:
         case IDCMP_INACTIVEWINDOW:
+            /* Amiga + the arrows: ours while the window is active */
+            cx_keys_on(copy.Class == IDCMP_ACTIVEWINDOW);
             if (!local && linked && vt_focus(vt))
                 send_data((UBYTE *)(copy.Class == IDCMP_ACTIVEWINDOW
                                         ? "\x1b[I" : "\x1b[O"), 3);
@@ -675,6 +708,7 @@ BOOL window_events(void)
                 arrowheld = 0;
             break;
         case IDCMP_INTUITICKS:
+            title_tick();
             if (vpi.Flags & KNOBHIT) {
                 LONG max = vt_history(vt);
                 LONG top = ((ULONG)vpi.VertPot * max + 0x7FFF) / 0xFFFF;

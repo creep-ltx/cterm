@@ -139,6 +139,31 @@ const struct KeyAct keys_acts[] = {
     { "complete", KC_FLINE, 0 },
     { "older", KC_FLINE, 0 },
     { "newer", KC_FLINE, 0 },
+    /* [panes]: i3's way */
+    { "open", KC_PANES, M_POPEN },
+    { "kill", KC_PANES, M_PKILL },
+    { "focusleft", KC_PANES, M_PFLEFT },
+    { "focusright", KC_PANES, M_PFRIGHT },
+    { "focusup", KC_PANES, M_PFUP },
+    { "focusdown", KC_PANES, M_PFDOWN },
+    { "moveleft", KC_PANES, M_PMLEFT },
+    { "moveright", KC_PANES, M_PMRIGHT },
+    { "moveup", KC_PANES, M_PMUP },
+    { "movedown", KC_PANES, M_PMDOWN },
+    { "splith", KC_PANES, M_PSPLITH },
+    { "splitv", KC_PANES, M_PSPLITV },
+    { "full", KC_PANES, M_PFULL },
+    { "tabs", KC_PANES, M_PTABS },
+    { "panes", KC_PANES, M_PPANES },
+    { "show1", KC_PANES, 0 },
+    { "show2", KC_PANES, 0 },
+    { "show3", KC_PANES, 0 },
+    { "show4", KC_PANES, 0 },
+    { "show5", KC_PANES, 0 },
+    { "show6", KC_PANES, 0 },
+    { "show7", KC_PANES, 0 },
+    { "show8", KC_PANES, 0 },
+    { "show9", KC_PANES, 0 },
 };
 
 /* (one entry an action, in the enum's order) */
@@ -189,6 +214,21 @@ static const struct KeyBind defbinds[] = {
     { C('e'), F(27) }, { KM_END, F(27) }, { 8, F(28) }, { 127, F(29) },
     { S(8), F(30) }, { C('u'), F(30) }, { 13, F(31) }, { 27, F(32) },
     { 9, F(33) }, { KM_UP, F(34) }, { KM_DOWN, F(35) },
+#define L(c) (KQ_L | (c))
+    /* [panes]: Left Amiga, as i3's Mod key */
+    { L(13), KA_P_OPEN }, { L('q'), KA_P_KILL },
+    { L(KM_LEFT), KA_P_FLEFT }, { L(KM_RIGHT), KA_P_FRIGHT },
+    { L(KM_UP), KA_P_FUP }, { L(KM_DOWN), KA_P_FDOWN },
+    { L(S(KM_LEFT)), KA_P_MLEFT }, { L(S(KM_RIGHT)), KA_P_MRIGHT },
+    { L(S(KM_UP)), KA_P_MUP }, { L(S(KM_DOWN)), KA_P_MDOWN },
+    { L('h'), KA_P_SPLITH }, { L('v'), KA_P_SPLITV }, { L('f'), KA_P_FULL },
+    { L('t'), KA_P_TABS }, { L('p'), KA_P_PANES },
+    { L('1'), KA_P_SHOW1 }, { L('2'), KA_P_SHOW1 + 1 },
+    { L('3'), KA_P_SHOW1 + 2 }, { L('4'), KA_P_SHOW1 + 3 },
+    { L('5'), KA_P_SHOW1 + 4 }, { L('6'), KA_P_SHOW1 + 5 },
+    { L('7'), KA_P_SHOW1 + 6 }, { L('8'), KA_P_SHOW1 + 7 },
+    { L('9'), KA_P_SHOW1 + 8 },
+#undef L
 #undef F
 #undef S
 };
@@ -201,9 +241,13 @@ int keys_n;
 char keys_bad[80];                      /* the key file's first bad line */
 
 static const char *const secnames[] = { "window", "call", "shell", "files",
-                                        "filesline",
+                                        "filesline", "panes",
                                         /* files.keys's, read once */
                                         "panels", "line" };
+#define NSEC 8
+/* the order the file has them in */
+static const UBYTE secorder[KC_N] = { KC_WINDOW, KC_PANES, KC_CALL,
+                                      KC_SHELL, KC_FILES, KC_FLINE };
 #define KEYFILE_OLD "ENVARC:CTerm/files.keys"
 #define KEYFILE_GONE "ENVARC:CTerm/files.keys.old"
 
@@ -238,12 +282,12 @@ UWORD keys_code(UWORD code, UWORD q, APTR prev)
     UWORD k = 0, m = 0;
     int i;
     if ((code & IECODE_UP_PREFIX) || (code >= 0x60 && code <= 0x67) ||
-        code == 0x7A || code == 0x7B ||
-        ((q & IEQUALIFIER_LCOMMAND) && !(q & IEQUALIFIER_RCOMMAND)))
+        code == 0x7A || code == 0x7B)
         return 0;
     if (q & IEQUALIFIER_CONTROL) m |= KQ_C;
     if (q & (IEQUALIFIER_LALT | IEQUALIFIER_RALT)) m |= KQ_M;
     if (q & IEQUALIFIER_RCOMMAND) m |= KQ_A;
+    if (q & IEQUALIFIER_LCOMMAND) m |= KQ_L;
     if (code >= 0x50 && code <= 0x59)
         k = KM_F1 + code - 0x50;
     for (i = 0; !k && i < (int)sizeof rawk; i++)
@@ -259,13 +303,14 @@ UWORD keys_code(UWORD code, UWORD q, APTR prev)
         ie.ie_Class = IECLASS_RAWKEY;
         ie.ie_Code = code;
         ie.ie_Qualifier = q & ~(IEQUALIFIER_CONTROL | IEQUALIFIER_LALT |
-                                IEQUALIFIER_RALT | IEQUALIFIER_RCOMMAND);
+                                IEQUALIFIER_RALT | IEQUALIFIER_RCOMMAND |
+                                IEQUALIFIER_LCOMMAND);
         ie.ie_EventAddress = prev;
         if (MapRawKey(&ie, (STRPTR)b, sizeof b, NULL) != 1 ||
             (UBYTE)b[0] < ' ')
             return 0;
         k = (UBYTE)b[0];
-        if ((m & (KQ_C | KQ_A)) && k >= 'A' && k <= 'Z')
+        if ((m & (KQ_C | KQ_A | KQ_L)) && k >= 'A' && k <= 'Z')
             k += 32;
     }
     return k | m;
@@ -286,9 +331,9 @@ UWORD keys_parse(const char *s, int len)
     for (i = 0; i < 2; i++)             /* <S-BS>, <C-BS> as CFile has them */
         if ((int)strlen(kn2[i].n) == len && !strncmp(kn2[i].n, s, len))
             return kn2[i].k;
-    while (len > 2 && s[1] == '-' && strchr("SCMA", s[0])) {
+    while (len > 2 && s[1] == '-' && strchr("SCMAL", s[0])) {
         m |= s[0] == 'S' ? KQ_S : s[0] == 'C' ? KQ_C : s[0] == 'M' ? KQ_M
-                                                                   : KQ_A;
+           : s[0] == 'L' ? KQ_L : KQ_A;
         s += 2;
         len -= 2;
     }
@@ -296,7 +341,7 @@ UWORD keys_parse(const char *s, int len)
         k = (UBYTE)s[0];
         if (m & KQ_S)                   /* Shift is in the character */
             return 0;
-        if ((m & (KQ_C | KQ_A)) && k >= 'A' && k <= 'Z')
+        if ((m & (KQ_C | KQ_A | KQ_L)) && k >= 'A' && k <= 'Z')
             k += 32;
         return k | m;
     }
@@ -308,8 +353,8 @@ UWORD keys_parse(const char *s, int len)
     return 0;
 }
 
-/* A key's name: plain FALSE as the file writes it ("<A-t>"), TRUE in
- * words ("Right Amiga+T", "Ctrl+Tab"). o: 24 bytes. */
+/* A key's name: plain FALSE as the file writes it ("<A-t>", "<L-q>"),
+ * TRUE in words ("Right Amiga+T", "Left Amiga+Q"). o: 40 bytes. */
 void keys_name(UWORD k, char *o, BOOL plain)
 {
     UWORD b = k & KQ_KEY;
@@ -328,11 +373,13 @@ void keys_name(UWORD k, char *o, BOOL plain)
             return;
         }
         strcpy(o, "<");
+        if (k & KQ_L) strcat(o, "L-");
         if (k & KQ_A) strcat(o, "A-");
         if (k & KQ_C) strcat(o, "C-");
         if (k & KQ_M) strcat(o, "M-");
         if (k & KQ_S) strcat(o, "S-");
     } else {
+        if (k & KQ_L) strcat(o, "Left Amiga+");
         if (k & KQ_A) strcat(o, "Right Amiga+");
         if (k & KQ_C) strcat(o, "Ctrl+");
         if (k & KQ_M) strcat(o, "Alt+");
@@ -384,7 +431,7 @@ UWORD keys_first(int a)
  * when it has none. */
 const char *keys_word(int a)
 {
-    static char w[24];
+    static char w[40];
     UWORD k = keys_first(a);
     if (!k)
         return "-";
@@ -463,10 +510,10 @@ static void key_line(char *l, int *ctx, int no, int pass, UBYTE *named)
         return;
     if (*l == '[' && l[1] && strchr(l, ']') && !strchr(l, ' ')) {
         *ctx = 0;
-        for (i = 0; i < 7; i++)
+        for (i = 0; i < NSEC; i++)
             if (!strnicmp(l + 1, secnames[i], strlen(secnames[i])) &&
                 l[1 + strlen(secnames[i])] == ']')
-                *ctx = i < KC_N ? i + 1 : i - 1;    /* [panels] [line] */
+                *ctx = i < KC_N ? i + 1 : i - 2;    /* [panels] [line] */
         if (!*ctx && !keys_bad[0] && pass) {
             strcpy(keys_bad, "line ");
             numstr_cat(keys_bad, no);
@@ -569,11 +616,12 @@ static void key_apply(char *t, int ctx, UBYTE *named)
  * were files.keys of their own until 0.3b18: when CTerm.keys has no
  * [files] or [filesline] yet, files.keys is read into it once, written
  * whole, and renamed files.keys.old (left for the person, not read
- * again). */
+ * again). A file from before [panes] (0.3b19) is written again once,
+ * so it lists them. */
 void keys_load(void)
 {
     char *t, bad[80];
-    BOOL gone, oldgone, infile, browser = FALSE;
+    BOOL gone, oldgone, infile, browser = FALSE, panes = FALSE;
     UBYTE named[KA_N];
     int a;
     keys_defaults();
@@ -587,7 +635,12 @@ void keys_load(void)
         for (a = KA_FB_FIRST; a <= KA_FB_LAST; a++)
             if (named[a])
                 browser = TRUE;
+        for (a = KA_P_OPEN; a <= KA_P_SHOW9; a++)
+            if (named[a])
+                panes = TRUE;
     }
+    if (infile && browser && !panes)
+        keys_save();                    /* (0.3b19) listed with [panes] */
     if (!browser) {
         BOOL old = FALSE;
         if ((t = key_read(KEYFILE_OLD, &oldgone))) {
@@ -621,8 +674,8 @@ static void kput(BPTR f, const char *s)
 BOOL keys_save(void)
 {
     BPTR f;
-    int a, i, c;
-    char kb[24];
+    int a, i, c, o;
+    char kb[40];
     struct Process *me = (struct Process *)FindTask(NULL);
     APTR wp = me->pr_WindowPtr;
     BOOL ok;
@@ -636,15 +689,19 @@ BOOL keys_save(void)
          "; KEYS: a character, or a name in <>: <Up> <Down> <Left> <Right>\n"
          "; <Return> <Esc> <Tab> <Space> <Del> <BS> <Help> <F1>..<F12> <PgUp>\n"
          "; <PgDn> <Home> <End> <Ins>, or a character, after any of A- (Right\n"
-         "; Amiga), C- (Ctrl), M- (Alt), S- (Shift, for names): <A-t> <C-r>\n"
-         "; <S-Up> <C-S-Tab>. 'none action': the action has no key; 'KEYS\n"
-         "; none': the key does nothing of CTerm's. A key no action has goes\n"
-         "; to the program (the Shell, the host), as on any terminal.\n"
+         "; Amiga), L- (Left Amiga), C- (Ctrl), M- (Alt), S- (Shift, for\n"
+         "; names): <A-t> <L-q> <C-r> <S-Up> <C-S-Tab> <L-S-Left>.\n"
+         "; 'none action': the action has no key; 'KEYS none': the key does\n"
+         "; nothing of CTerm's. A key no action has goes to the program\n"
+         "; (the Shell, the host), as on any terminal.\n"
          "; Each section's keys are its own: a key may be in two sections.\n"
          "; [window]'s come first, in every tab (but its history keys in\n"
-         "; the file browser).\n");
-    for (c = 1; c <= KC_N; c++) {
+         "; the file browser), then [panes]'s.\n");
+    for (o = 0; o < KC_N; o++) {
+        c = secorder[o];
         kput(f, c == KC_WINDOW ? "\n; in every tab (menus, tabs, history)\n"
+             : c == KC_PANES ? "\n; the panes, as i3 and Sway on Linux "
+                               "drive them (L- is Left Amiga)\n"
              : c == KC_CALL ? "\n; while a call is made or a transfer runs; "
                               "after a call ended\n"
              : c == KC_SHELL ? "\n; the Amiga Shell's line, as it is typed\n"

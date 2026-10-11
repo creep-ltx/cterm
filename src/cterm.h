@@ -161,7 +161,7 @@ extern ULONG pf_calib;
 #define PF_START(v)
 #define PF_ADD(acc, v)
 #endif
-#define MAXTABS 9
+#define MAXTABS 16
 
 
 /* A transfer running in a tab: what the panel, the tab's name and the
@@ -229,8 +229,9 @@ struct Tab {
                                            clicks are theirs */
 };
 
-/* A pane: a part of the window showing a tab (pane.c). */
-#define MAXPANES 4
+/* A pane: a part of the window showing a tab (pane.c). As many as
+ * there are tabs and room (each at least 10 x 3 letters). */
+#define MAXPANES MAXTABS
 #define PROWS 256                       /* rows a pane keeps marks for */
 struct Pane {
     struct Tab *tab;
@@ -240,6 +241,8 @@ struct Pane {
     int curx, cury;                     /* its cursor, where drawn */
     UBYTE pgen;                         /* draw.c's marks for its rows: */
     UBYTE blank[PROWS], painted[PROWS]; /* shown blank; painted in pgen */
+    UBYTE sdir;                         /* how it splits next: 'h' side by
+                                           side, 'v' above each other */
 };
 
 /* Keys as a file browser's panels get them (keys.c): characters as
@@ -276,10 +279,12 @@ struct Pane {
 #define KQ_C 0x0800                     /* Ctrl */
 #define KQ_M 0x1000                     /* Alt */
 #define KQ_A 0x2000                     /* Right Amiga */
-#define KQ_MODS 0x3C00
+#define KQ_L 0x4000                     /* Left Amiga */
+#define KQ_MODS 0x7C00
 #define KQ_KEY 0x03FF
 enum { KC_WINDOW = 1, KC_CALL, KC_SHELL,         /* the file's sections */
-       KC_FILES, KC_FLINE, KC_N = KC_FLINE };   /* the file browser's */
+       KC_FILES, KC_FLINE,                      /* the file browser's */
+       KC_PANES, KC_N = KC_PANES };             /* the panes, i3's way */
 enum { KA_NONE, KA_NEWTAB, KA_CALL, KA_BOOK, KA_SERIAL, KA_ANSWER, KA_SFTP,
        KA_CLOSETAB, KA_LOG, KA_LOGSTOP, KA_SENDUSER, KA_SENDPASS, KA_REXX,
        KA_HIDE, KA_ABOUT, KA_SPEED, KA_QUIT, KA_COPY, KA_PASTE, KA_YRECV,
@@ -296,6 +301,11 @@ enum { KA_NONE, KA_NEWTAB, KA_CALL, KA_BOOK, KA_SERIAL, KA_ANSWER, KA_SFTP,
        KA_ED_NEWER, KA_ED_SEARCH, KA_ED_COMPLETE, KA_ED_ACCEPT, KA_ED_EOF,
        /* the file browser's ([files], [filesline]): fileui.c's K_* order */
        KA_FB_FIRST, KA_FB_LAST = KA_FB_FIRST + 35,
+       /* [panes]: i3's keys (pane.c's PO_* do them) */
+       KA_P_OPEN, KA_P_KILL, KA_P_FLEFT, KA_P_FRIGHT, KA_P_FUP, KA_P_FDOWN,
+       KA_P_MLEFT, KA_P_MRIGHT, KA_P_MUP, KA_P_MDOWN, KA_P_SPLITH,
+       KA_P_SPLITV, KA_P_FULL, KA_P_TABS, KA_P_PANES, KA_P_SHOW1,
+       KA_P_SHOW9 = KA_P_SHOW1 + 8,
        KA_N };                          /* KA_ED_*: console.h's CE_* order */
 struct KeyAct {
     const char *name;                   /* in the file */
@@ -343,7 +353,9 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS, M_YRECV, M_XRECV, M_YSEND,
        M_XSEND, M_HSEND, M_XWIN, M_BOOK, M_SERIAL, M_ANSWER, M_REXX,
        M_ZSEND, M_HIDE, M_SPLITH, M_SPLITV, M_NEXTPANE, M_CLOSEPANE,
-       M_SFTP };
+       M_SFTP, M_POPEN, M_PKILL, M_PFLEFT, M_PFRIGHT, M_PFUP, M_PFDOWN,
+       M_PMLEFT, M_PMRIGHT, M_PMUP, M_PMDOWN, M_PSPLITH, M_PSPLITV, M_PFULL,
+       M_PTABS, M_PPANES };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -512,6 +524,8 @@ void hung_up(void);
 void send_str(const char *s);
 void send_typed(const UBYTE *b, LONG n);
 BOOL key(struct IntuiMessage *m);         /* FALSE: Quit */
+BOOL key_action(UWORD k);               /* a key of [window] or [panes]
+                                           (the commodity's hot keys) */
 void remake_menus(void);
 void menu_ticks(void);
 void bitmap_metrics(void);
@@ -585,6 +599,8 @@ void mouse_send(int b, int r, int c, BOOL release, UWORD q);
 void mouse_reporting(void);
 BOOL window_events(void);
 void title_update_now(void);
+void title_hint(const char *s);         /* in the title a moment */
+void title_tick(void);                  /* an IntuiTick: the hint goes */
 ULONG shells_sigmask(void);
 void shells_handle(ULONG sigs);
 struct Tab *tab_new(void);
@@ -644,7 +660,7 @@ void rexx_after_call(void);
 void rexx_menu(void);
 BOOL rexx_wake(BOOL any);               /* another CTerm shown: TRUE */
 /* pane.c: the window split into panes */
-extern struct Pane panes[MAXPANES];
+extern struct Pane panes[MAXPANES];      /* npanes of them */
 extern int npanes;
 extern struct Pane *apane, *cpane;
 void panes_init(struct Tab *t);
@@ -666,6 +682,16 @@ BOOL pane_dragging(void);
 void pane_drag_start(int n);
 void pane_drag_move(int x, int y);
 void pane_drag_end(void);
+/* the i3 way (keys [panes], the Panes menu, ARexx PANE): what, and its
+ * direction (PD_*), tab number (1..) or, for PO_KILL, ask (a transfer)
+ * - FALSE: not done (no room, no pane there: beep) */
+enum { PO_OPEN, PO_KILL, PO_FOCUS, PO_MOVE, PO_DIR, PO_FULL, PO_SHOW,
+       PO_TABS, PO_PANES };
+enum { PD_LEFT, PD_RIGHT, PD_UP, PD_DOWN };
+BOOL pane_do(int op, int arg);
+BOOL pane_kept(struct Tab *t);          /* behind a filled window: its
+                                           size stays */
+BOOL pane_zoomed(void);
 /* draw.c, keys.c, main.c for the panes */
 void planes_save(void);
 void planes_restore(void);
@@ -686,6 +712,9 @@ void hide_events(void);
 void hide_show(void);                   /* at a round's end: what was asked */
 void cx_open(void);
 void cx_close(void);
+void cx_keys(void);                     /* the hot keys Intuition would
+                                           take (Amiga + the arrows) */
+void cx_keys_on(BOOL on);               /* the window active or not */
 void hide_free(void);
 /* parts.c, classes.c: the parts (part.h) and what they keep in CTerm
  * between loads */

@@ -1,9 +1,10 @@
 /*
  * pane - the window split into panes, each showing a tab: side by side
- * or above each other, and each half split again (four at most), as
- * tmux and iTerm do. The panes are the leaves of a small tree; the
- * layout gives each its rectangle and its text's size, and the tab in it
- * hears that size (NAWS, the ssh pty, the Shell's window bounds).
+ * or above each other, each split again as long as there is room (a
+ * pane keeps 10 x 3 letters) and tabs (MAXTABS), as tmux, iTerm and i3
+ * do. The panes are the leaves of a binary tree; the layout gives each
+ * its rectangle and its text's size, and the tab in it hears that size
+ * (NAWS, the ssh pty, the Shell's window bounds).
  *
  * Drawing (draw.c) works on one pane at a time, the pane in use (cpane):
  * ox, oy, cols, rows and the edges of its fills are that pane's, T its
@@ -15,11 +16,21 @@
  * With the window split every pane wears the window's own letters (the
  * cells must be one size to share the window); a tab's own (the PC's
  * font, a phone book place's) come back when it is alone again.
+ *
+ * The i3 way (pane_do): a new Shell in a new pane split off the active
+ * one in its direction (each pane keeps one, 'h' or 'v', and a pane
+ * split off it inherits it), close a pane with its tab, focus and move
+ * by geometry, fill the window with one pane (the layout kept aside,
+ * the others running behind), all panes to tabs and all tabs to panes
+ * (a grid; with an odd number the active tab has two cells).
+ *
  */
 #include "cterm.h"
 
 #define DIVW 2                          /* the divider between two panes */
 #define MAXNODES (2 * MAXPANES - 1)
+#define MINC 10                         /* the least a pane keeps */
+#define MINR 3
 
 struct Pane panes[MAXPANES];
 int npanes = 1;
@@ -28,7 +39,7 @@ struct Pane *cpane = &panes[0];         /* the pane drawn now */
 
 /* The tree: a node is a pane (a leaf) or a split in two. Node 0 is the
  * root. */
-static struct PNode {
+struct PNode {
     BYTE used, split;                   /* split: 0 a pane, 'h' side by
                                            side, 'v' above each other */
     BYTE pane;                          /* a leaf: its pane */
@@ -37,7 +48,16 @@ static struct PNode {
     WORD at;                            /* the divider, per mille */
     WORD x0, y0, x1, y1;                /* where it is now */
     WORD m;                             /* a split: the divider's first pixel */
-} nodes[MAXNODES] = { { 1, 0, 0, -1, -1, -1, 500 } };
+};
+static struct PNode nodes[MAXNODES] = { { 1, 0, 0, -1, -1, -1, 500 } };
+
+/* The layout kept aside while one pane fills the window (PO_FULL): the
+ * tree, each leaf's tab and direction, the active one. */
+static BOOL zoomed;
+static struct PNode znodes[MAXNODES];
+static struct Tab *ztab[MAXPANES];
+static UBYTE zdir[MAXPANES];
+static int znpanes, zactive;
 
 /* The first pane: the first tab, its cursor drawn nowhere yet. */
 void panes_init(struct Tab *t)
@@ -45,8 +65,10 @@ void panes_init(struct Tab *t)
     panes[0].tab = t;
     panes[0].curx = panes[0].cury = -1;
     panes[0].pgen = 1;
+    panes[0].sdir = 'h';
 }
 
+static void zoom_out(void);
 static int drag = -1;                   /* the split whose divider is pulled */
 static int dragpos = -1;                /* where its line is drawn now */
 
@@ -66,6 +88,20 @@ struct Pane *pane_of(struct Tab *t)
         if (panes[i].tab == t)
             return &panes[i];
     return NULL;
+}
+
+/* Below: laying out, splitting, the i3 way - a key's or a resize's
+ * work, never a write's: small before quick. */
+#pragma GCC optimize("Os")
+
+/* (The panes are a static array: a pointer to a block made at the
+ * first split was the plan, but bebbo's gcc backend pass then drew
+ * nothing after a window resize - every pane blank until the next full
+ * redraw, verified in FS-UAE 2026-10-11; with -fbbb=- it drew. The
+ * array costs MAXPANES panes always, ~8 KB.) */
+static BOOL panes_room(int n)
+{
+    return n <= MAXPANES;
 }
 
 static int leaf_of(struct Pane *p)
@@ -90,6 +126,17 @@ static int node_new(void)
     return -1;
 }
 
+/* pane k, fresh, showing t */
+static void pane_fresh(int k, struct Tab *t, int sdir)
+{
+    struct Pane *q = &panes[k];
+    memset(q, 0, sizeof *q);
+    q->tab = t;
+    q->curx = q->cury = -1;
+    q->pgen = 1;
+    q->sdir = sdir ? sdir : 'h';
+}
+
 /* ---- the layout ---- */
 
 static void lay(int n, int x0, int y0, int x1, int y1)
@@ -98,7 +145,7 @@ static void lay(int n, int x0, int y0, int x1, int y1)
     d->x0 = x0; d->y0 = y0; d->x1 = x1; d->y1 = y1;
     if (!d->split) {
         struct Pane *p = &panes[(int)d->pane];
-        int edge = npanes > 1, minc = edge ? 2 : 10, minr = edge ? 2 : 3;
+        int edge = npanes > 1, minc = edge ? 2 : MINC, minr = edge ? 2 : MINR;
         p->x0 = x0; p->y0 = y0; p->x1 = x1; p->y1 = y1;
         /* the text: 2 pixels in from the left and right, 1 from the top
          * and bottom - as the window always had */
@@ -127,12 +174,21 @@ static void lay(int n, int x0, int y0, int x1, int y1)
     }
 }
 
+/* The text area's corners (all panes together). */
+static void area(int *x0, int *y0, int *x1, int *y1)
+{
+    *x0 = win->BorderLeft;
+    *y0 = win->BorderTop + tabbar_h();
+    *x1 = win->Width - win->BorderRight - 1 - (fullscreen ? POSBAR + 2 : 0);
+    *y1 = win->Height - win->BorderBottom - 1;
+}
+
 /* Every pane's place and size, from the window (layout_and_resize). */
 void panes_layout(void)
 {
-    lay(0, win->BorderLeft, win->BorderTop + tabbar_h(),
-        win->Width - win->BorderRight - 1 - (fullscreen ? POSBAR + 2 : 0),
-        win->Height - win->BorderBottom - 1);
+    int x0, y0, x1, y1;
+    area(&x0, &y0, &x1, &y1);
+    lay(0, x0, y0, x1, y1);
 }
 
 /* The widest pane's columns: the row buffers' size. */
@@ -229,22 +285,77 @@ void pane_next(void)
     pane_activate(&panes[(k + 1) % npanes]);
 }
 
+/* The pane next to p in direction dir, by where they are: one that lies
+ * wholly that way and overlaps p along the other axis - the nearest, of
+ * those the one that overlaps most (i3). NULL: none. */
+static struct Pane *neighbour(struct Pane *p, int dir)
+{
+    struct Pane *best = NULL;
+    int i, bd = 0, bo = 0;
+    for (i = 0; i < npanes; i++) {
+        struct Pane *q = &panes[i];
+        int d, o, lo, hi;
+        if (q == p)
+            continue;
+        switch (dir) {
+        case PD_LEFT: d = p->x0 - q->x1; break;
+        case PD_RIGHT: d = q->x0 - p->x1; break;
+        case PD_UP: d = p->y0 - q->y1; break;
+        default: d = q->y0 - p->y1; break;
+        }
+        if (d <= 0)
+            continue;                   /* not wholly that way */
+        if (dir == PD_LEFT || dir == PD_RIGHT) {
+            lo = p->y0 > q->y0 ? p->y0 : q->y0;
+            hi = p->y1 < q->y1 ? p->y1 : q->y1;
+        } else {
+            lo = p->x0 > q->x0 ? p->x0 : q->x0;
+            hi = p->x1 < q->x1 ? p->x1 : q->x1;
+        }
+        if ((o = hi - lo + 1) <= 0)
+            continue;                   /* beside it, but not alongside */
+        if (!best || d < bd || (d == bd && o > bo)) {
+            best = q;
+            bd = d;
+            bo = o;
+        }
+    }
+    return best;
+}
+
 /* ---- splitting and closing ---- */
 
+/* Can a pane of w x h pixels be halved that way, each half keeping its
+ * letters? */
+static BOOL halves_fit(int dir, int w, int h)
+{
+    return dir == 'h' ? (w - DIVW) / 2 >= MINC * cw + 4
+                      : (h - DIVW) / 2 >= MINR * ch + 2;
+}
+
 /* The active pane in two (dir 'h': side by side, 'v': above each
- * other), a new Shell in the new half, which becomes the active pane.
- * FALSE: not now (four panes, no room, no tab free). */
+ * other), a new Shell in the new half (right or below), which becomes
+ * the active pane and keeps the old one's direction. FALSE: not now (no
+ * room, every tab taken, no memory). */
 BOOL pane_split(int dir)
 {
-    struct Pane *p = apane, *q;
+    struct Pane *p, *q;
     struct Tab *t;
-    int n = leaf_of(p), a, b;
+    int n, a, b, sdir;
+    if (zoomed) {
+        zoom_out();
+        panes_changed();
+    }
     if (npanes >= MAXPANES || !win)
         return FALSE;
-    /* each half at least 10 x 3 letters */
-    if (dir == 'h' ? (p->x1 - p->x0 + 1 - DIVW) / 2 < 10 * cw + 4
-                   : (p->y1 - p->y0 + 1 - DIVW) / 2 < 3 * ch + 2)
+    p = apane;
+    if (!halves_fit(dir, p->x1 - p->x0 + 1, p->y1 - p->y0 + 1))
         return FALSE;
+    if (!panes_room(npanes + 1))
+        return FALSE;
+    p = apane;
+    n = leaf_of(p);
+    sdir = p->sdir;
     if ((a = node_new()) < 0)
         return FALSE;
     if ((b = node_new()) < 0) {
@@ -255,11 +366,8 @@ BOOL pane_split(int dir)
         nodes[a].used = nodes[b].used = 0;
         return FALSE;
     }
+    pane_fresh(npanes, t, sdir);
     q = &panes[npanes];
-    memset(q, 0, sizeof *q);
-    q->tab = t;
-    q->curx = q->cury = -1;
-    q->pgen = 1;
     nodes[a].pane = nodes[n].pane;
     nodes[b].pane = npanes;
     nodes[a].up = nodes[b].up = n;
@@ -306,11 +414,94 @@ static void pane_remove(struct Pane *p)
     cpane = apane;
 }
 
+/* ---- one pane fills the window (i3's fullscreen) ---- */
+
+/* The layout aside; the active pane alone in the window. */
+static void zoom_in(void)
+{
+    int i;
+    memcpy(znodes, nodes, sizeof nodes);
+    for (i = 0; i < npanes; i++) {
+        ztab[i] = panes[i].tab;
+        zdir[i] = panes[i].sdir;
+    }
+    znpanes = npanes;
+    zactive = apane - panes;
+    i = apane->sdir;
+    memset(nodes, 0, sizeof nodes);
+    nodes[0].used = 1;
+    nodes[0].up = nodes[0].a = nodes[0].b = -1;
+    nodes[0].at = 500;
+    panes[0].tab = apane->tab;
+    npanes = 1;
+    apane = cpane = &panes[0];
+    panes_room(1);
+    pane_fresh(0, shown, i);
+    zoomed = TRUE;
+}
+
+/* The layout back (nothing drawn): the tab shown now in the pane that
+ * shows it, else in the pane that was active; a tab gone meanwhile
+ * leaves its pane to a tab in none, or the pane goes. */
+static void zoom_out(void)
+{
+    struct Tab *now = shown;
+    int i, k;
+    if (!zoomed)
+        return;
+    zoomed = FALSE;
+    if (!panes_room(znpanes))
+        return;                         /* no memory: stays one pane */
+    memcpy(nodes, znodes, sizeof nodes);
+    npanes = znpanes;
+    for (i = 0; i < npanes; i++)
+        pane_fresh(i, ztab[i], zdir[i]);
+    apane = &panes[zactive];
+    for (i = 0; i < npanes; i++)
+        if (panes[i].tab == now)
+            apane = &panes[i];
+    if (apane->tab != now)
+        apane->tab = now;               /* chosen while filled */
+    cpane = apane;
+    for (i = 0; i < npanes; i++)
+        if (!panes[i].tab) {
+            for (k = 0; k < ntabs && pane_of(tabs[k]); k++)
+                ;
+            if (k < ntabs)
+                panes[i].tab = tabs[k];
+            else {
+                pane_remove(&panes[i]);
+                i = -1;                 /* the list moved: again */
+            }
+        }
+    shown = T = apane->tab;
+}
+
+BOOL pane_zoomed(void)
+{
+    return zoomed;
+}
+
+/* t is in the layout kept aside: hidden, its size stays as it was. */
+BOOL pane_kept(struct Tab *t)
+{
+    int i;
+    if (zoomed)
+        for (i = 0; i < znpanes; i++)
+            if (ztab[i] == t && t != panes[0].tab)
+                return TRUE;
+    return FALSE;
+}
+
 /* Close the active pane: its tab goes on in the tab bar. */
 BOOL pane_close(void)
 {
-    if (npanes < 2)
+    if (zoomed)
+        zoom_out();                     /* (drawn below, or now) */
+    if (npanes < 2) {
+        panes_changed();
         return FALSE;
+    }
     pane_remove(apane);
     shown = T = apane->tab;
     panes_changed();
@@ -323,6 +514,9 @@ void pane_tab_gone(struct Tab *t, int at)
 {
     struct Pane *p = pane_of(t);
     int i;
+    for (i = 0; i < MAXPANES; i++)      /* the layout kept aside */
+        if (ztab[i] == t)
+            ztab[i] = NULL;
     if (!p)
         return;
     p->tab = NULL;
@@ -353,6 +547,300 @@ void panes_changed(void)
     title_update_now();
 }
 
+/* ---- all tabs to panes: a grid ---- */
+
+/* t's place in the tabs (backwards: see main.c's tab_index) */
+static int tindex(struct Tab *t)
+{
+    int i = ntabs;
+    while (--i >= 0)
+        if (tabs[i] == t)
+            break;
+    return i < 0 ? 0 : i;
+}
+
+/* c x r cells in the text area, each keeping its letters? */
+static BOOL grid_fits(int c, int r, int w, int h)
+{
+    return (w - (c - 1) * DIVW) / c >= MINC * cw + 4 &&
+           (h - (r - 1) * DIVW) / r >= MINR * ch + 2;
+}
+
+/* The grid for k panes (an odd k: one cell more, the active pane has
+ * two): columns c, rows r, as wide as the window is shaped. FALSE: they
+ * do not fit. */
+static BOOL grid_for(int k, int w, int h, int *c, int *r)
+{
+    int m = k + (k & 1), i, a, b;
+    if (k == 1) {
+        *c = *r = 1;
+        return TRUE;
+    }
+    for (a = 1, i = 1; i * i <= m; i++)
+        if (m % i == 0)
+            a = i;                      /* the smaller side */
+    b = m / a;
+    /* a wide window more columns, a tall one more rows; else the other
+     * way round, if that fits */
+    if (w >= h) *c = b, *r = a;
+    else *c = a, *r = b;
+    if (grid_fits(*c, *r, w, h))
+        return TRUE;
+    i = *c; *c = *r; *r = i;
+    return a != b && grid_fits(*c, *r, w, h);
+}
+
+/* Nodes in a row: a chain of splits dir over items (nodes), each its
+ * weight's share. The chain's node. */
+static int chain(int dir, const int *item, const int *wt, int n)
+{
+    int d, i, sum = 0;
+    if (n == 1)
+        return item[0];
+    if ((d = node_new()) < 0)
+        return item[0];                 /* (cannot be: nodes enough) */
+    for (i = 0; i < n; i++)
+        sum += wt[i];
+    nodes[d].split = dir;
+    nodes[d].a = item[0];
+    nodes[d].b = chain(dir, item + 1, wt + 1, n - 1);
+    nodes[d].at = (LONG)wt[0] * 1000 / sum;
+    nodes[(int)nodes[d].a].up = d;
+    nodes[(int)nodes[d].b].up = d;
+    return d;
+}
+
+/* Every tab in a pane: a grid of c columns and r rows, the tabs in
+ * their order row by row; with an odd number the active tab first,
+ * filling the left column's top two cells. As many as fit (the active
+ * one always); the others stay tabs. */
+static BOOL to_panes(void)
+{
+    int order[MAXTABS], k, n = 0, c = 1, r = 1, i, j, x0, y0, x1, y1;
+    int leaf[MAXPANES], col[MAXPANES], cw_[MAXPANES], cn, cell;
+    struct Tab *act = shown;
+    char note[60];
+    if (!win)
+        return FALSE;
+    zoomed = FALSE;
+    area(&x0, &y0, &x1, &y1);
+    for (k = ntabs; k > 1 && !grid_for(k, x1 - x0 + 1, y1 - y0 + 1, &c, &r);
+         k--)
+        ;
+    if (!panes_room(k))
+        return FALSE;
+    /* which tabs, in what order */
+    if (k & 1)
+        order[n++] = tindex(act);
+    for (i = 0; i < ntabs && n < k; i++)
+        if (tabs[i] != act || !(k & 1))
+            order[n++] = i;
+    if (!(k & 1)) {                     /* the active one must be in */
+        for (i = 0; i < n && tabs[order[i]] != act; i++)
+            ;
+        if (i == n)
+            order[n - 1] = tindex(act);
+    }
+    memset(nodes, 0, sizeof nodes);
+    nodes[0].used = 1;                  /* the root's place, kept */
+    npanes = k;
+    for (i = 0; i < k; i++) {
+        pane_fresh(i, tabs[order[i]], 'h');
+        leaf[i] = k == 1 ? 0 : node_new();
+        nodes[leaf[i]].pane = i;
+        if (tabs[order[i]] == act)
+            apane = &panes[i];
+    }
+    if (k > 1) {
+        /* each column, top to bottom: the cells row by row are i = r *
+         * c; the active one's two (odd) are column 0, rows 0 and 1 */
+        int colnode[MAXPANES], one[MAXPANES], root;
+        for (j = 0; j < c; j++) {
+            cn = 0;
+            for (i = 0; i < r; i++) {
+                cell = i * c + j;       /* the cell's pane: count the */
+                if (k & 1) {            /* cells before it, the second */
+                    if (j == 0 && i == 1)   /* of the active's skipped */
+                        continue;
+                    if (cell > c)
+                        cell--;
+                }
+                col[cn] = leaf[cell];
+                cw_[cn++] = (k & 1) && cell == 0 ? 2 : 1;
+            }
+            colnode[j] = chain('v', col, cw_, cn);
+            one[j] = 1;
+        }
+        root = chain('h', colnode, one, c);
+        nodes[0] = nodes[root];         /* the root into node 0 */
+        nodes[root].used = 0;
+        nodes[0].up = -1;
+        if (nodes[0].split) {
+            nodes[(int)nodes[0].a].up = 0;
+            nodes[(int)nodes[0].b].up = 0;
+        }
+    } else {
+        nodes[0].up = nodes[0].a = nodes[0].b = -1;
+        nodes[0].at = 500;
+        apane = &panes[0];
+    }
+    cpane = apane;
+    shown = T = apane->tab;
+    panes_changed();
+    if (k < ntabs) {
+        strcpy(note, "panes: ");
+        numstr_cat(note, k);
+        strcat(note, " fit, ");
+        numstr_cat(note, ntabs - k);
+        strcat(note, " stay tabs");
+        title_hint(note);
+    }
+    return TRUE;
+}
+
+/* Every pane to a tab: one pane, the active tab in it. */
+static void to_tabs(void)
+{
+    int dir = apane->sdir;
+    struct Tab *t = shown;
+    zoomed = FALSE;
+    memset(nodes, 0, sizeof nodes);
+    nodes[0].used = 1;
+    nodes[0].up = nodes[0].a = nodes[0].b = -1;
+    nodes[0].at = 500;
+    panes[0].tab = t;
+    npanes = 1;
+    apane = cpane = &panes[0];
+    panes_room(1);
+    pane_fresh(0, t, dir);
+    shown = T = t;
+    panes_changed();
+}
+
+/* ---- the i3 way ---- */
+
+/* Close the active pane and its tab (the Shell told its input ended, a
+ * host hung up on); the sibling takes the room. A transfer running
+ * there: asked first (ask). The last pane: as Close tab. */
+static BOOL kill_pane(BOOL ask)
+{
+    struct Tab *t = shown;
+    if (ask && t->t_xfer) {
+        struct EasyStruct es = {
+            sizeof(struct EasyStruct), 0, (UBYTE *)"CTerm",
+            (UBYTE *)"A file transfer runs in this pane.\n"
+                     "Stop it and close the pane and its tab?",
+            (UBYTE *)"Close|Cancel" };
+        if (!EasyRequestArgs(win, &es, NULL, NULL))
+            return TRUE;
+    }
+    T = t;
+    tab_close_current();                /* the tab goes when it has ended */
+    if (npanes > 1) {
+        pane_remove(apane);
+        shown = apane->tab;
+        T = shown;
+        panes_changed();
+    }
+    T = shown;
+    return TRUE;
+}
+
+/* Show tab n in the active pane; a tab in another pane changes places
+ * with the active pane's (i3's workspace on this output). */
+static BOOL show_tab(int n)
+{
+    struct Pane *q;
+    struct Tab *t;
+    if (n < 1 || n > ntabs)
+        return FALSE;
+    t = tabs[n - 1];
+    if (t == apane->tab)
+        return TRUE;
+    if (!(q = pane_of(t))) {
+        tab_show(n - 1);
+        return TRUE;
+    }
+    q->tab = apane->tab;
+    apane->tab = t;
+    shown = T = t;
+    panes_changed();
+    return TRUE;
+}
+
+BOOL pane_do(int op, int arg)
+{
+    struct Pane *q;
+    if (!win)
+        return FALSE;
+    if ((op == PO_OPEN || op == PO_FOCUS || op == PO_MOVE) && zoomed) {
+        zoom_out();                     /* the layout back first */
+        panes_changed();
+    }
+    switch (op) {
+    case PO_OPEN:
+        if (!pane_split(apane->sdir)) {
+            title_hint("no room for another pane");
+            return FALSE;
+        }
+        return TRUE;
+    case PO_KILL:
+        if (zoomed) {
+            zoom_out();
+            if (npanes < 2)
+                panes_changed();
+        }
+        return kill_pane(arg);
+    case PO_FOCUS:
+    case PO_MOVE:
+        if (!(q = neighbour(apane, arg)))
+            return FALSE;
+        if (op == PO_FOCUS) {
+            pane_activate(q);
+            return TRUE;
+        }
+        {   /* the two change places: tabs and directions */
+            struct Tab *t = q->tab;
+            UBYTE d = q->sdir;
+            q->tab = apane->tab;
+            q->sdir = apane->sdir;
+            apane->tab = t;
+            apane->sdir = d;
+            apane = q;
+            shown = T = apane->tab;
+            panes_changed();
+        }
+        return TRUE;
+    case PO_DIR:
+        apane->sdir = arg;
+        if (zoomed)
+            zdir[zactive] = arg;
+        title_hint(arg == 'h' ? "new panes: side by side"
+                              : "new panes: one below the other");
+        return TRUE;
+    case PO_FULL:
+        if (zoomed) {
+            zoom_out();
+            panes_changed();
+            return TRUE;
+        }
+        if (npanes < 2)
+            return FALSE;
+        zoom_in();
+        panes_changed();
+        title_hint("one pane fills the window");
+        return TRUE;
+    case PO_SHOW:
+        return show_tab(arg);
+    case PO_TABS:
+        to_tabs();
+        return TRUE;
+    case PO_PANES:
+        return to_panes();
+    }
+    return FALSE;
+}
+
 /* ---- the dividers, pulled with the mouse ---- */
 
 /* A split whose divider is at x,y (a pixel either side counts): its
@@ -375,17 +863,32 @@ int divider_at(int x, int y)
     return -1;
 }
 
-/* Where the divider may go: each side keeps 10 x 3 letters. */
+/* The least room a node needs that way: its panes' letters, and the
+ * dividers between (a split across adds nothing). */
+static int need(int n, int dir)
+{
+    struct PNode *d = &nodes[n];
+    int a, b;
+    if (!d->split)
+        return dir == 'h' ? MINC * cw + 4 : MINR * ch + 2;
+    a = need(d->a, dir);
+    b = need(d->b, dir);
+    if (d->split == dir)
+        return a + DIVW + b;
+    return a > b ? a : b;
+}
+
+/* Where the divider may go: each side keeps its panes' letters. */
 static int drag_clamp(int pos)
 {
     struct PNode *d = &nodes[drag];
     int lo, hi;
     if (d->split == 'h') {
-        lo = d->x0 + 10 * cw + 4;
-        hi = d->x1 - DIVW - 10 * cw - 4;
+        lo = d->x0 + need(d->a, 'h');
+        hi = d->x1 + 1 - DIVW - need(d->b, 'h');
     } else {
-        lo = d->y0 + 3 * ch + 2;
-        hi = d->y1 - DIVW - 3 * ch - 2;
+        lo = d->y0 + need(d->a, 'v');
+        hi = d->y1 + 1 - DIVW - need(d->b, 'v');
     }
     if (pos > hi) pos = hi;
     if (pos < lo) pos = lo;

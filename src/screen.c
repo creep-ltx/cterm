@@ -42,6 +42,27 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Show transfers...", 0, 0, 0, (APTR)M_XWIN },
     { NM_TITLE, (STRPTR)"Panes", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"New Shell pane", 0, 0, 0, (APTR)M_POPEN },
+    {  NM_ITEM, (STRPTR)"Close pane and tab", 0, 0, 0, (APTR)M_PKILL },
+    {  NM_ITEM, (STRPTR)"New panes side by side", 0, CHECKIT, 0,
+       (APTR)M_PSPLITH },
+    {  NM_ITEM, (STRPTR)"New panes one below other", 0, CHECKIT, 0,
+       (APTR)M_PSPLITV },
+    {  NM_ITEM, (STRPTR)"Focus", 0, 0, 0, 0 },
+    {   NM_SUB, (STRPTR)"Left", 0, 0, 0, (APTR)M_PFLEFT },
+    {   NM_SUB, (STRPTR)"Right", 0, 0, 0, (APTR)M_PFRIGHT },
+    {   NM_SUB, (STRPTR)"Up", 0, 0, 0, (APTR)M_PFUP },
+    {   NM_SUB, (STRPTR)"Down", 0, 0, 0, (APTR)M_PFDOWN },
+    {  NM_ITEM, (STRPTR)"Move", 0, 0, 0, 0 },
+    {   NM_SUB, (STRPTR)"Left", 0, 0, 0, (APTR)M_PMLEFT },
+    {   NM_SUB, (STRPTR)"Right", 0, 0, 0, (APTR)M_PMRIGHT },
+    {   NM_SUB, (STRPTR)"Up", 0, 0, 0, (APTR)M_PMUP },
+    {   NM_SUB, (STRPTR)"Down", 0, 0, 0, (APTR)M_PMDOWN },
+    {  NM_ITEM, (STRPTR)"Fill the window", 0, CHECKIT | MENUTOGGLE, 0,
+       (APTR)M_PFULL },
+    {  NM_ITEM, (STRPTR)"All panes to tabs", 0, 0, 0, (APTR)M_PTABS },
+    {  NM_ITEM, (STRPTR)"All tabs to panes", 0, 0, 0, (APTR)M_PPANES },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Split left/right", 0, 0, 0, (APTR)M_SPLITH },
     {  NM_ITEM, (STRPTR)"Split top/bottom", 0, 0, 0, (APTR)M_SPLITV },
     {  NM_ITEM, (STRPTR)"Next pane", 0, 0, 0, (APTR)M_NEXTPANE },
@@ -72,7 +93,10 @@ static struct NewMenu newmenu[] = {
     { NM_END, 0, 0, 0, 0, 0 },
 };
 struct Window *setwin;
-static struct MenuItem *it_utf8, *it_pc;    /* their ticks: menu_ticks */
+/* the items whose ticks follow the shown tab or pane: menu_ticks */
+static const UBYTE tickid[] = { M_UTF8, M_PC, M_PSPLITH, M_PSPLITV, M_PFULL };
+#define NTICK ((int)sizeof tickid)
+static struct MenuItem *ticks[NTICK];
 
 /* The menus again: their keys changed (CTerm.keys, Settings). */
 void remake_menus(void)
@@ -94,10 +118,12 @@ void remake_menus(void)
 /* A menu item's shortcut from CTerm.keys: Right Amiga + a character as
  * Intuition's own shortcut; any other key written beside it in words
  * (keys.c does it). */
+static char mkpool[1200];                /* the items' key texts, one */
+static int mkused;                      /* after another (make_menus) */
+
 static void menu_key(struct NewMenu *n, ULONG id)
 {
-    static char mk[sizeof newmenu / sizeof newmenu[0]][24];
-    char *o = mk[n - newmenu];
+    char *o = mkpool + mkused;
     int a, i;
     n->nm_CommKey = NULL;
     n->nm_Flags &= ~NM_COMMANDSTRING;
@@ -110,14 +136,18 @@ static void menu_key(struct NewMenu *n, ULONG id)
             (keys_binds[i].key & KQ_KEY) > ' ' &&
             (keys_binds[i].key & KQ_KEY) < 256) {
             UBYTE c = keys_binds[i].key & KQ_KEY;
+            if (mkused + 2 > (int)sizeof mkpool)
+                return;
             o[0] = c >= 'a' && c <= 'z' ? c - 32 : c;
             o[1] = 0;
+            mkused += 2;
             n->nm_CommKey = (STRPTR)o;
             return;
         }
-    if (!keys_first(a))
+    if (!keys_first(a) || mkused + 40 > (int)sizeof mkpool)
         return;
     keys_name(keys_first(a), o, TRUE);
+    mkused += strlen(o) + 1;
     n->nm_CommKey = (STRPTR)o;
     n->nm_Flags |= NM_COMMANDSTRING;
 }
@@ -125,6 +155,7 @@ static void menu_key(struct NewMenu *n, ULONG id)
 static void make_menus(void)
 {
     struct NewMenu *n;
+    mkused = 0;
     for (n = newmenu; n->nm_Type != NM_END; n++) {
         ULONG id = (ULONG)n->nm_UserData;
         BOOL on;
@@ -149,19 +180,20 @@ static void make_menus(void)
         else n->nm_Flags &= ~CHECKED;
     }
     visual = GetVisualInfo(scr, TAG_END);
-    it_utf8 = it_pc = NULL;
+    memset(ticks, 0, sizeof ticks);
     if (visual && (menu = CreateMenus(newmenu, TAG_END)) &&
         LayoutMenus(menu, visual, GTMN_NewLookMenus, TRUE, TAG_END)) {
         struct Menu *m;
         struct MenuItem *it;
+        int i;
         for (m = menu; m; m = m->NextMenu)
             for (it = m->FirstItem; it; it = it->NextItem)
-                if ((ULONG)GTMENUITEM_USERDATA(it) == M_UTF8)
-                    it_utf8 = it;
-                else if ((ULONG)GTMENUITEM_USERDATA(it) == M_PC)
-                    it_pc = it;
+                for (i = 0; i < NTICK; i++)
+                    if ((ULONG)GTMENUITEM_USERDATA(it) == tickid[i])
+                        ticks[i] = it;
         SetMenuStrip(win, menu);
     }
+    cx_keys();                          /* Amiga + the arrows, as bound */
 }
 
 /* The UTF-8 and PC BBS ticks as the shown tab reads: a tab switch, a
@@ -171,18 +203,28 @@ static void make_menus(void)
  * CTerm's own loop, between messages). */
 void menu_ticks(void)
 {
-    BOOL u, p, attached;
-    if (!win || !shown || !it_utf8 || !it_pc)
+    BOOL on[NTICK], attached, same = TRUE;
+    int i;
+    if (!win || !shown)
         return;
-    p = shown->t_pcmode;
-    u = shown->t_utf8 && !p;
-    if (!(it_utf8->Flags & CHECKED) == !u && !(it_pc->Flags & CHECKED) == !p)
+    on[1] = shown->t_pcmode;
+    on[0] = shown->t_utf8 && !on[1];
+    on[2] = apane->sdir != 'v';         /* the active pane's direction */
+    on[3] = apane->sdir == 'v';
+    on[4] = pane_zoomed();
+    for (i = 0; i < NTICK; i++)
+        if (ticks[i] && !(ticks[i]->Flags & CHECKED) != !on[i])
+            same = FALSE;
+    if (same)
         return;
     attached = win->MenuStrip == menu;
     if (attached)
         ClearMenuStrip(win);
-    if (u) it_utf8->Flags |= CHECKED; else it_utf8->Flags &= ~CHECKED;
-    if (p) it_pc->Flags |= CHECKED; else it_pc->Flags &= ~CHECKED;
+    for (i = 0; i < NTICK; i++)
+        if (ticks[i]) {
+            if (on[i]) ticks[i]->Flags |= CHECKED;
+            else ticks[i]->Flags &= ~CHECKED;
+        }
     if (attached)
         ResetMenuStrip(win, menu);
 }
@@ -420,6 +462,7 @@ void close_display(int keep_screen)
         release_pens();
         if (TTEngineBase)
             TT_DoneRastPort(rp);
+        cx_keys_on(FALSE);              /* its hot keys: none now */
         CloseWindow(win);
         win = NULL;
     }
@@ -502,6 +545,19 @@ BOOL menu_pick(ULONG id)
             beep();                     /* four already, or no room */
         break;
     case M_NEXTPANE: pane_next(); break;
+    case M_POPEN: case M_PKILL: case M_PFLEFT: case M_PFRIGHT: case M_PFUP:
+    case M_PFDOWN: case M_PMLEFT: case M_PMRIGHT: case M_PMUP: case M_PMDOWN:
+    case M_PSPLITH: case M_PSPLITV: case M_PFULL: case M_PTABS:
+    case M_PPANES: {
+        static const UBYTE op[] = { PO_OPEN, PO_KILL, PO_FOCUS, PO_FOCUS,
+            PO_FOCUS, PO_FOCUS, PO_MOVE, PO_MOVE, PO_MOVE, PO_MOVE, PO_DIR,
+            PO_DIR, PO_FULL, PO_TABS, PO_PANES };
+        static const UBYTE arg[] = { 0, 1, PD_LEFT, PD_RIGHT, PD_UP,
+            PD_DOWN, PD_LEFT, PD_RIGHT, PD_UP, PD_DOWN, 'h', 'v', 0, 0, 0 };
+        if (!pane_do(op[id - M_POPEN], arg[id - M_POPEN]))
+            beep();                     /* no pane that way, no room */
+        break;
+    }
     case M_CLOSEPANE:
         if (!pane_close())
             beep();

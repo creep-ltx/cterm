@@ -399,7 +399,8 @@ In the order the user and I agreed (2026-10-10):
   - **A pane shows a tab.** The tabs stay what they were; a pane is a
     rectangle of the window with a tab in it. The panes are the leaves
     of a tree of at most 7 nodes (a split 'h' side by side or 'v' above
-    each other, its divider in per mille; four panes at most). Split:
+    each other, its divider in per mille; four panes at most - since
+    0.3b19 as many as there are tabs and room, below). Split:
     the active pane in two, a new Shell tab in the new half (as tmux).
     Close pane: the pane goes, its tab stays in the tab bar. A tab that
     ends: its pane shows a tab in no pane, else closes. Choosing a tab
@@ -878,6 +879,139 @@ In the order the user and I agreed (2026-10-10):
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
 - Also: an ssh password login tried against a real server,
   dropping files on the window, emoji fallback, more stock-A1200 speed.
+- **Done 2026-10-11 (0.3b19): panes the i3 way** (the user's wish:
+  drive CTerm as i3/Sway, Left Amiga as the Mod key; then "tab mode"
+  and "pane mode").
+  - **The tree** (pane.c): the binary tree of 0.3b12 without its limit
+    of four: as many panes as tabs (MAXTABS 16 now, MAXPANES the same)
+    and room (each at least 10 x 3 letters; a split that would go
+    below is refused with a beep and "no room for another pane" in the
+    title). Dividers pulled keep each side's whole subtree its letters
+    (`need()`: the panes' minimum along the split, dividers added).
+    Each pane keeps a direction (`sdir`, 'h' at first): Left Amiga+H/V
+    sets it, a pane split off it inherits it (i3's marked container).
+  - **pane_do(op, arg)** does it all, for keys ([panes]), the Panes
+    menu and ARexx: PO_OPEN (split the active pane its way, a new Shell,
+    focus there), PO_KILL (the pane goes - the sibling takes the room -
+    and its tab is closed as Close tab does; a transfer in it: a
+    requester first, from keys and the menu, not from ARexx), PO_FOCUS /
+    PO_MOVE by geometry (`neighbour()`: panes wholly that way that
+    overlap along the other axis; the nearest, then the most overlap;
+    move swaps the two panes' tabs and directions, focus follows),
+    PO_DIR, PO_FULL, PO_SHOW (tab n here; a tab in another pane swaps
+    with this one's), PO_TABS, PO_PANES.
+  - **Fill the window (PO_FULL):** the tree, each leaf's tab and
+    direction and the active pane are kept aside (`znodes`, `ztab`),
+    and the window has one pane. The tabs behind keep their size
+    (`pane_kept()` in layout_and_resize: no NAWS, no resize report while
+    filled - verified with naws.py: only the filled tab was told).
+    Again: the layout back; the tab shown meanwhile goes into the pane
+    that shows it, else into the active one; a tab that ended meanwhile
+    leaves its pane to a tab in none, or the pane goes. A split, focus,
+    move or close while filled first brings the layout back.
+  - **All tabs to panes (PO_PANES):** k tabs, rounded up to even m; m =
+    c x r with r the largest divisor <= sqrt(m) (2: 2x1, 4: 2x2, 6: 3x2,
+    8: 4x2, 10: 5x2, 12: 4x3), columns the long side in a wide window,
+    rows in a tall one, else turned if only that fits. Odd k: the
+    active tab first, spanning column 0's rows 0 and 1; the others in
+    tab order row by row. Built as a chain of 'h' splits over columns,
+    each a chain of 'v' splits weighted by cells (per mille). When even
+    the turned grid does not fit, k-- until it does (the active tab is
+    always in); the title says "panes: 6 fit, 2 stay tabs". **All panes
+    to tabs (PO_TABS):** one leaf, the active tab.
+  - **Left Amiga keys:** keymap.c's `KQ_L` (0x4000), `<L-x>` in the
+    file, "Left Amiga+X" in words; keys_code no longer drops Left Amiga.
+    A key no action has still goes to the program as before. [panes]
+    is checked right after [window], before the file browser and the
+    transfer's key rules, so it works in every tab, also during a
+    transfer. The file is written again once when it names no [panes]
+    action (verified: a custom `<A-n> newtab` kept, [panes] added).
+    Settings' Keys tab: a heading "Panes, the i3 way", the list in the
+    file's order; [window] and [panes] both "everywhere" (a key in both
+    is marked `!`, [window] wins).
+  - **What reaches the window (verified on 3.2.3 in FS-UAE with a key
+    logger, tests/panes/keylog.c):** Left Amiga + Return, Q, H, V, F, T,
+    P, 1..9, B arrive as RAWKEY with qualifier $40. **Left (and Right)
+    Amiga + an arrow do not:** Intuition takes the press for its
+    keyboard mouse (the pointer moves); only the release arrives. So
+    such bindings ([window]/[panes], Amiga + an arrow, any Shift, Ctrl,
+    Alt) are commodity filters on CTerm's broker (hide.c `cx_keys`),
+    ahead of Intuition (commodities' input handler runs before it):
+    CxFilter (IX: the press only; qualifier synonyms need both bits -
+    `LSHIFT|RSHIFT` with IXSYM_SHIFT, else Shift never matched), a
+    CxSender to the broker's port with the key as id, CxTranslate(NULL)
+    to swallow it. On only while CTerm's window is active (ACTIVEWINDOW
+    / INACTIVEWINDOW, off when the window closes): elsewhere the keys
+    move the pointer as ever (verified: a second window got only the
+    releases while CTerm's layout stayed). Remade with the menus (a key
+    change in Settings).
+  - **Menus:** the Panes menu: New Shell pane, Close pane and tab, New
+    panes side by side / one below other (ticks follow the active pane),
+    Focus > and Move > (submenus), Fill the window (tick), All panes to
+    tabs, All tabs to panes, then the old four. Left Amiga keys are
+    written beside the items (NM_COMMANDSTRING). menu_ticks keeps a
+    small table of ticked items. The key texts are in one pool now
+    (1,200 bytes) instead of 40 bytes for every item.
+  - **The 7-Shell wall:** each Shell tab took two signals (its port, its
+    helper's end) and a task has 16: the eighth Shell said "CTerm could
+    not start a Shell" (0.3b18 too, at MAXTABS 9). The consoles now
+    share one port signal and one end signal (console.c `sig_get`), each
+    console looking at its own port and a `child_done` flag the helper
+    sets before signalling. Verified: 12 Shells in a 4 x 3 grid, endcli
+    in one, LA+Q in another, the rest alive.
+  - **A compiler trap (verified, not understood to the instruction):**
+    `panes` as a pointer (to pane1 or an AllocVec'd block, the plan: no
+    memory for panes never used) made every pane blank after a window
+    resize - redraw_all and repair_damage ran with the right sizes and
+    the painter path, yet nothing showed until the next full redraw
+    (Right Amiga+1). With -fbbb=- (bebbo's backend pass off) or a DBG
+    build it drew; with HEAD's pane.c changed only to `struct Pane
+    *panes = panes_` it failed too. So `panes` is a static array again
+    (16 panes, ~8.5 KB). See Knowledge/amiga/toolchain-and-testing.md.
+  - **ARexx:** PANE OPEN, KILL, SPLIT H|V, FOCUS dir, MOVE dir, FULL,
+    SHOW n, MODE TABS|PANES (template `WHAT/A,ARG`); the old SIDE, UNDER,
+    NEXT, SELECT n, CLOSE (the pane only), COUNT, CURRENT as they were.
+  - **Tested in FS-UAE** (A1200 + 8 MB fast, 3.2.3, a private drive in
+    /tmp/ctpanes, wasabid on 1246, tests/panes/uae.sh; verified
+    2026-10-11, screenshots looked at): six panes built with LA+Return,
+    LA+H, LA+V; LA+arrows from each (six moves, each to the expected
+    pane, checked by an echo typed there); LA+Q in the middle of the
+    tree (the sibling grew, the tab went); LA+F and back (the pane
+    reflowed full size, then back); LA+Shift+Right and the Move menu
+    (swapped); LA+1 (tab 1 swapped into the active pane); LA+T and LA+P
+    with 2, 3, 4, 5, 6 tabs (3 and 5: the active one double; 6: 3 x 2)
+    and 8 tabs in a small window (6 fit, title said so); 12 Shells as a
+    4 x 3 grid; own screen 16 colours (planar painter) with six panes,
+    sixel bars and the Kickstart picture in small panes, cut at the
+    pane edges; LA+F, LA+T, LA+P there with the pictures; hide and show
+    with six panes; the window resized with six panes; the FTP browser
+    in a pane (its keys, LA+arrows out of it and back, LA+F on it);
+    NAWS from tests/xfer/naws.py: 72x25 alone, 36x12 and 35x25 (the
+    active, double) as panes, 72x25 again as tabs; a Zmodem download
+    and LA+Q (the requester; Cancel went on; Close stopped it and closed
+    the pane and tab); custom keys `<L-j> focusleft`, `<L-x> kill`
+    (worked, the old keys then reached the Shell); Settings' Keys tab:
+    the [panes] rows, Press a key with Left Amiga+W.
+  - **Seen, not this work's:** on the own 16-colour screen, after hide
+    and show, the dividers and the active frame came back in other pens
+    (the mixes are pens asked again; 0.3b18 not compared). Typing
+    quickly into tests/xfer/naws.py's echo shows only the first letter
+    of each burst - 0.3b18 the same; the test host's or the emulated
+    socket's, not looked into.
+  - **Not tested:** RTG and the chunky painter with many panes (FS-UAE
+    has no RTG here: read through - nothing pane-specific changed in
+    them); the real A1200; ssh tabs as panes.
+  - **Cost:** CTerm 226,772 -> 234,448 bytes (pane.c's i3 work ~3 KB at
+    -Os, the menus, the hot keys, the key table); CTermSSH 435,228 ->
+    443,220; Parts/ARexx 18,256 -> 18,976, Parts/Settings 26,272 ->
+    27,096. CTerm idle (fast config, Avail FLUSH, the same boot, 0.3b18
+    and 0.3b19 alternating, twice): 0.3b18 takes 467,416 and 463,520,
+    0.3b19 479,952 twice - ~14 KB more: the 16 panes' marks (~8.5 KB,
+    static, see the compiler trap) and the bigger menus. A run still
+    leaves ~6.2 KB behind, as before.
+  - **Speed, one pane** (tests/stock/bench.sh CONF=fast on the private
+    drive, alternating): 0.3b18 17.12, 17.02, 17.26 s; 0.3b19 17.12,
+    16.98, 17.06 s - the same.
 - **Done 2026-10-11 (0.3b18): new tabs' characters, one key file, the
   browser's drawing**
   - **New tabs start in the default characters.** vt_set_amiga cleared

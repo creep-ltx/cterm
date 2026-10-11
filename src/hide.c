@@ -35,6 +35,7 @@ static struct DiskObject *adobj;
 static struct MsgPort *cxport;          /* Exchange's */
 static CxObj *broker;
 static char cxname[CBD_NAMELEN];
+static BOOL hkon;                       /* the hot keys on (below) */
 
 /* A beep on CTerm's screen; none while hidden (no screen to flash -
  * DisplayBeep(NULL) flashes every one). */
@@ -125,11 +126,87 @@ void cx_open(void)
         return;
     }
     ActivateCxObj(broker, TRUE);
+    hkon = win && (win->Flags & WFLG_WINDOWACTIVE);
+    cx_keys();                          /* (the window came first) */
+}
+
+/* ---- the hot keys Intuition takes ----
+ * Amiga + an arrow moves the mouse pointer: Intuition takes the press
+ * and only the release reaches a window (seen on 3.2). Such keys bound
+ * in [window] or [panes] (Left Amiga + the arrows, i3's focus and move)
+ * are filters of the broker, ahead of Intuition: on while CTerm's window
+ * is active, else off (the pointer keys work elsewhere as ever); each
+ * sends its key here (hide_events -> key_action) and is swallowed. */
+#define MAXHK 16
+static CxObj *hk[MAXHK];
+static int nhk;
+
+void cx_keys_on(BOOL on)
+{
+    int i;
+    hkon = on;
+    for (i = 0; i < nhk; i++)
+        ActivateCxObj(hk[i], on);
+}
+
+void cx_keys(void)
+{
+    static const UWORD arrows[4] = { KM_UP, KM_DOWN, KM_RIGHT, KM_LEFT };
+    int i, j;
+    while (nhk > 0) {
+        RemoveCxObj(hk[--nhk]);
+        DeleteCxObjAll(hk[nhk]);
+    }
+    if (!broker)
+        return;
+    for (i = 0; i < keys_n && nhk < MAXHK; i++) {
+        UWORD k = keys_binds[i].key;
+        int c = keys_acts[keys_binds[i].act].ctx;
+        IX ix;
+        CxObj *f;
+        if ((c != KC_WINDOW && c != KC_PANES) || !(k & (KQ_L | KQ_A)))
+            continue;
+        for (j = 0; j < 4 && (k & KQ_KEY) != arrows[j]; j++)
+            ;
+        if (j == 4)
+            continue;
+        memset(&ix, 0, sizeof ix);
+        ix.ix_Version = IX_VERSION;
+        ix.ix_Class = IECLASS_RAWKEY;
+        ix.ix_Code = 0x4C + j;          /* the press only */
+        ix.ix_CodeMask = 0xFF;
+        ix.ix_Qualifier = (k & KQ_L ? IEQUALIFIER_LCOMMAND : 0) |
+                          (k & KQ_A ? IEQUALIFIER_RCOMMAND : 0) |
+                          /* a synonym (IXSYM_*) counts as both keys */
+                          (k & KQ_S ? IEQUALIFIER_LSHIFT |
+                                      IEQUALIFIER_RSHIFT : 0) |
+                          (k & KQ_C ? IEQUALIFIER_CONTROL : 0) |
+                          (k & KQ_M ? IEQUALIFIER_LALT | IEQUALIFIER_RALT
+                                    : 0);
+        ix.ix_QualMask = IEQUALIFIER_LCOMMAND | IEQUALIFIER_RCOMMAND |
+                         IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT |
+                         IEQUALIFIER_CONTROL | IEQUALIFIER_LALT |
+                         IEQUALIFIER_RALT;
+        ix.ix_QualSame = IXSYM_SHIFT | IXSYM_ALT;
+        if (!(f = CxFilter(NULL)))
+            break;
+        SetFilterIX(f, &ix);
+        AttachCxObj(f, CxSender(cxport, k));
+        AttachCxObj(f, CxTranslate(NULL));  /* swallowed */
+        if (CxObjError(f)) {
+            DeleteCxObjAll(f);
+            continue;
+        }
+        ActivateCxObj(f, hkon);
+        AttachCxObj(broker, f);
+        hk[nhk++] = f;
+    }
 }
 
 void cx_close(void)
 {
     struct Message *m;
+    nhk = 0;                            /* (they go with the broker) */
     if (broker)
         DeleteCxObjAll(broker);
     broker = NULL;
@@ -189,6 +266,12 @@ void hide_events(void)
     while (cxport && (m = GetMsg(cxport))) {
         ULONG type = CxMsgType((CxMsg *)m), id = CxMsgID((CxMsg *)m);
         ReplyMsg(m);
+        if (type == CXM_IEVENT) {       /* a hot key: CTerm's window's */
+            if (hkon && win && (win->Flags & WFLG_WINDOWACTIVE) &&
+                !key_action((UWORD)id))
+                quit_all();             /* its key was Quit's */
+            continue;
+        }
         if (type != CXM_COMMAND)
             continue;
         switch (id) {

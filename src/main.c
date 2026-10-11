@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b18 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b19 (11.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -592,6 +592,26 @@ static void save_prefs_(char *buf)
            GVF_GLOBAL_ONLY | (envonly || used_only ? 0 : GVF_SAVE_VAR));
 }
 
+/* A word in the title for a moment (a pane's new direction, what did
+ * not fit): gone after about two seconds of IntuiTicks (the window is
+ * active: a key was just pressed in it), or with the next one. */
+static char hint[64];
+static int hint_ticks;
+
+void title_hint(const char *s)
+{
+    strncpy(hint, s, sizeof hint - 1);
+    hint[sizeof hint - 1] = 0;
+    hint_ticks = 20;
+    title_update_now();
+}
+
+void title_tick(void)
+{
+    if (hint_ticks && !--hint_ticks)
+        title_update_now();
+}
+
 void title_update_now(void)
 {
     title_force = TRUE;
@@ -621,7 +641,10 @@ static void title_update_(void)
     if (!changed || !win)
         return;
     strcpy(title, "CTerm");
-    if (T->t_bookname[0]) {
+    if (hint_ticks) {
+        strcat(title, ": ");
+        strcat(title, hint);
+    } else if (T->t_bookname[0]) {
         strcat(title, ": ");
         strcat(title, T->t_bookname);
     } else if (dialhost[0]) {

@@ -348,14 +348,17 @@ unticked, a window of its own). A row of tab names appears above the
 text: click one, or press Right Amiga+1 to 9 (Ctrl+Tab: the next one,
 Ctrl+Shift+Tab: the one before). Project/Close tab (Right Amiga+W) ends
 the shown tab's Shell or hangs up its host. Tabs you are not looking at
-keep running.
+keep running. Up to 16 tabs (Right Amiga+1 to 9 reach the first nine;
+the tab bar and Ctrl+Tab all of them).
 
 ## Panes: several terminals in sight at once
 
 The Panes menu splits the window, as tmux and iTerm do: Split
 left/right puts a new Amiga Shell beside the pane you are in, Split
-top/bottom puts one below it. Each half can be split again, up to four
-panes.
+top/bottom puts one below it. Each half can be split again, as long as
+every pane keeps at least 10 letters by 3 lines (up to 16 panes, as
+many as there can be tabs). With the keyboard it goes as on i3 and
+Sway: see the next section.
 
 - **Every pane shows a tab.** The tab bar still lists them all: the one
   you type in is the brightest, the others in panes a little less.
@@ -380,6 +383,57 @@ panes.
   is alone in the window again.
 - File transfers show their panel in their own pane, and go on whichever
   pane you are in.
+
+## Panes, the i3 way
+
+If you use i3 or Sway on Linux, CTerm's panes work the same way, with
+the **Left Amiga** key where i3 has its Mod key. Every one of these
+keys can be changed (Settings, the Keys tab, or the `[panes]` part of
+`ENVARC:CTerm/CTerm.keys`); the Panes menu has them all too.
+
+| Key | What it does |
+|---|---|
+| Left Amiga+Return | a new Amiga Shell in a new pane, next to the pane you are in; you are then in the new one |
+| Left Amiga+Q | closes the pane you are in and its tab (the Shell ends, a call hangs up). A file transfer running there: CTerm asks first. The panes beside it take the room. The last pane: the same as Close tab |
+| Left Amiga+H | from now on this pane splits side by side (the new pane on the right) |
+| Left Amiga+V | from now on this pane splits one above the other (the new pane below) |
+| Left Amiga+arrows | to the pane on the left, right, above or below |
+| Left Amiga+Shift+arrows | the pane changes places with the one on that side |
+| Left Amiga+F | the pane fills the window; the others go on behind it. Again: back as it was |
+| Left Amiga+1 to 9 | tab 1 to 9 in the pane you are in (a tab shown in another pane changes places with this one's) |
+| Left Amiga+T | all panes become tabs: the whole window shows the tab you were in, the others run on behind it, the tab bar lists them |
+| Left Amiga+P | all tabs become panes, laid out by themselves (below) |
+
+- **Which way a new pane goes:** each pane remembers its own way (side
+  by side at first). Left Amiga+H or V changes it for the pane you are
+  in, and a pane split off it takes the same way. The window's title
+  says it for a moment, and the Panes menu shows a tick by "New panes
+  side by side" or "New panes one below other".
+- **All tabs to panes** (Left Amiga+P): 1 tab fills the window; 2 are
+  halves side by side; 4 a grid of 2 x 2; 6 a grid of 3 x 2 (or 2 x 3
+  in a tall window); 8 a grid of 4 x 2. With an odd number the tab you
+  are in gets twice the room: **3 tabs** make a 2 x 2 grid where yours
+  has the whole left half and the other two are stacked on the right,
+  a quarter each; 5 tabs a 3 x 2 grid where yours has the left column.
+  The tabs go in their order, row by row. When the window has no room
+  for all of them (each pane at least 10 letters by 3 lines), as many
+  as fit become panes (yours always) and the rest stay tabs - the
+  title says how many. After that it is an ordinary layout: every key
+  above works on it.
+- Going back and forth between tabs and panes keeps everything in
+  every tab (the Shell and what runs in it, a call, a transfer, the
+  history, the file browser); each Shell or host is told its new size.
+- Filling the window (Left Amiga+F) does not change the size of the
+  panes behind it: their programs are not disturbed.
+- Left Amiga+N and M stay the Amiga's (screens to the front and back),
+  as do Left Amiga+V and B while a requester is open. Left Amiga and
+  the arrows usually move the mouse pointer: in CTerm's window CTerm
+  takes them (only while its window is the active one; elsewhere they
+  move the pointer as always). In the Settings' Keys tab, "Press a
+  key" cannot catch Left Amiga + an arrow (the pointer moves): type it
+  in the field instead, as `<L-Left>`.
+- Nothing is lost by closing a pane with the Panes menu's Close pane:
+  that closes only the pane, its tab goes on in the tab bar.
 
 ## Hiding the window
 
@@ -510,7 +564,11 @@ limit, 10 for an error, 20 for a failure):
 | `WINDOW HIDE` / `SHOW` | hides the window (everything goes on) and brings it back; RC 10 when it cannot hide (Ed has the window) |
 | `WINDOW STATE` | RESULT is `HIDDEN` or `SHOWN` |
 | `PANE SIDE` / `UNDER` | splits the pane you are in: a new Shell beside it or below it (RESULT: how many panes) |
-| `PANE NEXT`, `PANE SELECT n`, `PANE CLOSE`, `PANE COUNT`, `PANE CURRENT` | the panes; the commands that follow go to the tab of the pane chosen |
+| `PANE NEXT`, `PANE SELECT n`, `PANE CLOSE`, `PANE COUNT`, `PANE CURRENT` | the panes; the commands that follow go to the tab of the pane chosen (CLOSE: the pane only, its tab stays) |
+| `PANE OPEN`, `PANE KILL` | the i3 way: a new Shell in a new pane (split the way the pane is set to), the pane closed with its tab (no question asked, a transfer is stopped) |
+| `PANE SPLIT H` / `V` | new panes from this one side by side, or one below the other |
+| `PANE FOCUS LEFT` / `RIGHT` / `UP` / `DOWN`, `PANE MOVE ...` | to the pane that way; the pane changes places with that one. RC 10: no pane there |
+| `PANE FULL`, `PANE SHOW n`, `PANE MODE TABS` / `PANES` | fill the window (again: back); tab n in this pane; all panes to tabs, all tabs to panes (RESULT: how many panes) |
 | `PHONEBOOK` | the places' names, each in quotes |
 | `SFTP place`, `FTP place` | opens the file browser: a phone book place, or `[user@]host[:port][/drawer]` (or a URL), in a new tab; RC 0 when it is connected. The commands below go to that tab |
 | `LIST` | the files in the browser's drawer, each in quotes, drawers with a `/` at the end |
@@ -549,8 +607,10 @@ take away from CTerm goes to the program again.
 
 **Where they are kept:** all in one file, `ENVARC:CTerm/CTerm.keys`, a
 text file written with the keys below the first time CTerm starts (as
-CFile's and Ahiru's keys files are). It has five sections: `[window]`,
-`[call]`, `[shell]`, `[files]` and `[filesline]`. Each section's keys
+CFile's and Ahiru's keys files are). It has six sections: `[window]`,
+`[panes]`, `[call]`, `[shell]`, `[files]` and `[filesline]`. (A file
+from before 0.3b19 is written again once, with the `[panes]` keys in
+it; your own keys stay.) Each section's keys
 are its own, so one key can do one thing in the Shell's line and
 another in the file browser. Before 0.3b18 the file browser's keys were
 in a file of their own, `files.keys`: CTerm reads it into `CTerm.keys`
@@ -580,9 +640,9 @@ other key written beside the item (`F9`, `Ctrl+Shift+F1`).
 **Changing them in the file:** one key a line, `KEYS ACTION`. A key is a
 character, or a name in `<>`: `<Up> <Down> <Left> <Right> <Return>
 <Esc> <Tab> <Space> <Del> <BS> <Help> <F1>`..`<F12> <PgUp> <PgDn> <Home>
-<End> <Ins>`, with any of `A-` (Right Amiga), `C-` (Ctrl), `M-` (Alt),
-`S-` (Shift, with the names) in front: `<A-t>`, `<C-r>`, `<S-Up>`,
-`<C-S-Tab>`. `none ACTION` gives an action no key; `KEY none` takes a
+<End> <Ins>`, with any of `A-` (Right Amiga), `L-` (Left Amiga), `C-`
+(Ctrl), `M-` (Alt), `S-` (Shift, with the names) in front: `<A-t>`,
+`<L-q>`, `<C-r>`, `<S-Up>`, `<C-S-Tab>`, `<L-S-Left>`. `none ACTION` gives an action no key; `KEY none` takes a
 key away from CTerm. Lines starting with `;` are notes. A change in the
 file counts the next time CTerm starts.
 
@@ -607,6 +667,15 @@ The keys CTerm comes with:
 | Shift+Up, Shift+Down | `pageup`, `pagedown` | the history a page up, down |
 | (none) | `serial`, `answer`, `sftp`, `logstop`, `rexx`, `hide`, `about`, `speedtest`, `yrecv`, `xrecv`, `ysend`, `xsend`, `hsend`, `transfers`, `splitside`, `splitunder`, `nextpane`, `closepane`, `font`, `ttfont`, `workbench`, `screen16`, `screen256`, `screendeep`, `scrollbar`, `utf8`, `pcbbs` | the other menu items, in the menus' order |
 | (none) | `lineup`, `linedown`, `historytop`, `historyend` | the history a line up, down; its top; back to the end |
+| **The panes, the i3 way** `[panes]` (in every tab, after `[window]`) | | |
+| Left Amiga+Return | `open` | a new Shell in a new pane |
+| Left Amiga+Q | `kill` | close the pane and its tab |
+| Left Amiga+Left, Right, Up, Down | `focusleft`, `focusright`, `focusup`, `focusdown` | the pane that way |
+| Left Amiga+Shift+Left, Right, Up, Down | `moveleft`, `moveright`, `moveup`, `movedown` | change places with the pane that way |
+| Left Amiga+H, V | `splith`, `splitv` | new panes side by side, one below the other |
+| Left Amiga+F | `full` | the pane fills the window (again: back) |
+| Left Amiga+T, P | `tabs`, `panes` | all panes to tabs, all tabs to panes |
+| Left Amiga+1 to 9 | `show1` .. `show9` | that tab in this pane |
 | **Calling and transfers** `[call]` | | |
 | Esc | `stop` | stops a transfer; gives up a call being made |
 | Return | `redial` | calls again, after a call ended |

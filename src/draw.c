@@ -2344,8 +2344,10 @@ void layout_and_resize(void)
             p = apane;
         if (tabs[i]->t_vt)              /* pictures: the cell in pixels */
             vt_set_cell_px(tabs[i]->t_vt, cw, ch, defbg);
-        if (tabs[i]->t_vt && (p->cols != vt_cols(tabs[i]->t_vt) ||
-                              p->rows != vt_rows(tabs[i]->t_vt))) {
+        /* (one behind a filled window keeps its size) */
+        if (tabs[i]->t_vt && !pane_kept(tabs[i]) &&
+            (p->cols != vt_cols(tabs[i]->t_vt) ||
+             p->rows != vt_rows(tabs[i]->t_vt))) {
             vt_resize(tabs[i]->t_vt, p->cols, p->rows);
             con_resized(tabs[i]->con);  /* the line being typed moved */
         }
@@ -2392,7 +2394,7 @@ void draw_tabbar(void)
     SetFont(rp, font);
     SetSoftStyle(rp, 0, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
     for (i = 0; i < ntabs; i++) {
-        char label[64], t[72];
+        char label[64], t[76];
         /* the width shared equally: a half each, a third each... */
         int sx = x0 + i * wd / ntabs, slot = x0 + (i + 1) * wd / ntabs - sx;
         int n, fit;
@@ -2400,9 +2402,10 @@ void draw_tabbar(void)
         /* in another pane: as the shown one, its name a little dimmer */
         ULONG bg = on || pane_of(tabs[i]) ? defbg : mix(defbg, deffg, 12);
         tab_label(tabs[i], label);
-        t[0] = '1' + i;
-        t[1] = ' ';
-        strcpy(t + 2, label);
+        t[0] = 0;
+        numstr_cat(t, i + 1);
+        strcat(t, " ");
+        strcat(t, label);
         apen(bg);
         RectFill(rp, sx + 1, y0 + 1, sx + slot - 2, y0 + h - 1);
         apen(on ? deffg : mix(defbg, deffg, pane_of(tabs[i]) ? 80 : 55));

@@ -683,12 +683,21 @@ static LONG c_tab(struct RexxMsg *rm, LONG *a, BOOL top)
 }
 
 /* PANE SIDE (a new pane beside the active one), UNDER (below it), NEXT,
- * SELECT n, CLOSE, COUNT, CURRENT. The tab the commands go to follows
- * the active pane. */
+ * SELECT n, CLOSE (the pane; its tab stays), COUNT, CURRENT; and the
+ * i3 way: OPEN (a new Shell pane, the active pane's direction), KILL
+ * (the pane and its tab), SPLIT H|V, FOCUS and MOVE LEFT|RIGHT|UP|DOWN,
+ * FULL (fill the window, again: back), SHOW n (tab n in this pane), MODE
+ * TABS|PANES. The tab the commands go to follows the active pane. */
 static LONG c_pane(struct RexxMsg *rm, LONG *a, BOOL top)
 {
-    char *w = (char *)a[0];
-    int n = a[1] ? (int)*(LONG *)a[1] : 0;
+    static const char *const ops[] = { "SIDE", "UNDER", "NEXT", "SELECT",
+        "CLOSE", "OPEN", "KILL", "SPLIT", "FOCUS", "MOVE", "FULL", "SHOW",
+        "MODE", NULL };
+    static const char *const dirs[] = { "LEFT", "RIGHT", "UP", "DOWN",
+                                        NULL };
+    char *w = (char *)a[0], *x = (char *)a[1];
+    int n = x ? atoi(x) : 0, op, d = -1;
+    BOOL ok = TRUE;
     (void)rm;
     if (!stricmp(w, "COUNT")) {
         res_num(npanes);
@@ -698,28 +707,58 @@ static LONG c_pane(struct RexxMsg *rm, LONG *a, BOOL top)
         res_num(apane - panes + 1);
         return RC_OK;
     }
-    if (stricmp(w, "SIDE") && stricmp(w, "UNDER") && stricmp(w, "NEXT") &&
-        stricmp(w, "SELECT") && stricmp(w, "CLOSE"))
+    for (op = 0; ops[op] && stricmp(w, ops[op]); op++)
+        ;
+    if (!ops[op])
+        return RC_ERROR;
+    if (op == 8 || op == 9) {           /* FOCUS, MOVE: a direction */
+        for (d = 0; x && dirs[d] && stricmp(x, dirs[d]); d++)
+            ;
+        if (!x || !dirs[d])
+            return RC_ERROR;
+    }
+    if ((op == 7 && (!x || (stricmp(x, "H") && stricmp(x, "V")))) ||
+        (op == 12 && (!x || (stricmp(x, "TABS") && stricmp(x, "PANES")))) ||
+        ((op == 3 || op == 11) && n < 1))
         return RC_ERROR;
     if (!top)
         return LATER;
     if (!win)
         return RC_ERROR;                /* hidden: SHOW first */
-    if (!stricmp(w, "SIDE") || !stricmp(w, "UNDER")) {
-        if (!pane_split(!stricmp(w, "SIDE") ? 'h' : 'v'))
-            return RC_ERROR;            /* four, no room, nine tabs */
+    switch (op) {
+    case 0: case 1:
+        if (!pane_split(op == 0 ? 'h' : 'v'))
+            return RC_ERROR;            /* no room, every tab taken */
         res_num(npanes);
-    } else if (!stricmp(w, "NEXT"))
-        pane_next();
-    else if (!stricmp(w, "SELECT")) {
-        if (n < 1 || n > npanes)
+        break;
+    case 2: pane_next(); break;
+    case 3:
+        if (n > npanes)
             return RC_ERROR;
         pane_activate(&panes[n - 1]);
-    } else if (!pane_close())
-        return RC_ERROR;                /* the last one */
+        break;
+    case 4: ok = pane_close(); break;   /* FALSE: the last one */
+    case 5:
+        ok = pane_do(PO_OPEN, 0);
+        if (ok)
+            res_num(npanes);
+        break;
+    case 6: ok = pane_do(PO_KILL, 0); break;
+    case 7: ok = pane_do(PO_DIR, toupper((UBYTE)x[0]) == 'H' ? 'h' : 'v');
+        break;
+    case 8: ok = pane_do(PO_FOCUS, d); break;
+    case 9: ok = pane_do(PO_MOVE, d); break;
+    case 10: ok = pane_do(PO_FULL, 0); break;
+    case 11: ok = pane_do(PO_SHOW, n); break;
+    case 12:
+        ok = pane_do(!stricmp(x, "TABS") ? PO_TABS : PO_PANES, 0);
+        if (ok)
+            res_num(npanes);
+        break;
+    }
     rxtab = shown;
     T = shown;
-    return RC_OK;
+    return ok ? RC_OK : RC_ERROR;
 }
 
 /* PROTOCOL's word: 0 Zmodem, 1 Ymodem, 2 Xmodem, 3 Hydra, -1 none such. */
@@ -1100,7 +1139,7 @@ static const struct {
     { "GETSCREEN", "", NULL, c_getscreen },
     { "CURSOR", "", NULL, c_cursor },
     { "TAB", "WHAT/A,N/N", NULL, c_tab },
-    { "PANE", "WHAT/A,N/N", NULL, c_pane },
+    { "PANE", "WHAT/A,ARG", NULL, c_pane },
     { "DOWNLOAD", "FILE,PROTOCOL/K,TIMEOUT/K/N", NULL,
       c_download },
     { "UPLOAD", "FILE/A/M,PROTOCOL/K", NULL, c_upload },
