@@ -5,6 +5,74 @@ A modern terminal for AmigaOS 3.2, in C. Replaces the Amiga E CTerm in
 and so gets only console.device's ANSI). This one does its own
 VT100/xterm emulation. Decided 2026-10-09.
 
+## Start here: where CTerm is (2026-10-11 evening, 0.3b22)
+
+**Installed:** 0.3b22 on the A1200 (Work:Utils/CTerm: CTerm, CTermSSH,
+CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
+hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
+AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
+A1200-Stock.fs-uae and A1200-030-50.fs-uae; the user starts them on the
+desktop through `systemd-run --user` with SDL Wayland - see
+Knowledge/amiga/toolchain-and-testing.md). `make deploy` installs all
+files on the A1200 (parts must always be copied together: PART_VERSION).
+
+**Requirements (the user):** AmigaOS 3.2 and fast RAM; CTerm says so
+and quits on a chip-only Amiga. Speed yardstick: tests/stock/bench.sh
+CONF=fast (stock A1200 + 8 MB fast, ~17.1 s) and the 030/50 (~21.4 s).
+
+**The user's rules for CTerm:** correct rendering before speed; load
+parts only when used (Parts/, Protocols/); every key configurable (one
+file ENVARC:CTerm/CTerm.keys, Settings' Keys tab); features over a
+connection stay in the terminal (a text UI in the tab, not a window);
+measure free memory before/after each feature.
+
+**Done 2026-10-10/11 (0.3b4-0.3b22):** speed-work audit and fixes; name
+lookup in its own process; phone book window (Amiga+B); serial lines and
+modems (Protocols/Serial; settings Modem tab); ARexx port CTERM(.n)
+with WAITFOR/SEND for logins; hide/show (AppIcon, Exchange); split panes
+then the i3/Sway way (Left Amiga keys: Return, Q, arrows, H/V, F, T/P,
+1-9, Shift+arrows; tab mode/pane mode; dwindle LA+D; gaps 0..32 px with
+a border round every pane; no tab bar while panes are shown); memory
+work (parts, reserve, no per-write retries); SFTP/FTP as a Midnight
+Commander-like browser in the tab (Parts/Files); pictures in the
+terminal (sixel, iTerm2 files via datatypes, kitty swallowed;
+Parts/Pictures; ShowPic); every key configurable; new tabs in the
+default characters; the smarter Л/ś/Û rule.
+
+**Verified on the A1200 itself:** FTP from ftp.aminet.net (md5-identical,
+no wasabid stalls since the browser is in the tab), sixel/PNG pictures
+on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
+
+**Next (agreed with the user):**
+1. **The menus are a mess** - redesign them. Draft given to the user:
+   CTerm (New Shell tab, Close tab, Hide, About, Quit) / Call (Call...,
+   Phone book..., Serial terminal, Answer, Hang up, Send user name,
+   Send password) / Edit (Copy, Paste, Select all, Clear screen, Clear
+   history) / View (Tabs -> list, Panes -> ..., Bigger/Smaller text,
+   Full screen, Scroll bar) / Files (Send file / Receive file per
+   protocol, Open SFTP browser, Show transfers, Start/Stop log) /
+   Settings (Settings..., Fonts ->, Screen ->, Characters ->, Keys...) /
+   Tools (Run ARexx script..., Speed test). Show the user a screenshot of
+   the new menus on the A1200 first; they choose. Keep every shortcut
+   configurable (CTerm.keys menu actions).
+2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
+   when switching own screen 16 colours + full screen to "Own screen,
+   like Workbench" by the menu, maybe after CTermTour (number not noted).
+3. Not yet tried on real hardware: RTS/CTS and carrier detect with a real
+   modem/cable; an ssh login and SFTP on the A1200; Hydra/Ymodem/Xmodem
+   on the A1200; a real BBS on the internet.
+4. Smaller: inactive pane borders are dim (mix 25%) - fine for now;
+   kitty pictures only swallowed; ARexx has no PANE DWINDLE / GAPS yet;
+   the file browser's key bar shows no shifted labels.
+
+**Testing traps (learned):** the A1200's address can change after a
+reboot (DHCP; the user may reserve it in the Deco app) - `wasabi
+discover` first, and pass --host explicitly, else wasabi may fall back to
+another session's FS-UAE on 127.0.0.1. Several sessions share the A1200:
+check `wasabi ps` for a CTerm the user runs before deploying or killing.
+The user often runs CTerm on its own full screen (no window title):
+`wasabi wait window CTerm` then misses it - use `wasabi ps`.
+
 ## What it must do (the brief)
 
 - Open on Workbench, or on its own public screen, windowed or full screen.
