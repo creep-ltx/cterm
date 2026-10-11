@@ -79,7 +79,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b11 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b12 (11.10.2026)";
 
 struct Library *SocketBase;
 struct Library *KeymapBase;
@@ -183,8 +183,9 @@ void term_write(void *t, const UBYTE *b, LONG n)
     pf_writes++;
 #endif
 }
-int term_cols(void *t) { (void)t; return cols; }
-int term_rows(void *t) { (void)t; return rows; }
+/* the tab's own size: its pane's */
+int term_cols(void *t) { return vt_cols(((struct Tab *)t)->t_vt); }
+int term_rows(void *t) { return vt_rows(((struct Tab *)t)->t_vt); }
 int term_cursor_x(void *t)
 {
     int x, y, v;
@@ -226,16 +227,17 @@ void draw_now(void)
     }
 #endif
     if (win) {
+        /* every pane: one frame timer draws them all */
         if (planar && !painter) {
             /* a stock Amiga: how long a draw takes paces the next one */
             struct timeval a, b;
             term_now(&a);
-            refresh();
+            refresh_all();
             term_now(&b);
             lastcost = (b.tv_secs - a.tv_secs) * 1000000 +
                        (LONG)b.tv_micro - (LONG)a.tv_micro;
         } else {
-            refresh();
+            refresh_all();
             lastcost = 0;               /* not measured here: an AGA
                                          * screen's cost no longer paces
                                          * a card's floods */
@@ -276,7 +278,7 @@ static void draw_soon(void)
 void term_flush(void *t)
 {
     term_sync(t);
-    if (t == shown) {
+    if (pane_of(t)) {                   /* in a pane: seen */
         struct Tab *keep = T;
         T = shown;
         draw_now();
@@ -286,7 +288,7 @@ void term_flush(void *t)
 
 void term_render_soon(void *t)
 {
-    if (t == shown)
+    if (pane_of(t))
         draw_soon();
 }
 
@@ -529,7 +531,20 @@ void title_update_now(void)
     title_update();
 }
 
+static void title_update_(void);
+
+/* The title is the shown tab's (the active pane's), whatever T is. */
 static void title_update(void)
+{
+    struct Tab *keep = T;
+    if (!shown)
+        return;
+    T = shown;
+    title_update_();
+    T = keep;
+}
+
+static void title_update_(void)
 {
     int changed;
     const char *t = vt_title(vt, &changed);
@@ -648,12 +663,19 @@ struct Tab *tab_new(void)
     return t;
 }
 
-/* Show tab i: its text in the window, its font (a PC BBS wears the PC's),
- * its title. */
+/* Show tab i: in the active pane (or, if another pane shows it, that
+ * pane becomes the active one), its font (a PC BBS wears the PC's when
+ * the window is not split), its title. */
 void tab_show(int i)
 {
+    struct Pane *p;
     if (i < 0 || i >= ntabs)
         return;
+    if ((p = pane_of(tabs[i])))
+        apane = p;
+    else
+        apane->tab = tabs[i];
+    pane_use(apane);
     shown = T = tabs[i];
     if (!win)                           /* ending, the window gone */
         return;
@@ -663,6 +685,7 @@ void tab_show(int i)
     layout_and_resize();
     painter_forget();
     redraw_all();
+    tell_sizes();                       /* a tab new to a pane: its size */
     title_update_now();
 }
 
@@ -719,35 +742,46 @@ static void tab_drop(struct Tab *t)
     }
     memmove(tabs + i, tabs + i + 1, (ntabs - i - 1) * sizeof tabs[0]);
     ntabs--;
+    pane_tab_gone(t, i);                /* its pane: another tab, or none */
     if (t != &tab0)
         FreeVec(t);
     T = keep == t ? NULL : keep;
-    if (shown == t) {
-        shown = NULL;
-        if (ntabs > 0)
-            tab_show(i < ntabs ? i : ntabs - 1);
-    } else if (ntabs > 0 && win) {
+    shown = apane->tab;
+    if (ntabs > 0 && win) {
         T = shown;
+        tab_letters(TRUE);              /* alone again: its own letters */
         layout_and_resize();            /* the tab bar may have gone */
+        painter_forget();
         redraw_all();
+        tell_sizes();
+        title_update_now();
     }
     if (!T && ntabs > 0)
         T = shown;
 }
 
-/* A new tab with the Amiga Shell in it, shown. */
-void tab_new_shell(void)
+/* A new tab with the Amiga Shell in it, not shown; T as it was. */
+struct Tab *shell_tab(void)
 {
-    struct Tab *t = tab_new();
-    if (!t) {
-        beep();
-        return;
-    }
+    struct Tab *t = tab_new(), *keep = T;
+    if (!t)
+        return NULL;
     T = t;
     vt_set_amiga(vt, 1);
     T->con = con_start("S:Shell-Startup", T);
     if (!T->con)
         say("CTerm could not start a Shell.\r\n");
+    T = keep;
+    return t;
+}
+
+/* A new tab with the Amiga Shell in it, shown. */
+void tab_new_shell(void)
+{
+    if (!shell_tab()) {
+        beep();
+        return;
+    }
     tab_show(ntabs - 1);
 }
 
@@ -1077,7 +1111,7 @@ BOOL loop_round(LONG xfd, LONG ms)
         if (T->t_st.ser && !T->t_xfer && serial_due() &&
             (hostbuf || (hostbuf = AllocVec(16384, MEMF_ANY)))) {
             serial_input(hostbuf, 16384);
-            if (T == shown)
+            if (pane_of(T))
                 hostdata = TRUE;
         }
         if (n > 0 && !T->t_xfer) {
@@ -1085,11 +1119,11 @@ BOOL loop_round(LONG xfd, LONG ms)
             if (fd >= 0 && FD_ISSET(fd, &rd) &&
                 (hostbuf || (hostbuf = AllocVec(16384, MEMF_ANY)))) {
                 host_input(hostbuf, 16384);
-                if (T == shown)
+                if (pane_of(T))
                     hostdata = TRUE;
             }
         }
-        if (vt_take_bell(vt) && T == shown)
+        if (vt_take_bell(vt) && pane_of(T))
             beep();
     }
     T = shown;
@@ -1099,7 +1133,7 @@ BOOL loop_round(LONG xfd, LONG ms)
     if (con_render_due() && owed)
         draw_now();
     if (hostdata)
-        refresh();
+        refresh_all();
     mouse_reporting();
     hide_show();                        /* hiding or showing, if asked: here,
                                          * where nothing is half drawn */
@@ -1345,6 +1379,7 @@ static int cterm_main(int argc, char **argv)
     ML("libs");
     load_prefs();
     ML("prefs");
+    panes_init(tabs[0]);
     apply_theme();
     if (bgfile[0] && !load_picture(bgfile))
         bgfile[0] = 0;

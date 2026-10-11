@@ -28,6 +28,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 | A serial line's settings window (phone book, Settings) | `src/serwin.c` | Yes |
 | The ARexx port: commands, WAITFOR, starting scripts | `src/rexx.c` | Yes |
 | Hiding the window: the AppIcon, the commodity broker | `src/hide.c` | Yes |
+| Panes: the window split, the layout tree, dividers | `src/pane.c` | Yes |
 | Main loop, settings, menus | `src/main.c` | Yes |
 | PC relay: runs a program in a pty, connects to the Amiga | `pc/cterm-relay.py` | PC |
 
@@ -389,6 +390,105 @@ In the order the user and I agreed (2026-10-10):
     with 0.3b10 as well - not this work's; 900 KB + 200 KB is fine. To
     look at.
   - **Cost:** CTerm 237,508 -> 243,252 bytes.
+
+- **Done 2026-10-11 (0.3b12): split panes** (`src/pane.c`), as tmux
+  panes and iTerm splits.
+  - **A pane shows a tab.** The tabs stay what they were; a pane is a
+    rectangle of the window with a tab in it. The panes are the leaves
+    of a tree of at most 7 nodes (a split 'h' side by side or 'v' above
+    each other, its divider in per mille; four panes at most). Split:
+    the active pane in two, a new Shell tab in the new half (as tmux).
+    Close pane: the pane goes, its tab stays in the tab bar. A tab that
+    ends: its pane shows a tab in no pane, else closes. Choosing a tab
+    shows it in the active pane, or makes active the pane that shows it.
+  - **The pane in use:** draw.c works on one pane at a time - ox, oy,
+    cols, rows, the fills' edges (fx0, fx1) and the cursor's and rows'
+    marks (curx, cury, shown_blank, painted, pgen: now the pane's, by
+    macros) are cpane's, T its tab. At rest it is the active pane
+    (apane, the shown tab's): keys, the selection, mouse_cell, the scroll
+    bar, the title. refresh() draws T's pane if it is in one (taking it
+    into use and putting the active one back), refresh_all() every pane
+    (the frame timer, a host's bytes); redraw_all() clears the window
+    and draws each pane, then the dividers and frames; repair_damage
+    goes pane by pane. "Only the shown tab is drawn" became "only tabs
+    in panes": term_flush, term_render_soon, the bells, host data.
+  - **Sizes:** each tab's emulator has its pane's size; a tab in no pane
+    the active pane's. term_cols/term_rows (the Shell's window bounds,
+    the line editor), NAWS and the ssh pty are the tab's own now.
+    tell_sizes() tells every tab whose size changed since it was last
+    told (NAWS, the Shell program's resize report) - after a resize, a
+    split, a close, a divider pulled.
+  - **Layout:** one pane is exactly the old text area (ox = left border
+    + 2, oy = top + tab bar + 1, the same columns and rows: single-pane
+    drawing is unchanged). Split, each pane has a 1-pixel frame (in the
+    theme's highlight for the active one, else the background) and a
+    2-pixel divider between; the text keeps its 2/1-pixel margins inside.
+    Each half keeps 10 x 3 letters when split or pulled.
+  - **The planar painter (ppaint.s) at pane edges:** pp_cells already
+    gave cells whose edge longs leave the layer's cliprect to Text();
+    with panes the cliprect is also cut at a pane's inner edges (the
+    window's outer edges as before), so the asm never reads and writes
+    back a neighbouring pane's pixels. The first column right of a
+    divider and the last left of it go to Text(). Measured: a pane's
+    test page is pixel-identical to a lone window of the same size but
+    for one pixel of a bold B in column 0 of a right-hand pane (Text()'s
+    bold smear against the glyph store's, a known difference).
+  - **The RTG painters** write rows at the pane's ox, cols*cw wide; the
+    row buffer is sized for the widest pane (panes_maxcols). Not tested
+    here (no RTG in FS-UAE); read through: blank rows, the backdrop
+    test, the cursor (an outline in other panes, cursor_mark shape 3,
+    over the written row) and the 8-bit chunky row all take the pane's
+    ox/cols. ScrollRaster (planar, and a card without the painter)
+    scrolls only the pane's rectangle (fx0..fx1).
+  - **The cursor:** solid in the active pane only; the others draw an
+    outline (all three drawing ways).
+  - **Dividers pulled:** a click within a pixel of one starts a drag;
+    the line follows the mouse in COMPLEMENT (drawn twice: gone); let go,
+    the split's per mille is set, laid out, drawn, the tabs told.
+  - **Letters:** split, every pane wears the window's own (tab_wish
+    gives BL_CTERM): cells must be one size to share the window. A PC
+    tab gets its VGA font back when alone.
+  - **Fullscreen:** the place bar beside the active pane, its column
+    cleared top to bottom (panes above each other).
+  - **ARexx:** PANE SIDE/UNDER/NEXT/SELECT n/CLOSE/COUNT/CURRENT (queued
+    like TAB; the ARexx tab follows the active pane).
+  - **No keys** for the pane items (the rule: keys must be the person's
+    to change); menu items, the mouse and ARexx.
+  - **Also fixed:** the title followed T (a transfer ending in a tab not
+    shown set its own title); now it is always the shown tab's.
+  - **Tested in FS-UAE** (A1200 with fast RAM, verified 2026-10-11):
+    split side and under to four, the fifth refused; NAWS heard by
+    tests/xfer/naws.py (a telnet host that prints its size): 38x26 in a half,
+    38x13 after splitting under it, 38x20 after pulling the divider; a
+    long line wrapping at 38 in a Shell pane; clicks moving the active
+    pane (frame, solid/outline cursors); Close pane; a Shell ending in a
+    pane (another tab shown there; then, none left, the pane closed);
+    hide/show with panes; the window resized (panes kept their shares);
+    a Zmodem download into a pane while another was active (the panel
+    in its pane, md5-identical); the test page in a pane against a lone
+    window of the same size: painter (fast RAM) identical but the
+    prompt rows, TEXTDRAW (Text()) identical; left and right panes of
+    the same page identical with TEXTDRAW.
+  - **Speed, one pane** (tests/stock/bench.sh cterm on the stock A1200
+    config, a private copy of the drive, 2026-10-11, alternating
+    builds): 0.3b11 95.0, 95.9, 96.1, 95.3 s; 0.3b12 90.9, 70.7 s, and
+    118.2 s once (a slow group the emulator falls into now and then:
+    0.3b10 gave 118.8 s in it too). Not slower. The 30.4 s of 2026-10-10
+    could not be had again today with any build, 0.3b10 included (see
+    Knowledge/amiga/toolchain-and-testing.md, "conbench in FS-UAE");
+    some boots also leave too little chip RAM in one piece to start any
+    CTerm (all builds then end with 20).
+  - **Also tested:** the chip-only drawing (a -DPPCHIP test build: the
+    painter from a row's second colour run, Text() for the rest): left
+    and right panes identical, and a pane identical to a lone window;
+    own screen, full screen, panes above each other: the place bar
+    beside the active pane only; a selection and Copy in a pane, Paste
+    into another.
+  - **Cost:** CTerm 243,252 -> 251,788 bytes.
+  - **Pens on a 16-colour Workbench:** after hiding (the AppIcon's own
+    colours) and a second CTerm, some of the test page's 40 colours came
+    back as nearer ones (white text on white) - the screen has 16 pens
+    for everyone; not the panes'.
 
 - Later idea: Hydra's chat with the other side during a transfer
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.

@@ -277,10 +277,31 @@ static void bar_pull(int y)
     scroll_view(hist - top);
 }
 
+/* Every tab whose size changed since it was last told: its host hears
+ * (NAWS, the ssh pty), its Shell's program a resize report (if it asked
+ * for one). After a resize, a split, a pane closed, a divider pulled. */
+void tell_sizes(void)
+{
+    struct Tab *keep = T;
+    int i;
+    for (i = 0; i < ntabs; i++) {
+        T = tabs[i];
+        if (vt_cols(vt) == T->t_toldc && vt_rows(vt) == T->t_toldr)
+            continue;
+        T->t_toldc = vt_cols(vt);
+        T->t_toldr = vt_rows(vt);
+        if (sock >= 0)
+            send_naws();
+        if (T->con)
+            raw_report(12, 0, 0);
+    }
+    T = keep;
+}
+
 void mouse_reporting(void)
 {
     int sgr, mode = !local && linked ? vt_mouse(vt, &sgr) : 0;
-    BOOL want = sel_drag || bardrag || mode == 1003 ||
+    BOOL want = sel_drag || bardrag || pane_dragging() || mode == 1003 ||
                 (mode == 1002 && mbutton >= 0);
     if (want != mreporting && win) {
         ReportMouse(want, win);
@@ -334,18 +355,7 @@ BOOL window_events(void)
             painter_setup();
             redraw_all();
             RefreshWindowFrame(win);
-            {
-                struct Tab *keep = T;
-                int i;
-                for (i = 0; i < ntabs; i++) {
-                    T = tabs[i];
-                    if (sock >= 0)
-                        send_naws();
-                    if (T->con)
-                        raw_report(12, 0, 0);
-                }
-                T = keep;
-            }
+            tell_sizes();               /* the hosts, the Shells' programs */
             break;
         case IDCMP_REFRESHWINDOW:
             repair_damage();            /* only the rows a window uncovered */
@@ -378,6 +388,28 @@ BOOL window_events(void)
             if (copy.Code == SELECTDOWN &&
                 xfer_click(copy.MouseX, copy.MouseY))
                 break;                  /* the transfer's Stop */
+            if (copy.Code == SELECTUP && pane_dragging()) {
+                pane_drag_end();        /* the divider let go: laid out */
+                mouse_reporting();
+                break;
+            }
+            if (copy.Code == SELECTDOWN &&
+                divider_at(copy.MouseX, copy.MouseY) >= 0) {
+                pane_drag_start(divider_at(copy.MouseX, copy.MouseY));
+                mouse_reporting();
+                break;
+            }
+            if ((copy.Code == SELECTDOWN || copy.Code == MIDDLEDOWN) &&
+                npanes > 1) {
+                /* a click in another pane makes it the active one (and
+                 * does nothing else: no selection, nothing to the host) */
+                struct Pane *p = pane_at(copy.MouseX, copy.MouseY);
+                if (p && p != apane) {
+                    sel_clear();
+                    pane_activate(p);
+                    break;
+                }
+            }
             if (copy.Code == SELECTDOWN && fullscreen &&
                 copy.MouseX >= win->Width - POSBAR - 4 && copy.MouseY >= oy &&
                 copy.MouseY < oy + rows * ch && vt_history(vt) > 0) {
@@ -452,6 +484,10 @@ BOOL window_events(void)
             break;
         case IDCMP_GADGETUP:
         case IDCMP_MOUSEMOVE:
+            if (copy.Class == IDCMP_MOUSEMOVE && pane_dragging()) {
+                pane_drag_move(copy.MouseX, copy.MouseY);
+                break;
+            }
             if (copy.Class == IDCMP_MOUSEMOVE && bardrag) {
                 bar_pull(copy.MouseY);
                 break;

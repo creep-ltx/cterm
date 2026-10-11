@@ -148,6 +148,37 @@ text: click one, or press Right Amiga+1 to 9. Project/Close tab (Right
 Amiga+W) ends the shown tab's Shell or hangs up its host. Tabs you are
 not looking at keep running.
 
+## Panes: several terminals in sight at once
+
+The Panes menu splits the window, as tmux and iTerm do: Split
+left/right puts a new Amiga Shell beside the pane you are in, Split
+top/bottom puts one below it. Each half can be split again, up to four
+panes.
+
+- **Every pane shows a tab.** The tab bar still lists them all: the one
+  you type in is the brightest, the others in panes a little less.
+  Choosing a tab (a click in the tab bar, Right Amiga+1 to 9) shows it
+  in the pane you are in; a tab that is in another pane already makes
+  that pane the one you are in.
+- **Click in a pane** to type there. It gets a thin frame and the solid
+  cursor; the other panes show their cursor as an outline. Panes/Next
+  pane goes round them.
+- **Pull the line between two panes** with the mouse to give one more
+  room (each keeps at least 10 letters by 3 lines).
+- **Each pane has its own size:** the Shell or the host in it is told
+  its pane's size (as when the window is resized), and the text flows
+  to it again. Each keeps its own history; the scroll bar follows the
+  pane you are in.
+- **Panes/Close pane** closes the pane, not its tab: the tab goes on in
+  the tab bar. When a tab ends, its pane shows another one, or closes
+  if there is none left to show.
+- While the window is split, every pane wears the window's own letters
+  (Settings): they must be one size to share the window. A tab's own
+  (the PC's font for a PC BBS, a phone book place's) come back when it
+  is alone in the window again.
+- File transfers show their panel in their own pane, and go on whichever
+  pane you are in.
+
 ## Hiding the window
 
 Project/Hide window (or the window's iconify gadget, the small one left
@@ -276,6 +307,8 @@ limit, 10 for an error, 20 for a failure):
 | `WINDOW TOFRONT` / `ACTIVATE` / `TOBACK` | the window |
 | `WINDOW HIDE` / `SHOW` | hides the window (everything goes on) and brings it back; RC 10 when it cannot hide (Ed has the window) |
 | `WINDOW STATE` | RESULT is `HIDDEN` or `SHOWN` |
+| `PANE SIDE` / `UNDER` | splits the pane you are in: a new Shell beside it or below it (RESULT: how many panes) |
+| `PANE NEXT`, `PANE SELECT n`, `PANE CLOSE`, `PANE COUNT`, `PANE CURRENT` | the panes; the commands that follow go to the tab of the pane chosen |
 | `PHONEBOOK` | the places' names, each in quotes |
 | `VERSION`, `HELP [command]`, `QUIT` | |
 

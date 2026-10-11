@@ -261,16 +261,7 @@ static void do_show(void)
     for (i = 0; i < ntabs && tabs[i] != shown; i++)
         ;
     tab_show(i < ntabs ? i : 0);        /* its letters, the layout, the text */
-    {
-        /* the hosts hear the size (a tab bar may have come meanwhile) */
-        struct Tab *keep = T;
-        for (i = 0; i < ntabs; i++) {
-            T = tabs[i];
-            if (sock >= 0)
-                send_naws();
-        }
-        T = keep;
-    }
+    tell_sizes();                       /* a tab bar may have come meanwhile */
     ScreenToFront(scr);
 }
 

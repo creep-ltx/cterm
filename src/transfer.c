@@ -201,8 +201,10 @@ static void x_redraw(struct XCtx *c, BOOL now)
         return;
     c->x.tlast = t;
     if (win) {
-        if (shown == c->tab)
-            xfer_panel();
+        struct Tab *keep = T;
+        T = c->tab;
+        xfer_panel();                   /* if its tab is in a pane */
+        T = keep;
         if (tabbar_h())
             draw_tabbar();
     }
@@ -298,8 +300,7 @@ static void x_show(void *u, const char *name, unsigned long done,
                                               : " failed]\x1b[0m\r\n");
         x->fbase = x->bdone;
         x->name[0] = 0;
-        if (shown == c->tab)
-            refresh();
+        refresh();                      /* if its tab is in a pane */
     }
     x_redraw(c, what != 0);
 }
@@ -777,7 +778,7 @@ static void finish(struct XCtx *c, int got)
     xwin_update();
     if (win) {
         /* the rows under the panel, and whatever a requester covered */
-        if (shown == c->tab || c->damaged)
+        if (pane_of(c->tab) || c->damaged)
             redraw_all();
         if (tabbar_h())
             draw_tabbar();

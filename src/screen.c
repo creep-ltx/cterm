@@ -40,6 +40,11 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Send with Hydra...", 0, 0, 0, (APTR)M_HSEND },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Show transfers...", 0, 0, 0, (APTR)M_XWIN },
+    { NM_TITLE, (STRPTR)"Panes", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Split left/right", 0, 0, 0, (APTR)M_SPLITH },
+    {  NM_ITEM, (STRPTR)"Split top/bottom", 0, 0, 0, (APTR)M_SPLITV },
+    {  NM_ITEM, (STRPTR)"Next pane", 0, 0, 0, (APTR)M_NEXTPANE },
+    {  NM_ITEM, (STRPTR)"Close pane", 0, 0, 0, (APTR)M_CLOSEPANE },
     { NM_TITLE, (STRPTR)"Settings", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Settings...", (STRPTR)"S", 0, 0, (APTR)M_SETTINGS },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
@@ -389,8 +394,7 @@ void switch_display(void)
         fullscreen = FALSE;
         open_display();
     }
-    if (sock >= 0)
-        send_naws();
+    tell_sizes();
     save_prefs();
 }
 
@@ -430,6 +434,16 @@ BOOL menu_pick(ULONG id)
         break;
     case M_LOGSTOP: log_stop(); break;
     case M_REXX: rexx_menu(); break;
+    case M_SPLITH:
+    case M_SPLITV:
+        if (!pane_split(id == M_SPLITH ? 'h' : 'v'))
+            beep();                     /* four already, or no room */
+        break;
+    case M_NEXTPANE: pane_next(); break;
+    case M_CLOSEPANE:
+        if (!pane_close())
+            beep();
+        break;
     case M_HIDE:
         if (!hide_ask())
             beep();                     /* Ed or More has the window */

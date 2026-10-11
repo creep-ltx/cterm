@@ -720,6 +720,46 @@ static LONG c_tab(struct RexxMsg *rm, LONG *a, BOOL top)
     return RC_OK;
 }
 
+/* PANE SIDE (a new pane beside the active one), UNDER (below it), NEXT,
+ * SELECT n, CLOSE, COUNT, CURRENT. The tab the commands go to follows
+ * the active pane. */
+static LONG c_pane(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    char *w = (char *)a[0];
+    int n = a[1] ? (int)*(LONG *)a[1] : 0;
+    (void)rm;
+    if (!stricmp(w, "COUNT")) {
+        res_num(npanes);
+        return RC_OK;
+    }
+    if (!stricmp(w, "CURRENT")) {
+        res_num(apane - panes + 1);
+        return RC_OK;
+    }
+    if (stricmp(w, "SIDE") && stricmp(w, "UNDER") && stricmp(w, "NEXT") &&
+        stricmp(w, "SELECT") && stricmp(w, "CLOSE"))
+        return RC_ERROR;
+    if (!top)
+        return LATER;
+    if (!win)
+        return RC_ERROR;                /* hidden: SHOW first */
+    if (!stricmp(w, "SIDE") || !stricmp(w, "UNDER")) {
+        if (!pane_split(!stricmp(w, "SIDE") ? 'h' : 'v'))
+            return RC_ERROR;            /* four, no room, nine tabs */
+        res_num(npanes);
+    } else if (!stricmp(w, "NEXT"))
+        pane_next();
+    else if (!stricmp(w, "SELECT")) {
+        if (n < 1 || n > npanes)
+            return RC_ERROR;
+        pane_activate(&panes[n - 1]);
+    } else if (!pane_close())
+        return RC_ERROR;                /* the last one */
+    rxtab = shown;
+    T = shown;
+    return RC_OK;
+}
+
 /* PROTOCOL's word: 0 Zmodem, 1 Ymodem, 2 Xmodem, 3 Hydra, -1 none such. */
 static int proto(LONG a)
 {
@@ -989,6 +1029,7 @@ static const struct {
     { "GETSCREEN", "", NULL, c_getscreen },
     { "CURSOR", "", NULL, c_cursor },
     { "TAB", "WHAT/A,N/N", NULL, c_tab },
+    { "PANE", "WHAT/A,N/N", NULL, c_pane },
     { "DOWNLOAD", "FILE,PROTOCOL/K,TIMEOUT/K/N", NULL,
       c_download },
     { "UPLOAD", "FILE/A/M,PROTOCOL/K", NULL, c_upload },

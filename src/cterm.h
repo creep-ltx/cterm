@@ -215,6 +215,21 @@ struct Tab {
     BOOL t_rxdone;                      /* a transfer ended since the last
                                            ARexx SEND (DOWNLOAD sees it) */
     LONG t_rxgot;                       /* ... its files, -1 failed */
+    int t_toldc, t_toldr;               /* the size its host or Shell
+                                           was last told (tell_sizes) */
+};
+
+/* A pane: a part of the window showing a tab (pane.c). */
+#define MAXPANES 4
+#define PROWS 256                       /* rows a pane keeps marks for */
+struct Pane {
+    struct Tab *tab;
+    int x0, y0, x1, y1;                 /* its place in the window */
+    int ox, oy, cols, rows;             /* its text */
+    int fx0, fx1;                       /* what its rows' fills reach */
+    int curx, cury;                     /* its cursor, where drawn */
+    UBYTE pgen;                         /* draw.c's marks for its rows: */
+    UBYTE blank[PROWS], painted[PROWS]; /* shown blank; painted in pgen */
 };
 
 /* The tab has its host or line: something to send to. */
@@ -234,7 +249,7 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
        M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS, M_YRECV, M_XRECV, M_YSEND,
        M_XSEND, M_HSEND, M_XWIN, M_BOOK, M_SERIAL, M_ANSWER, M_REXX,
-       M_ZSEND, M_HIDE };
+       M_ZSEND, M_HIDE, M_SPLITH, M_SPLITV, M_NEXTPANE, M_CLOSEPANE };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -491,6 +506,37 @@ BOOL rexx_start(const char *path, struct Tab *t);
 void rexx_after_call(void);
 void rexx_menu(void);
 BOOL rexx_wake(BOOL any);               /* another CTerm shown: TRUE */
+/* pane.c: the window split into panes */
+extern struct Pane panes[MAXPANES];
+extern int npanes;
+extern struct Pane *apane, *cpane;
+void panes_init(struct Tab *t);
+void pane_use(struct Pane *p);
+struct Pane *pane_of(struct Tab *t);
+struct Pane *pane_at(int x, int y);
+void panes_layout(void);
+int panes_maxcols(void);
+int panes_right(void);                  /* the text area's right edge */
+void panes_frames(void);
+void pane_activate(struct Pane *p);
+void pane_next(void);
+BOOL pane_split(int dir);
+BOOL pane_close(void);
+void pane_tab_gone(struct Tab *t, int at);
+void panes_changed(void);
+int divider_at(int x, int y);
+BOOL pane_dragging(void);
+void pane_drag_start(int n);
+void pane_drag_move(int x, int y);
+void pane_drag_end(void);
+/* draw.c, keys.c, main.c for the panes */
+void planes_save(void);
+void planes_restore(void);
+ULONG mix(ULONG a, ULONG b, int pct);
+void knob_forget(void);
+void refresh_all(void);
+void tell_sizes(void);
+struct Tab *shell_tab(void);
 /* hide.c: the window put away while everything runs on */
 extern BOOL hidden;
 extern LONG hid_l, hid_t, hid_w, hid_h;

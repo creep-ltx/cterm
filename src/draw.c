@@ -11,7 +11,6 @@
 
 struct CEntry;
 static ULONG index_rgb(int i);
-static ULONG mix(ULONG a, ULONG b, int pct);
 static LONG pen_for(ULONG rgb);
 static void planes_reset(void);
 static void mask_pen(LONG p);
@@ -130,7 +129,7 @@ static ULONG index_rgb(int i)
     return ((ULONG)i << 16) | ((ULONG)i << 8) | i;
 }
 
-static ULONG mix(ULONG a, ULONG b, int pct)       /* pct of b into a */
+ULONG mix(ULONG a, ULONG b, int pct)              /* pct of b into a */
 {
     ULONG out = 0;
     int sh;
@@ -194,7 +193,9 @@ BOOL remember = TRUE;            /* FALSE: a one-off start (COLS,
 BOOL quitting;
 BOOL owed;                       /* drawing owed: a frame timer runs */
 BOOL flood;                      /* the last draw was a scroll */
-static int curx = -1, cury = -1;        /* where the cursor was drawn */
+/* where the cursor was drawn: the pane's (pane.c) */
+#define curx (cpane->curx)
+#define cury (cpane->cury)
 
 /* The pen cache: an RGB value asked of the screen once. */
 #define NPEN 256
@@ -1042,7 +1043,7 @@ static void pp_setup(void)
                        /* real planes: a card's bitmap with no
                         * cybergraphics emulation is not */
                        (GetBitMapAttr(bm, BMA_FLAGS) & BMF_STANDARD))) &&
-           cols < PPSLOTS - 8 && !nopp;
+           cols < PPSLOTS - 8 && panes_maxcols() < PPSLOTS - 8 && !nopp;
     if (!ppon) {
         pp_free();
         pp_font = NULL;
@@ -1066,6 +1067,9 @@ static void pp_setup(void)
     pp_all = (TypeOfMem((APTR)pp_setup) & MEMF_FAST) != 0;
 #ifdef PPALL
     pp_all = TRUE;                      /* to measure: the painter always */
+#endif
+#ifdef PPCHIP
+    pp_all = FALSE;                     /* to test: as with chip RAM only */
 #endif
 }
 
@@ -1131,6 +1135,15 @@ static BOOL pp_cells(int r, int a, int b)
     R = cr->bounds.MaxX;
     if (R > bm->BytesPerRow * 8 - 1)
         R = bm->BytesPerRow * 8 - 1;
+    /* panes: nor into the pane beside (its pixels are ours, but its
+     * drawing is its own); the window's outer edges as before */
+    if (npanes > 1) {
+        if (cpane->x0 > win->BorderLeft &&
+            ly->bounds.MinX + cpane->x0 > L)
+            L = ly->bounds.MinX + cpane->x0;
+        if (cpane->x1 < panes_right() && ly->bounds.MinX + cpane->x1 < R)
+            R = ly->bounds.MinX + cpane->x1;
+    }
     while (a <= b && ((ly->bounds.MinX + ox + a * 8) & ~31) < L)
         a++;
     while (b >= a && ((ly->bounds.MinX + ox + b * 8 + 7) | 31) > R)
@@ -1210,13 +1223,21 @@ static BOOL pp_cells(int r, int a, int b)
 /* The text area's edges: the margin left of column 0 and whatever is
  * right of the last column. TrueType letters can reach a pixel into the
  * margin (a "y" at the start of a line), so a row clears its edges too. */
-static int area_right(void)
+int panes_right(void)
 {
     return win->Width - win->BorderRight - 1 - (fullscreen ? POSBAR + 2 : 0);
 }
-static UBYTE shown_blank[1024];
-static UBYTE painted[1024], pgen = 1;   /* the painter: row r painted in
-                                           draw pass pgen */
+
+/* The pane's: the whole text area, or the pane's inside its frame. */
+static int area_right(void)
+{
+    return cpane->fx1;
+}
+/* The pane's marks: rows shown blank; the painter's row r painted in
+ * draw pass pgen */
+#define shown_blank (cpane->blank)
+#define painted (cpane->painted)
+#define pgen (cpane->pgen)
 
 static inline BOOL fresh_row(int r)
 {
@@ -1280,7 +1301,7 @@ static void draw_span(int r, int a, int b)
     PF_START(tf);
     apen(defbg);
     if (a == 0)
-        RectFill(rp, win->BorderLeft, y, ox - 1, y + ch - 1);
+        RectFill(rp, cpane->fx0, y, ox - 1, y + ch - 1);
     if (last < b || b == cols - 1) {
         int x1 = b == cols - 1 ? area_right() : ox + (b + 1) * cw - 1;
         if (ox + (last + 1) * cw <= x1)
@@ -1307,11 +1328,19 @@ void draw_row(int r)
     draw_span(r, 0, cols - 1);
 }
 
-/* An underline or bar cursor (DECSCUSR) over cell x,y, in its letter's
- * colour. */
+/* The cursor's shape: the program's (0 block, 1 underline, 2 bar), or
+ * 3 - an outline - in a pane that is not the active one. */
+static int cur_shape(int *blink)
+{
+    int s = vt_cursor_shape(vt, blink);
+    return npanes > 1 && cpane != apane ? 3 : s;
+}
+
+/* An underline, bar (DECSCUSR) or outline cursor over cell x,y, in its
+ * letter's colour. */
 static void cursor_mark(int x, int y)
 {
-    int w, blink, shape = vt_cursor_shape(vt, &blink);
+    int w, blink, shape = cur_shape(&blink);
     const VtCell *line = vt_line(vt, y, 0, &w);
     VtCell c;
     ULONG fg, bg;
@@ -1325,6 +1354,11 @@ static void cursor_mark(int x, int y)
     if (shape == 1) {
         int t = ch / 8 > 2 ? ch / 8 : 2;
         RectFill(rp, x0, y0 + ch - t, x0 + cw - 1, y0 + ch - 1);
+    } else if (shape == 3) {
+        RectFill(rp, x0, y0, x0 + cw - 1, y0);
+        RectFill(rp, x0, y0 + ch - 1, x0 + cw - 1, y0 + ch - 1);
+        RectFill(rp, x0, y0, x0, y0 + ch - 1);
+        RectFill(rp, x0 + cw - 1, y0, x0 + cw - 1, y0 + ch - 1);
     } else {
         int t = cw / 4 > 2 ? cw / 4 : 2;
         RectFill(rp, x0, y0, x0 + t - 1, y0 + ch - 1);
@@ -1367,7 +1401,7 @@ void draw_cursor(BOOL on)
         return;
     {
         int blink;
-        if (vt_cursor_shape(vt, &blink)) {  /* an underline or a bar */
+        if (cur_shape(&blink)) {      /* an underline, a bar, an outline */
             draw_cells(y, x, x);
             cursor_mark(x, y);
             curx = x;
@@ -1769,7 +1803,7 @@ static void paint_row(int r)
     bk = backdrop && ox >= bkx && ox + rw <= bkx + bkw &&
          oy + r * ch >= bky && oy + r * ch + ch <= bky + bkh;
     vt_cursor(vt, &cx, &cy, &vis);
-    cshape = vt_cursor_shape(vt, &blink);
+    cshape = cur_shape(&blink);
     if (!vis || back > 0)
         cy = -1;
     sel_span(r, &ps0, &ps1);
@@ -1898,7 +1932,8 @@ static void paint_row(int r)
 void painter_setup(void)
 {
     struct BitMap *bm;
-    LONG need = (LONG)cols * cw * ch;
+    LONG need = (LONG)(panes_maxcols() > cols ? panes_maxcols() : cols) *
+                cw * ch;                /* a row of the widest pane */
     if (!scr)
         return;
     bm = scr->RastPort.BitMap;
@@ -2040,8 +2075,8 @@ void add_scroller(void)
 void update_knob(void)
 {
     LONG total = vt_history(vt) + rows, top = vt_history(vt) - back;
-    if (!win)
-        return;
+    if (!win || cpane != apane)
+        return;                         /* the active pane's, only */
     if (total == k_total && top == k_top && rows == k_rows)
         return;
     if (fullscreen && win) {
@@ -2053,7 +2088,16 @@ void update_knob(void)
          * bar is outside what scrolls and clears) */
         planes_full();
         rp_forget();
-        if (!backdrop_put(x0 - 1, y0, win->Width - x0 + 1, h)) {
+        if (npanes > 1) {
+            /* panes above each other: the bar beside the active one,
+             * the rest of its column cleared */
+            int ty = win->BorderTop + tabbar_h(),
+                by = win->Height - win->BorderBottom - 1;
+            if (!backdrop_put(x0 - 1, ty, win->Width - x0 + 1, by - ty + 1)) {
+                apen(defbg);
+                RectFill(rp, x0 - 1, ty, win->Width - 1, by);
+            }
+        } else if (!backdrop_put(x0 - 1, y0, win->Width - x0 + 1, h)) {
             apen(defbg);
             RectFill(rp, x0 - 1, y0, win->Width - 1, y0 + h - 1);
         }
@@ -2085,6 +2129,33 @@ void update_knob(void)
     k_rows = rows;
 }
 
+void knob_forget(void)
+{
+    k_total = -1;                       /* another tab's: set it afresh */
+}
+
+/* Every plane for a drawing outside the text (the tab bar, the panes'
+ * frames), the text's mask kept: drawing those pens would widen it, and
+ * every scroll would then move more planes. */
+static LONG sv_base;
+static UBYTE sv_mask;
+
+void planes_save(void)
+{
+    sv_base = pbase;
+    sv_mask = pmask;
+    planes_full();
+    rp_forget();
+}
+
+void planes_restore(void)
+{
+    pbase = sv_base;
+    pmask = sv_mask;
+    SetWriteMask(rp, pmask);
+    rp_forget();
+}
+
 /* ---- layout ------------------------------------------------------------ */
 
 /* The tab bar: a row of names above the text, while there are tabs. */
@@ -2095,24 +2166,23 @@ int tabbar_h(void)
 
 void layout_and_resize(void)
 {
-    int w, h, i;
+    int i;
     if (!win)
         return;                         /* hidden: the sizes stay */
-    ox = win->BorderLeft + 2;
-    oy = win->BorderTop + 1 + tabbar_h();
-    w = win->Width - ox - win->BorderRight - 2 -
-        (fullscreen ? POSBAR + 2 : 0);
-    h = win->Height - win->BorderTop - win->BorderBottom - 2 - tabbar_h();
-    cols = w / cw;
-    rows = h / ch;
-    if (cols < 10) cols = 10;
-    if (rows < 3) rows = 3;
-    for (i = 0; i < ntabs; i++)         /* all tabs share the window */
-        if (tabs[i]->t_vt && (cols != vt_cols(tabs[i]->t_vt) ||
-                            rows != vt_rows(tabs[i]->t_vt))) {
-            vt_resize(tabs[i]->t_vt, cols, rows);
+    panes_layout();                     /* every pane's place and size */
+    for (i = 0; i < ntabs; i++) {
+        /* a tab in a pane takes its size; one in none the active pane's
+         * (it is shown there when chosen) */
+        struct Pane *p = pane_of(tabs[i]);
+        if (!p)
+            p = apane;
+        if (tabs[i]->t_vt && (p->cols != vt_cols(tabs[i]->t_vt) ||
+                              p->rows != vt_rows(tabs[i]->t_vt))) {
+            vt_resize(tabs[i]->t_vt, p->cols, p->rows);
             con_resized(tabs[i]->con);  /* the line being typed moved */
         }
+    }
+    pane_use(apane);
 }
 
 void tab_label(struct Tab *t, char *out)
@@ -2140,14 +2210,14 @@ void tab_label(struct Tab *t, char *out)
 
 void draw_tabbar(void)
 {
-    int h = tabbar_h(), x0 = win->BorderLeft, y0 = win->BorderTop;
-    int x1 = win->Width - win->BorderRight - 1, wd = x1 - x0 + 1, i;
-    LONG keepbase = pbase;
-    UBYTE keepmask = pmask;
+    int h = tabbar_h(), x0, y0, x1, wd, i;
     if (!h || !win)
         return;
-    planes_full();
-    rp_forget();
+    x0 = win->BorderLeft;
+    y0 = win->BorderTop;
+    x1 = win->Width - win->BorderRight - 1;
+    wd = x1 - x0 + 1;
+    planes_save();
     apen(mix(defbg, deffg, 12));
     RectFill(rp, x0, y0, x1, y0 + h - 1);
     SetFont(rp, font);
@@ -2158,14 +2228,16 @@ void draw_tabbar(void)
         int sx = x0 + i * wd / ntabs, slot = x0 + (i + 1) * wd / ntabs - sx;
         int n, fit;
         BOOL on = tabs[i] == shown;
+        /* in another pane: as the shown one, its name a little dimmer */
+        ULONG bg = on || pane_of(tabs[i]) ? defbg : mix(defbg, deffg, 12);
         tab_label(tabs[i], label);
         t[0] = '1' + i;
         t[1] = ' ';
         strcpy(t + 2, label);
-        apen(on ? defbg : mix(defbg, deffg, 12));
+        apen(bg);
         RectFill(rp, sx + 1, y0 + 1, sx + slot - 2, y0 + h - 1);
-        apen(on ? deffg : mix(defbg, deffg, 55));
-        bpen(on ? defbg : mix(defbg, deffg, 12));
+        apen(on ? deffg : mix(defbg, deffg, pane_of(tabs[i]) ? 80 : 55));
+        bpen(bg);
         SetDrMd(rp, JAM2);
         n = strlen(t);
         fit = (slot - 8) / (font->tf_XSize ? font->tf_XSize : 8);
@@ -2178,10 +2250,7 @@ void draw_tabbar(void)
     /* the text's mask again, as it was: narrowing it afresh here would
      * stop scrolls and clears from reaching planes the text uses (it is
      * drawn during transfers, not only after a full clear) */
-    pbase = keepbase;
-    pmask = keepmask;
-    SetWriteMask(rp, pmask);
-    rp_forget();
+    planes_restore();
 }
 
 /* ---- a picture behind the text --------------------------------------- */
@@ -2333,14 +2402,31 @@ static BOOL backdrop_put(LONG x, LONG y, LONG w, LONG h)
     return TRUE;
 }
 
-void redraw_all(void)
+/* The pane in use (T its tab) drawn whole, over a cleared place. */
+static void redraw_pane(void)
 {
     int r;
     VtChanges chg;
     term_sync(T);
+    forget_shown();
+    vt_take_changes(vt, &chg);
+    curx = cury = -1;
+    for (r = 0; r < rows; r++)
+        draw_row(r);
+    draw_cursor(TRUE);
+    update_knob();
+    if (T->t_xfer)
+        xfer_panel();
+}
+
+/* The whole window afresh: the tab bar, every pane, what is between. */
+void redraw_all(void)
+{
+    struct Tab *keep = T;
+    int i;
+    term_sync(T);
     if (!win)
         return;                         /* hidden: drawn when shown */
-    forget_shown();
     rp_forget();
     planes_full();
     if (!backdrop_put(bkx, bky, bkw, bkh)) {
@@ -2352,14 +2438,15 @@ void redraw_all(void)
     planes_reset();                     /* all background: no plane yet */
     draw_tabbar();
     k_total = -1;                       /* the place bar was cleared */
-    vt_take_changes(vt, &chg);
-    curx = cury = -1;
-    for (r = 0; r < rows; r++)
-        draw_row(r);
-    draw_cursor(TRUE);
-    update_knob();
-    if (shown && shown->t_xfer)
-        xfer_panel();
+    for (i = 0; i < npanes; i++)
+        if (panes[i].tab) {
+            pane_use(&panes[i]);
+            T = panes[i].tab;
+            redraw_pane();
+        }
+    pane_use(apane);
+    T = keep;
+    panes_frames();
 }
 
 /* IDCMP_REFRESHWINDOW: only what the damage reaches is drawn again (a
@@ -2371,11 +2458,9 @@ void repair_damage(void)
 {
     struct Region *dl;
     struct Rectangle d;
-    VtChanges chg;
-    BOOL some, changed;
-    int r, r0, r1, x0, x1;
-    LONG keepbase = pbase;
-    UBYTE keepmask = pmask;
+    struct Tab *keep = T;
+    BOOL some;
+    int i, x0, x1;
     term_sync(T);
     BeginRefresh(win);
     dl = win->WLayer->DamageList;       /* in the window's coordinates */
@@ -2383,14 +2468,7 @@ void repair_damage(void)
     if (some)
         d = dl->bounds;
     EndRefresh(win, TRUE);
-    /* nothing known, or text that moved and is not drawn yet (a scroll
-     * then would carry rows drawn here): all of it, as before */
-    if (!some || T != shown) {
-        redraw_all();
-        return;
-    }
-    changed = vt_take_changes(vt, &chg);
-    if (changed && (chg.all || chg.scroll_n)) {
+    if (!some) {                        /* nothing known: all of it */
         redraw_all();
         return;
     }
@@ -2404,46 +2482,100 @@ void repair_damage(void)
     if (x0 <= x1 && d.MinY <= d.MaxY) {
         /* the damage afresh in the background, with all planes: the
          * planes outside the text's mask must hold the background */
-        planes_full();
+        planes_save();
         if (!backdrop_put(x0, d.MinY, x1 - x0 + 1, d.MaxY - d.MinY + 1)) {
             apen(defbg);
             RectFill(rp, x0, d.MinY, x1, d.MaxY);
         }
-        pbase = keepbase;
-        pmask = keepmask;
-        SetWriteMask(rp, pmask);
-        rp_forget();
+        planes_restore();
     }
-    if (d.MinY < oy)
+    if (d.MinY < win->BorderTop + tabbar_h())
         draw_tabbar();
-    r0 = (d.MinY - oy) / ch;
-    r1 = (d.MaxY - oy) / ch;
-    if (d.MinY < oy) r0 = 0;
-    if (r1 >= rows) r1 = rows - 1;
-    draw_cursor(FALSE);
-    for (r = 0; r < rows; r++)
-        if ((r >= r0 && r <= r1) || (changed && chg.dirty[r])) {
-            if (r < (int)sizeof shown_blank)
-                shown_blank[r] = 0;     /* what it showed is gone */
-            draw_row(r);
+    for (i = 0; i < npanes; i++) {
+        struct Pane *p = &panes[i];
+        VtChanges chg;
+        BOOL changed;
+        int r, r0, r1;
+        if (!p->tab)
+            continue;
+        pane_use(p);
+        T = p->tab;
+        term_sync(T);
+        /* text that moved and is not drawn yet (a scroll then would
+         * carry rows drawn here): the whole pane, as before */
+        changed = vt_take_changes(vt, &chg);
+        if (changed && (chg.all || chg.scroll_n)) {
+            redraw_pane();
+            continue;
         }
-    draw_cursor(TRUE);
-    update_knob();
-    if (shown->t_xfer)
-        xfer_panel();
+        if (x1 < p->x0 || x0 > p->x1 || d.MaxY < p->y0 || d.MinY > p->y1)
+            r0 = rows, r1 = -1;         /* not damaged: its changes only */
+        else {
+            r0 = d.MinY < oy ? 0 : (d.MinY - oy) / ch;
+            r1 = (d.MaxY - oy) / ch;
+        }
+        if (r1 >= rows) r1 = rows - 1;
+        if (r0 > r1 && !changed)
+            continue;
+        draw_cursor(FALSE);
+        for (r = 0; r < rows; r++)
+            if ((r >= r0 && r <= r1) || (changed && chg.dirty[r])) {
+                if (r < (int)sizeof shown_blank)
+                    shown_blank[r] = 0; /* what it showed is gone */
+                draw_row(r);
+            }
+        draw_cursor(TRUE);
+        update_knob();
+        if (T->t_xfer)
+            xfer_panel();
+    }
+    pane_use(apane);
+    T = keep;
+    panes_frames();
 }
 
 /* Bring the window up to date with the emulator: one blit for a scroll,
  * then only the rows that changed. */
+static void refresh_pane(void);
+
+/* T's pane up to date, if it is in one (else drawn when it is shown). */
 void refresh(void)
+{
+    struct Pane *p, *was = cpane;
+    term_sync(T);                       /* what the Shell wrote, parsed */
+    if (!win || !(p = pane_of(T)) || pane_dragging())
+        return;                         /* hidden, or a divider pulled (its
+                                         * line would be drawn over): the
+                                         * changes wait */
+    if (p == was)
+        refresh_pane();
+    else {
+        pane_use(p);
+        refresh_pane();
+        pane_use(was);
+    }
+}
+
+/* Every pane up to date (the frame timer, a host's bytes). */
+void refresh_all(void)
+{
+    struct Tab *keep = T;
+    int i;
+    for (i = 0; i < npanes; i++)
+        if (panes[i].tab) {
+            T = panes[i].tab;
+            refresh();
+        }
+    T = keep;
+}
+
+/* The pane in use, T its tab. */
+static void refresh_pane(void)
 {
     VtChanges chg;
     int r;
     BOOL xp;
     static int syncwait;
-    term_sync(T);                       /* what the Shell wrote, parsed */
-    if (!win)
-        return;                         /* hidden: the changes wait */
     /* the program is between "begin" and "end" of a frame (2026): show
      * the finished one - but never hold the window more than ~8 frames */
     if (vt_sync(vt) && syncwait < 8) {
@@ -2453,11 +2585,9 @@ void refresh(void)
         return;
     }
     syncwait = 0;
-    if (T != shown)
-        return;                         /* drawn when it is shown again */
     if (!vt_take_changes(vt, &chg))
         return;
-    xp = shown && T == shown && shown->t_xfer;
+    xp = T->t_xfer != NULL;
     if (xp)
         chg.all = 1;                    /* a scroll would carry the panel */
     rp_forget();
@@ -2491,7 +2621,7 @@ void refresh(void)
         if (chg.scroll_n) {
             bpen(defbg);
             PF_START(ts);
-            ScrollRaster(rp, 0, chg.scroll_n * ch, win->BorderLeft,
+            ScrollRaster(rp, 0, chg.scroll_n * ch, cpane->fx0,
                          oy + chg.scroll_top * ch, area_right(),
                          oy + (chg.scroll_bottom + 1) * ch - 1);
             PF_ADD(pf_scroll, ts);
@@ -2575,9 +2705,26 @@ static void kb(char *out, ULONG v)
     }
 }
 
+static void xfer_panel_(void);
+
+/* T's transfer panel, over the last rows of its pane (if in one). */
 void xfer_panel(void)
 {
-    struct Xfer *x = shown ? shown->t_xfer : NULL;
+    struct Pane *p = pane_of(T), *was = cpane;
+    if (!p || !win || !T->t_xfer)
+        return;
+    if (p == was)
+        xfer_panel_();
+    else {
+        pane_use(p);
+        xfer_panel_();
+        pane_use(was);
+    }
+}
+
+static void xfer_panel_(void)
+{
+    struct Xfer *x = T->t_xfer;
     int lh, y0, x0, w, bw, tx;
     ULONG secs, rate = 0, left;
     char s[200];
@@ -2674,10 +2821,14 @@ void xfer_panel(void)
 /* A click on the shown tab's Stop: TRUE when it was one. */
 BOOL xfer_click(int mx, int my)
 {
-    struct Xfer *x = shown ? shown->t_xfer : NULL;
-    if (!x || mx < x->stopx0 || mx > x->stopx1 || my < x->stopy0 ||
-        my > x->stopy1)
-        return FALSE;
-    x->stop = 1;
-    return TRUE;
+    int i;
+    for (i = 0; i < npanes; i++) {      /* a Stop in any pane */
+        struct Xfer *x = panes[i].tab ? panes[i].tab->t_xfer : NULL;
+        if (x && mx >= x->stopx0 && mx <= x->stopx1 && my >= x->stopy0 &&
+            my <= x->stopy1) {
+            x->stop = 1;
+            return TRUE;
+        }
+    }
+    return FALSE;
 }

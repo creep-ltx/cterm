@@ -2,7 +2,8 @@
 # bench.sh cterm|ccon|nil NAME [CTERM ARGS] - cold-start FS-UAE A1200-Stock-net headless and
 # run conbench REPS 3 SCALE 1 SYNC in a 77x30 window (the CCON race setup):
 # in CTerm (tests this tree's CTerm) or in a CCON: window (the control).
-H="$HOME/FS-UAE/Hard Drives/AmigaOS3.2"; export WASABI_HOST=127.0.0.1
+# H=drive: another copy of the drive (CONFFILE=its config): a private one
+H="${H:-$HOME/FS-UAE/Hard Drives/AmigaOS3.2}"; export WASABI_HOST=127.0.0.1
 kind=$1; name=${2:-$1}; shift $(( $# < 2 ? $# : 2 )); extra="$*"   # e.g. TEXTDRAW
 # another session's emulator holds wasabi's port (127.0.0.1:1234): wait,
 # never stop it
@@ -16,6 +17,7 @@ printf 'FailAt 30\nStack 20000\nC:conbench %s TO SYS:T/cb-%s.txt REPS 3 SCALE 1 
 # CONF=fast: the same A1200 with 8 MB of fast RAM (an accelerated machine)
 cf=Configurations/A1200-Stock-net.fs-uae
 [ "$CONF" = fast ] && cf="$(cd "$(dirname "$0")" && pwd)/A1200-Stock-fast.fs-uae"
+[ -n "$CONFFILE" ] && cf="$CONFFILE"
 (cd ~/FS-UAE && SDL_VIDEODRIVER=offscreen setsid fs-uae "$cf" >/dev/null 2>&1 &)
 sleep 2; pgrep -n -x fs-uae > /tmp/cterm-bench-uae.pid   # the newest: ours (none ran before)
 sleep 20

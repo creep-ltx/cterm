@@ -17,7 +17,7 @@ TP = third_party
 SSHINC = -I$(TP)/amiga -I$(TP)/AmiSSL/Developer/include -I$(TP)/libssh2-1.11.1/include
 SSHLIB = $(TP)/lib/libssh2.a -L$(TP)/AmiSSL/Developer/lib/AmigaOS3 -lamisslstubs -lm
 
-SRC = src/main.c src/hide.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c src/bookwin.c src/serial.c src/serwin.c src/rexx.c
+SRC = src/main.c src/hide.c src/pane.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/setwin.c src/bench.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c src/bookwin.c src/serial.c src/serwin.c src/rexx.c
 HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h src/serial.h src/sermod.h
 
 # CTerm: everything but ssh (small enough for a stock A1200)

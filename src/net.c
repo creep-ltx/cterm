@@ -388,15 +388,16 @@ void send_naws(void)
     UBYTE m[13], v[4];
     struct TelOpts *o;
     int i, k = 0;
+    int c = vt_cols(vt), r = vt_rows(vt);  /* the tab's: its pane's */
     if (sshmode) {                      /* the pty's size, ssh's way */
-        ssh_resize(T->ssh, cols, rows);
+        ssh_resize(T->ssh, c, r);
         return;
     }
     o = tel_opts(FALSE);
     if (!o || o->us[Q_NAWS] != Q_YES)
         return;
-    v[0] = cols >> 8; v[1] = cols & 255;
-    v[2] = rows >> 8; v[3] = rows & 255;
+    v[0] = c >> 8; v[1] = c & 255;
+    v[2] = r >> 8; v[3] = r & 255;
     m[k++] = IAC; m[k++] = SB; m[k++] = O_NAWS;
     for (i = 0; i < 4; i++) {
         m[k++] = v[i];
@@ -673,13 +674,13 @@ BOOL connect_out(void)
     if (!sshmode)
         return dial();
     {
-        int c0 = cols, r0 = rows;
-        T->ssh = ssh_open(dialhost, cols, rows, term_ask, say);
+        int c0 = vt_cols(vt), r0 = vt_rows(vt);
+        T->ssh = ssh_open(dialhost, c0, r0, term_ask, say);
         if (!T->ssh)
             return FALSE;
         sock = ssh_socket(T->ssh);
-        if (cols != c0 || rows != r0)   /* resized while it was set up */
-            send_naws();
+        if (vt_cols(vt) != c0 || vt_rows(vt) != r0)
+            send_naws();                /* resized while it was set up */
     }
     return TRUE;
 }
@@ -721,7 +722,7 @@ static BOOL relay_allowed(ULONG addr)
         }
         return FALSE;
     }
-    if (shown != T)                     /* the question where it is seen */
+    if (!pane_of(T))                    /* the question where it is seen */
         for (i = 0; i < ntabs; i++)
             if (tabs[i] == T)
                 tab_show(i);

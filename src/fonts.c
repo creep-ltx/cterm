@@ -167,8 +167,7 @@ void font_changed(void)
     layout_and_resize();
     painter_forget();
     redraw_all();
-    if (sock >= 0)
-        send_naws();
+    tell_sizes();
 }
 
 void ask_ttfont(void)
@@ -232,6 +231,8 @@ void tt_size(int d)
 static int tab_wish(void)
 {
     int l = T->t_letters;
+    if (npanes > 1)
+        return BL_CTERM;                /* split: one size of cell for all */
     if (l == BL_PC || (l == BL_CTERM && pcmode && pcfont))
         return BL_PC;
     return l == BL_AMIGA || l == BL_TT ? l : BL_CTERM;
