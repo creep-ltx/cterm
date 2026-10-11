@@ -7,7 +7,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
-**Installed:** 0.3b25 on the A1200 (CTerm only; parts as 0.3b24) (Work:Utils/CTerm: CTerm, CTermSSH,
+**Installed:** 0.3b26 on the A1200 (CTerm, CTermSSH; parts as 0.3b24) (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
 hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
 AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
@@ -70,6 +70,18 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    (verified in FS-UAE: typed and echoed with it open; Quit with it open
    is clean). close_display closes it. On the A1200 it opened and
    closed by OK.
+1d. **TrueType rows as a PC sizes them (0.3b26):** the cell was
+   TT_FontMaxTop + MaxBottom, the tallest glyph in the whole font; Noto
+   Sans Mono (the user's PC terminal font) has stacked Vietnamese
+   accents, so its rows were 24 px at size 14 against 18 for its Latin-1
+   letters (DejaVu 21 -> 16). Now TT_TextExtent over Latin-1 (0x20-0x7E,
+   0xA0-0xFF) sizes the row. A run with a glyph above U+00FF is measured
+   (TT_TextExtent) and, if it is taller than the row, drawn through a
+   clip region of the row (InstallClipRegion; layers.library auto-opened
+   by libnix) - no stray pixels in the rows around (verified in FS-UAE).
+   Bold beside a `-Regular.ttf` is `-Bold.ttf` (open_variant). Noto Sans
+   Mono Regular + Bold are in Work:Utils/CTerm/Fonts on the A1200 (not
+   in the repo; OFL); the user picks them in Settings.
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).

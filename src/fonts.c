@@ -73,6 +73,7 @@ BOOL file_exists(const char *path)
 }
 
 /* The bold or italic file beside a .ttf: DejaVuSansMono-Bold.ttf,
+ * NotoSansMono-Bold.ttf beside NotoSansMono-Regular.ttf,
  * VeraMonoBold.ttf, ...-Oblique / -Italic / -BoldOblique. */
 static APTR open_variant(const char *const *suffixes)
 {
@@ -82,6 +83,9 @@ static APTR open_variant(const char *const *suffixes)
         return NULL;
     strncpy(base, ttfile, n - 4);
     base[n - 4] = 0;
+    n -= 4;                             /* NotoSansMono-Regular.ttf: */
+    if (n > 8 && !stricmp(base + n - 8, "-Regular"))
+        base[n - 8] = 0;                /* its bold is ...-Bold.ttf */
     for (i = 0; suffixes[i]; i++) {
         strcpy(path, base);
         strcat(path, suffixes[i]);
@@ -134,6 +138,23 @@ BOOL load_tt(void)
     TT_SetAttrs(&trp, TT_Encoding, TT_Encoding_ISO8859_1, TAG_END);
     TT_GetAttrs(&trp, TT_FontMaxTop, (ULONG)&top, TT_FontMaxBottom,
                 (ULONG)&bot, TAG_END);
+    {
+        /* The row as tall as the Latin-1 letters (Å and g included), as
+         * PC terminals size it from the font: MaxTop/MaxBottom are the
+         * tallest glyph anywhere (Noto Sans Mono's stacked Vietnamese
+         * accents made its rows a third taller than a PC's) */
+        UBYTE l[191];
+        struct TextExtent te;
+        int k = 0, c;
+        for (c = 0x20; c < 0x7F; c++) l[k++] = c;
+        for (c = 0xA0; c <= 0xFF; c++) l[k++] = c;
+        TT_TextExtent(&trp, l, k, &te);
+        if (te.te_Extent.MinY < 0 && te.te_Extent.MaxY >= 0 &&
+            -te.te_Extent.MinY <= top && te.te_Extent.MaxY + 1 <= bot) {
+            top = -te.te_Extent.MinY;
+            bot = te.te_Extent.MaxY + 1;
+        }
+    }
     cw = TT_TextLength(&trp, (APTR)"0", 1);
     ten = TT_TextLength(&trp, (APTR)"0000000000", 10);
     TT_DoneRastPort(&trp);

@@ -8,6 +8,7 @@
 /* A cell's look (its colours and style), from the shown tab's table */
 #define PEN(c) (&vt_pens(vt)[(c)->pen])
 #include <graphics/regions.h>
+#include <proto/layers.h>
 
 struct CEntry;
 static ULONG index_rgb(int i);
@@ -33,6 +34,7 @@ static BOOL is_special(ULONG cp);
 static ULONG tt_stand_in(ULONG cp);
 static APTR tt_for(UWORD attr);
 static void tt_run(const ULONG *u, const int *cols, int n, int y, ULONG fg, UWORD attr);
+static void tt_glyphs(const ULONG *u, const int *cols, int n, int y);
 static BOOL sel_span(int r, int *s0, int *s1);
 static void draw_cells(int r, int x0, int x1);
 static BOOL pp_cells(int r, int a, int b);
@@ -904,6 +906,42 @@ static void tt_run(const ULONG *u, const int *cols, int n, int y,
         TT_SetAttrs(rp, TT_SoftStyle, st, TAG_END);
         c_ttstyle = st;
     }
+    /* The row is as tall as the Latin-1 letters (fonts.c): a taller
+     * glyph (Vietnamese stacked accents) would leave pixels in the rows
+     * above and below, so such a run is drawn clipped to its row - as a
+     * PC terminal clips. Only those: a clip costs a layer rebuild. */
+    for (i = 0; i < n && u[i] < 0x100; i++)
+        ;
+    if (i < n) {
+        struct TextExtent te;
+        TT_TextExtent(rp, (APTR)u, n, &te);
+        if (-te.te_Extent.MinY > cbase || te.te_Extent.MaxY >= ch - cbase) {
+            static struct Region *rg;
+            struct Region *old;
+            struct Rectangle r;
+            if (!rg && !(rg = NewRegion()))
+                goto plain;
+            ClearRegion(rg);
+            r.MinX = 0; r.MaxX = win->Width - 1;
+            r.MinY = y; r.MaxY = y + ch - 1;
+            if (!OrRectRegion(rg, &r))
+                goto plain;
+            old = InstallClipRegion(win->WLayer, rg);
+            tt_glyphs(u, cols, n, y);
+            InstallClipRegion(win->WLayer, old);
+            drmd(JAM2);
+            return;
+        }
+    }
+plain:
+    tt_glyphs(u, cols, n, y);
+    drmd(JAM2);
+}
+
+/* tt_run's drawing: the font and pen are set. */
+static void tt_glyphs(const ULONG *u, const int *cols, int n, int y)
+{
+    int i;
     if (ttruns) {
         int from = 0;
         /* glyphs are exactly one cell: draw runs, broken only where a
@@ -920,7 +958,6 @@ static void tt_run(const ULONG *u, const int *cols, int n, int y,
             TT_Text(rp, (APTR)(u + i), 1);
         }
     }
-    drmd(JAM2);
 }
 
 /* Plain (planar) screens: Text() draws the letters. A CPU writer into
