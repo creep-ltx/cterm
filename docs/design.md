@@ -5,9 +5,9 @@ A modern terminal for AmigaOS 3.2, in C. Replaces the Amiga E CTerm in
 and so gets only console.device's ANSI). This one does its own
 VT100/xterm emulation. Decided 2026-10-09.
 
-## Start here: where CTerm is (2026-10-11 evening, 0.3b22)
+## Start here: where CTerm is (2026-10-11 evening, 0.3b23)
 
-**Installed:** 0.3b22 on the A1200 (Work:Utils/CTerm: CTerm, CTermSSH,
+**Installed:** 0.3b23 on the A1200 (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
 hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
 AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
@@ -44,17 +44,17 @@ no wasabid stalls since the browser is in the tab), sixel/PNG pictures
 on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
 
 **Next (agreed with the user):**
-1. **The menus are a mess** - redesign them. Draft given to the user:
-   CTerm (New Shell tab, Close tab, Hide, About, Quit) / Call (Call...,
-   Phone book..., Serial terminal, Answer, Hang up, Send user name,
-   Send password) / Edit (Copy, Paste, Select all, Clear screen, Clear
-   history) / View (Tabs -> list, Panes -> ..., Bigger/Smaller text,
-   Full screen, Scroll bar) / Files (Send file / Receive file per
-   protocol, Open SFTP browser, Show transfers, Start/Stop log) /
-   Settings (Settings..., Fonts ->, Screen ->, Characters ->, Keys...) /
-   Tools (Run ARexx script..., Speed test). Show the user a screenshot of
-   the new menus on the A1200 first; they choose. Keep every shortcut
-   configurable (CTerm.keys menu actions).
+1. ~~The menus are a mess~~ - **done in 0.3b23** (the user left the
+   choice to me): CTerm (New Shell tab, Close tab | Run ARexx script...,
+   Speed test | About, Hide window, Quit) / Call (Call..., Phone book... |
+   Serial terminal, Answer | Send user name, Send password) / Edit /
+   Files (Open SFTP browser | Send file >, Receive file >, Show
+   transfers | Start/Stop log) / Panes (the old Split left/right, Split
+   top/bottom, Next pane, Close pane items are gone from the menu; their
+   keys still work) / View (Bigger/Smaller text | Screen >, Full screen,
+   Scroll bar | Characters > UTF-8, PC BBS) / Settings (Settings... |
+   Amiga font..., TrueType font...). menu_ticks now finds ticks in
+   submenus too (Characters). Checked on the A1200 by grabs.
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).

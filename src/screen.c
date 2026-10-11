@@ -4,50 +4,52 @@
 #include "cterm.h"
 
 static void make_menus(void);
-static void make_menus(void);
 static BOOL open_own_screen(void);
 static void close_own_screen(BOOL ask);
 static void clear_leftover(void);
 static void ask_switch(int mode, int depth, BOOL full, BOOL bar);
 
 static struct NewMenu newmenu[] = {
-    { NM_TITLE, (STRPTR)"Project", 0, 0, 0, 0 },
+    { NM_TITLE, (STRPTR)"CTerm", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"New Shell tab", 0, 0, 0, (APTR)M_NEWTAB },
+    {  NM_ITEM, (STRPTR)"Close tab", 0, 0, 0, (APTR)M_CLOSETAB },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Run ARexx script...", 0, 0, 0, (APTR)M_REXX },
+    {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
+    {  NM_ITEM, (STRPTR)"Hide window", 0, 0, 0, (APTR)M_HIDE },
+    {  NM_ITEM, (STRPTR)"Quit", 0, 0, 0, (APTR)M_QUIT },
+    { NM_TITLE, (STRPTR)"Call", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Call...", 0, 0, 0, (APTR)M_CALL },
     {  NM_ITEM, (STRPTR)"Phone book...", 0, 0, 0, (APTR)M_BOOK },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Serial terminal", 0, 0, 0, (APTR)M_SERIAL },
     {  NM_ITEM, (STRPTR)"Answer call (ATA)", 0, 0, 0, (APTR)M_ANSWER },
-    {  NM_ITEM, (STRPTR)"Open SFTP browser", 0, 0, 0, (APTR)M_SFTP },
-    {  NM_ITEM, (STRPTR)"Close tab", 0, 0, 0, (APTR)M_CLOSETAB },
-    {  NM_ITEM, (STRPTR)"Start log...", 0, 0, 0, (APTR)M_LOG },
-    {  NM_ITEM, (STRPTR)"Stop log", 0, 0, 0, (APTR)M_LOGSTOP },
-    {  NM_ITEM, (STRPTR)"Send user name", 0, 0, 0,
-       (APTR)M_SENDUSER },
-    {  NM_ITEM, (STRPTR)"Send password", 0, 0, 0,
-       (APTR)M_SENDPASS },
-    {  NM_ITEM, (STRPTR)"Run ARexx script...", 0, 0, 0, (APTR)M_REXX },
-    {  NM_ITEM, (STRPTR)"Hide window", 0, 0, 0, (APTR)M_HIDE },
-    {  NM_ITEM, (STRPTR)"About", 0, 0, 0, (APTR)M_ABOUT },
-    {  NM_ITEM, (STRPTR)"Speed test", 0, 0, 0, (APTR)M_SPEED },
-    {  NM_ITEM, (STRPTR)"Quit", 0, 0, 0, (APTR)M_QUIT },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Send user name", 0, 0, 0, (APTR)M_SENDUSER },
+    {  NM_ITEM, (STRPTR)"Send password", 0, 0, 0, (APTR)M_SENDPASS },
     { NM_TITLE, (STRPTR)"Edit", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Copy", 0, 0, 0, (APTR)M_COPY },
     {  NM_ITEM, (STRPTR)"Paste", 0, 0, 0, (APTR)M_PASTE },
-    { NM_TITLE, (STRPTR)"Transfer", 0, 0, 0, 0 },
-    {  NM_ITEM, (STRPTR)"Receive with Ymodem", 0, 0, 0, (APTR)M_YRECV },
-    {  NM_ITEM, (STRPTR)"Receive with Xmodem...", 0, 0, 0, (APTR)M_XRECV },
-    {  NM_ITEM, (STRPTR)"Send with Ymodem...", 0, 0, 0, (APTR)M_YSEND },
-    {  NM_ITEM, (STRPTR)"Send with Xmodem...", 0, 0, 0, (APTR)M_XSEND },
-    {  NM_ITEM, (STRPTR)"Send with Hydra...", 0, 0, 0, (APTR)M_HSEND },
+    { NM_TITLE, (STRPTR)"Files", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Open SFTP browser", 0, 0, 0, (APTR)M_SFTP },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Send file", 0, 0, 0, 0 },
+    {   NM_SUB, (STRPTR)"With Ymodem...", 0, 0, 0, (APTR)M_YSEND },
+    {   NM_SUB, (STRPTR)"With Xmodem...", 0, 0, 0, (APTR)M_XSEND },
+    {   NM_SUB, (STRPTR)"With Hydra...", 0, 0, 0, (APTR)M_HSEND },
+    {  NM_ITEM, (STRPTR)"Receive file", 0, 0, 0, 0 },
+    {   NM_SUB, (STRPTR)"With Ymodem", 0, 0, 0, (APTR)M_YRECV },
+    {   NM_SUB, (STRPTR)"With Xmodem...", 0, 0, 0, (APTR)M_XRECV },
     {  NM_ITEM, (STRPTR)"Show transfers...", 0, 0, 0, (APTR)M_XWIN },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Start log...", 0, 0, 0, (APTR)M_LOG },
+    {  NM_ITEM, (STRPTR)"Stop log", 0, 0, 0, (APTR)M_LOGSTOP },
     { NM_TITLE, (STRPTR)"Panes", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"New Shell pane", 0, 0, 0, (APTR)M_POPEN },
     {  NM_ITEM, (STRPTR)"Close pane and tab", 0, 0, 0, (APTR)M_PKILL },
-    {  NM_ITEM, (STRPTR)"New panes side by side", 0, CHECKIT, 0,
-       (APTR)M_PSPLITH },
-    {  NM_ITEM, (STRPTR)"New panes one below other", 0, CHECKIT, 0,
-       (APTR)M_PSPLITV },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Focus", 0, 0, 0, 0 },
     {   NM_SUB, (STRPTR)"Left", 0, 0, 0, (APTR)M_PFLEFT },
     {   NM_SUB, (STRPTR)"Right", 0, 0, 0, (APTR)M_PFRIGHT },
@@ -58,25 +60,22 @@ static struct NewMenu newmenu[] = {
     {   NM_SUB, (STRPTR)"Right", 0, 0, 0, (APTR)M_PMRIGHT },
     {   NM_SUB, (STRPTR)"Up", 0, 0, 0, (APTR)M_PMUP },
     {   NM_SUB, (STRPTR)"Down", 0, 0, 0, (APTR)M_PMDOWN },
-    {  NM_ITEM, (STRPTR)"Automatic split (dwindle)", 0,
-       CHECKIT | MENUTOGGLE, 0, (APTR)M_PDWINDLE },
     {  NM_ITEM, (STRPTR)"Fill the window", 0, CHECKIT | MENUTOGGLE, 0,
        (APTR)M_PFULL },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"New panes side by side", 0, CHECKIT, 0,
+       (APTR)M_PSPLITH },
+    {  NM_ITEM, (STRPTR)"New panes one below other", 0, CHECKIT, 0,
+       (APTR)M_PSPLITV },
+    {  NM_ITEM, (STRPTR)"Automatic split (dwindle)", 0,
+       CHECKIT | MENUTOGGLE, 0, (APTR)M_PDWINDLE },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"All panes to tabs", 0, 0, 0, (APTR)M_PTABS },
     {  NM_ITEM, (STRPTR)"All tabs to panes", 0, 0, 0, (APTR)M_PPANES },
-    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
-    {  NM_ITEM, (STRPTR)"Split left/right", 0, 0, 0, (APTR)M_SPLITH },
-    {  NM_ITEM, (STRPTR)"Split top/bottom", 0, 0, 0, (APTR)M_SPLITV },
-    {  NM_ITEM, (STRPTR)"Next pane", 0, 0, 0, (APTR)M_NEXTPANE },
-    {  NM_ITEM, (STRPTR)"Close pane", 0, 0, 0, (APTR)M_CLOSEPANE },
-    { NM_TITLE, (STRPTR)"Settings", 0, 0, 0, 0 },
-    {  NM_ITEM, (STRPTR)"Settings...", 0, 0, 0, (APTR)M_SETTINGS },
-    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
-    {  NM_ITEM, (STRPTR)"Amiga font...", 0, 0, 0, (APTR)M_FONT },
-    {  NM_ITEM, (STRPTR)"TrueType font...", 0, 0, 0,
-       (APTR)M_TTFONT },
+    { NM_TITLE, (STRPTR)"View", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Bigger text", 0, 0, 0, (APTR)M_BIGGER },
     {  NM_ITEM, (STRPTR)"Smaller text", 0, 0, 0, (APTR)M_SMALLER },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Screen", 0, 0, 0, 0 },
     {   NM_SUB, (STRPTR)"Workbench window", 0, CHECKIT, ~1, (APTR)M_SCR_WB },
     {   NM_SUB, (STRPTR)"Own screen, 16 colours", 0, CHECKIT, ~2,
@@ -89,9 +88,16 @@ static struct NewMenu newmenu[] = {
        (APTR)M_FULL },
     {  NM_ITEM, (STRPTR)"Scroll bar", 0, CHECKIT | MENUTOGGLE, 0,
        (APTR)M_BAR },
-    {  NM_ITEM, (STRPTR)"UTF-8", 0, CHECKIT | MENUTOGGLE, 0, (APTR)M_UTF8 },
-    {  NM_ITEM, (STRPTR)"PC BBS (CP437)", 0, CHECKIT | MENUTOGGLE, 0,
-       (APTR)M_PC },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Characters", 0, 0, 0, 0 },
+    {   NM_SUB, (STRPTR)"UTF-8", 0, CHECKIT | MENUTOGGLE, 0, (APTR)M_UTF8 },
+    {   NM_SUB, (STRPTR)"PC BBS (CP437)", 0, CHECKIT | MENUTOGGLE, 0,
+        (APTR)M_PC },
+    { NM_TITLE, (STRPTR)"Settings", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Settings...", 0, 0, 0, (APTR)M_SETTINGS },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Amiga font...", 0, 0, 0, (APTR)M_FONT },
+    {  NM_ITEM, (STRPTR)"TrueType font...", 0, 0, 0, (APTR)M_TTFONT },
     { NM_END, 0, 0, 0, 0, 0 },
 };
 struct Window *setwin;
@@ -190,10 +196,16 @@ static void make_menus(void)
         struct MenuItem *it;
         int i;
         for (m = menu; m; m = m->NextMenu)
-            for (it = m->FirstItem; it; it = it->NextItem)
+            for (it = m->FirstItem; it; it = it->NextItem) {
+                struct MenuItem *sub;
                 for (i = 0; i < NTICK; i++)
                     if ((ULONG)GTMENUITEM_USERDATA(it) == tickid[i])
                         ticks[i] = it;
+                for (sub = it->SubItem; sub; sub = sub->NextItem)
+                    for (i = 0; i < NTICK; i++)   /* Characters > */
+                        if ((ULONG)GTMENUITEM_USERDATA(sub) == tickid[i])
+                            ticks[i] = sub;
+            }
         SetMenuStrip(win, menu);
     }
     cx_keys();                          /* Amiga + the arrows, as bound */
