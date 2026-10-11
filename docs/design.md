@@ -7,7 +7,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
-**Installed:** 0.3b26 on the A1200 (CTerm, CTermSSH; parts as 0.3b24) (Work:Utils/CTerm: CTerm, CTermSSH,
+**Installed:** 0.3b27 on the A1200 (CTerm, CTermSSH; parts as 0.3b24) (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
 hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
 AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
@@ -82,11 +82,13 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    Bold beside a `-Regular.ttf` is `-Bold.ttf` (open_variant). Noto Sans
    Mono Regular + Bold are in Work:Utils/CTerm/Fonts on the A1200 (not
    in the repo; OFL); set as the user's font on 2026-10-11 (truetype=1, ttsize=16; the old prefs in ENVARC:CTerm.prefs.before-noto).
-1e. **Next for the terminal programs** (~/Projects/Ideas/terminal-programs.md,
-   2026-10-11): CTerm should draw **braille** (U+2800-28FF, 2 x 4 dots a
-   cell) itself, as it draws blocks and quadrants, so btop-style graphs
-   work with Amiga bitmap fonts too. The family of programs that live
-   inside CTerm (btop, micro, less, ...) depends on it.
+1e. **Braille drawn by CTerm (0.3b27)** for the terminal programs
+   (~/Projects/Ideas/terminal-programs.md): U+2800-28FF is is_special
+   (as lines and blocks, in TrueType too); draw_braille puts 2 x 4
+   square dots on the cell grid (dot = min(cw/4, ch/8), at least 1 px),
+   in the planar special path and make_cell (RTG and planar painters).
+   Verified in FS-UAE with topaz 8 (own 8-bit screen) and Noto Sans Mono
+   12 (Workbench window): all 256 patterns and a btop-style graph.
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).

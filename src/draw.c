@@ -27,6 +27,7 @@ static void hline(int x0, int x1, int y, int th);
 static void vline(int x, int y0, int y1, int th);
 static void draw_box(UBYTE arms, int x, int y);
 static void draw_block(ULONG cp, int x, int y, ULONG fg, ULONG bg);
+static void draw_braille(ULONG cp, int x, int y);
 static void disc(int cx, int cy, int r, BOOL leftonly);
 static BOOL draw_shape(ULONG cp, int x, int y);
 static UBYTE fallback(ULONG cp);
@@ -647,6 +648,27 @@ static void draw_block(ULONG cp, int x, int y, ULONG fg, ULONG bg)
     }
 }
 
+/* Braille U+2800-28FF: 2 x 4 dots on the cell's grid, as foot draws
+ * them, so btop-style graphs line up from cell to cell - in an Amiga
+ * font as in TrueType. Bits: 1 2 3 7 down the left, 4 5 6 8 the right. */
+static void draw_braille(ULONG cp, int x, int y)
+{
+    static const UBYTE bit[2][4] = { { 0x01, 0x02, 0x04, 0x40 },
+                                     { 0x08, 0x10, 0x20, 0x80 } };
+    int dw = cw / 4 > 0 ? cw / 4 : 1, dh = ch / 8 > 0 ? ch / 8 : 1;
+    int i, j;
+    if (dh > dw)
+        dh = dw;                        /* dots, not dashes */
+    for (i = 0; i < 2; i++) {
+        int x0 = x + (2 * i + 1) * cw / 4 - dw / 2;
+        for (j = 0; j < 4; j++)
+            if (cp & bit[i][j]) {
+                int y0 = y + (2 * j + 1) * ch / 8 - dh / 2;
+                RF(x0, y0, x0 + dw - 1, y0 + dh - 1);
+            }
+    }
+}
+
 static void disc(int cx, int cy, int r, BOOL leftonly)
 {
     int dy;
@@ -750,8 +772,8 @@ static BOOL is_special(ULONG cp)
 {
     if (cp <= 0xFF || cp == VT_WIDE_TAIL)
         return FALSE;
-    if (cp >= 0x2500 && cp <= 0x259F)
-        return TRUE;
+    if ((cp >= 0x2500 && cp <= 0x259F) || (cp >= 0x2800 && cp <= 0x28FF))
+        return TRUE;                    /* lines, blocks, braille */
     return !usett || VT_IS_PIC(cp);     /* a picture's cell too */
 }
 
@@ -1057,6 +1079,8 @@ static void draw_cells(int r, int x0, int x1)
                 }
             } else if (cp >= 0x2580 && cp <= 0x259F) {
                 draw_block(cp, ox + x * cw, y, fg, bg);
+            } else if (cp >= 0x2800 && cp <= 0x28FF) {
+                draw_braille(cp, ox + x * cw, y);
             } else if (!draw_shape(cp, ox + x * cw, y)) {
                 UBYTE ch1 = fallback(cp);
                 bpen(bg);
@@ -1843,6 +1867,8 @@ static void make_cell(struct CEntry *e)
         }
     } else if (cp >= 0x2580 && cp <= 0x259F) {
         draw_block(cp, 0, 0, e->fg, e->bg);
+    } else if (cp >= 0x2800 && cp <= 0x28FF) {
+        draw_braille(cp, 0, 0);
     } else if (cp > ' ' && cp != 0xA0) {
         if (usett)
             cell_tt_glyph(cp, e->fg, e->bg, e->attr, w);
