@@ -5,6 +5,27 @@ and a terminal for other computers (telnet, ssh, a serial line or a modem,
 BBSes, programs on a PC), in one program. VT100/xterm emulation, Amiga and TrueType fonts, 2 to 16
 million colours, Latin-1, UTF-8 and the PC's character set.
 
+## What it needs
+
+- **AmigaOS 3.2** or later.
+- **Extra memory (fast RAM)**: an accelerator card or a memory card. On
+  an Amiga with only its 2 MB of chip memory CTerm says "CTerm needs an
+  Amiga with extra memory (fast RAM)" and does not start.
+- For ssh also AmiSSL 5 (see ssh below).
+- **The files beside CTerm**, as they come in its drawer:
+
+| File or drawer | What is in it | Without it |
+|---|---|---|
+| `CTermSSH` | ssh | ssh calls do not start |
+| `Protocols/` | Zmodem, XYmodem, Hydra; Serial (serial lines and modems) | that transfer, or serial lines, say they are missing |
+| `Parts/` | Settings, PhoneBook, ARexx, Call, Transfers, SpeedTest | that window or feature says it is missing |
+| `Fonts/` | the PC's VGA font | PC BBSes use the Amiga font |
+| `Rexx/` | example ARexx scripts | |
+
+Everything in `Protocols/` and `Parts/` is loaded only when it is used
+and leaves memory when it is done (ARexx's part stays once a script has
+used it), so a feature never used costs no memory.
+
 ## Starting it
 
 `CTerm` on its own opens the Amiga Shell in a CTerm window.
@@ -211,7 +232,7 @@ hidden CTerm is left as it is. To call from a hidden one, use ARexx's
 
 - ssh is in a second program, **CTermSSH**, kept beside CTerm: CTerm
   starts it when ssh is asked for, so a small Amiga never loads it.
-- Needs AmiSSL 5 (amisslmaster.library and LIBS:AmiSSL/) and fast memory.
+- Needs AmiSSL 5 (amisslmaster.library and LIBS:AmiSSL/).
 - A key file is used if there is one: `ENVARC:CTerm/id_ed25519`,
   `id_ecdsa` or `id_rsa` (made with ssh-keygen, no passphrase; put the
   `.pub` in the host's `~/.ssh/authorized_keys`). Otherwise CTerm asks
@@ -360,7 +381,8 @@ size, screen, full screen, scroll bar).
 
 ## Building
 
-`make` (bebbo's m68k-amigaos-gcc in ~/opt/amiga) builds CTerm and CTermSSH. The first build
+`make` (bebbo's m68k-amigaos-gcc in ~/opt/amiga) builds CTerm, CTermSSH,
+`Protocols/` and `Parts/` (`make parts`: the parts alone). The first build
 downloads the AmiSSL SDK and libssh2 (third_party/fetch.sh) and builds
 libssh2. `make test` checks the emulator core on Linux.
 `tests/serial/` tests serial calls in FS-UAE (its serial port on a TCP

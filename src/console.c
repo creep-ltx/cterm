@@ -1050,9 +1050,12 @@ struct Con *con_start(const char *startup, void *user)
         strncat(c->startcmd, startup, sizeof c->startcmd - 10);
     }
     c->child_running = TRUE;
+    /* 4 KB of stack (was 16): the helper only waits in Execute, ~0.5 KB
+     * used (seen in FS-UAE); the Shell is a process of its own, with
+     * the Shell's usual stack */
     pr = CreateNewProcTags(NP_Entry, (ULONG)child_entry,
                            NP_Name, (ULONG)"CTerm Shell",
-                           NP_StackSize, 16384,
+                           NP_StackSize, 4096,
                            NP_ConsoleTask, (ULONG)c->conport,
                            NP_WindowPtr, (ULONG)win,
                            NP_ExitData, (ULONG)c,   /* the child's console */

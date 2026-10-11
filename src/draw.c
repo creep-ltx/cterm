@@ -742,6 +742,10 @@ static APTR tt_for(UWORD attr)
     return ttface[i] ? ttface[i] : ttface[i & 1] ? ttface[i & 1] : ttface[0];
 }
 
+/* A row's TrueType letters and their cells (512 each), made when
+ * TrueType first draws: 4 KB a stock A1200 need not keep */
+static ULONG *ttbuf;
+
 /* A run of TrueType text on its background; cols[i]: glyph i's cell. */
 static void tt_run(const ULONG *u, const int *cols, int n, int y,
                    ULONG fg, UWORD attr)
@@ -916,11 +920,14 @@ static void draw_cells(int r, int x0, int x1)
             x++;
         }
         if (usett) {
-            static ULONG u[512];
-            static int ucol[512];
-            int k, m = 0;
+            ULONG *u;
+            int *ucol, k, m = 0;
             apen(bg);
             RectFill(rp, ox + start * cw, y, ox + x * cw - 1, y + ch - 1);
+            if (!ttbuf && !(ttbuf = AllocVec(512 * 8, MEMF_ANY)))
+                continue;               /* no memory: the background only */
+            u = ttbuf;
+            ucol = (int *)(ttbuf + 512);
             for (k = start; k < x; k++) {
                 const VtCell *d = k < w && line ? &line[k] : &empty;
                 if (d->cp == VT_WIDE_TAIL || d->cp <= ' ')
@@ -1480,6 +1487,7 @@ static struct {
 
 void cache_free(void)
 {
+    if (ttbuf) { FreeVec(ttbuf); ttbuf = NULL; }
     if (ccache) { FreeVec(ccache); ccache = NULL; }
     if (wcache) { FreeVec(wcache); wcache = NULL; }
     if (cpool) { FreeVec(cpool); cpool = NULL; }

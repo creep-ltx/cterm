@@ -30,6 +30,8 @@ VT100/xterm emulation. Decided 2026-10-09.
 | Hiding the window: the AppIcon, the commodity broker | `src/hide.c` | Yes |
 | Panes: the window split, the layout tree, dividers | `src/pane.c` | Yes |
 | Main loop, settings, menus | `src/main.c` | Yes |
+| The parts' loader, their stubs, the ARexx port | `src/parts.c`, `src/part.h`, `src/partlist.h` | Yes |
+| Parts (files of their own, `Parts/`): settings window, phone book window, ARexx's commands, Call window, Transfers window, speed test | `src/setwin.c`, `src/bookwin.c` (+ `src/serwin.c`), `src/rexx.c`, `src/callwin.c`, `src/xwin.c`, `src/bench.c` | Yes |
 | PC relay: runs a program in a pty, connects to the Amiga | `pc/cterm-relay.py` | PC |
 
 ### The emulator (`vt.c`)
@@ -589,6 +591,94 @@ In the order the user and I agreed (2026-10-10):
 Speed on a stock A1200 (FS-UAE, conbench): 99 s at first, 39.6 s on
 2026-10-10, CCON 26.0 s; on the PiStorm A1200 4.45 s against CCON's 4.26.
 Notes and what is left: Knowledge/amiga/graphics-and-performance.md.
+
+## Memory (0.3b13, 2026-10-11)
+
+**CTerm needs fast RAM** (decided by the user, 2026-10-11): it needs
+AmigaOS 3.2 already, and there are basically no 3.2 installations on
+chip-only machines. At the start, with no fast memory or with CTerm's
+own code not in it, CTerm says "CTerm needs an Amiga with extra memory
+(fast RAM)" (in the Shell, or a requester from Workbench) and ends
+(verified on the stock A1200 config: RC 20, the line in the Shell).
+Chip-only Amigas are no longer a target: their own code paths (the
+painter's pp_all chosen by TypeOfMem, Text() for one-colour rows,
+PACE's draw-cost pacing for planar screens) may stay but can be
+simplified later.
+
+**What was found** (stock A1200 config, FS-UAE, before the decision):
+conbench went from 30.3 s (0.3b7) to 96.4 s (0.3b8) - memory, not code
+(with 8 MB fast both were ~17 s). A MEMLOG build that counts failed
+allocations (a low-memory handler, AddMemHandler) showed 55,617 failed
+16 KB allocations in one run: the history grew until the machine was
+full, then every new line asked libnix's malloc for a new 16 KB pool,
+failed, and ran exec's low-memory handlers (ramlib's expunge walk) -
+once per scrolled line. The same pattern was waiting in term_take
+(AllocVec(PENDMAX) on every write when it failed), the host buffer
+(on every read) and the pen table (on every new look). Also: libnix
+opened asl, diskfont, datatypes, rexxsyslib, commodities, icon and
+workbench at the start, because CTerm's library bases were common
+symbols and libnix's stubs supplied the definitions (`nm CTerm | grep
+" D _.*Base"`); and the Shell's helper process had a 16 KB stack for a
+call that uses ~0.5 KB (the Shell itself is a process of its own).
+
+**What was done:**
+- the history grows only while a reserve stays free (512 KB with fast
+  memory, 64 KB without) and stops for good at the first line it
+  cannot have (a clear lets it grow again); free memory is counted
+  every 64th new line, not each;
+- the Shell's batch buffer, the host buffer and the pen table are asked
+  for once: without memory CTerm parses at once / reads 1 KB / uses the
+  default look, and does not ask again;
+- the library bases are CTerm's own (`= NULL`), so nothing is opened
+  that CTerm does not open itself; rexxsyslib is not opened at a start
+  unless another CTerm's port exists;
+- the prefs buffers (2 x 3.6 KB), the TrueType row buffers (4 KB) and
+  the phone book are made when used, not at the start; the Shell
+  helper's stack is 4 KB;
+- the parts (part.h): the settings window (with the serial line's
+  window), the phone book window, ARexx's commands, the Call window,
+  the Transfers window and the speed test are files in `Parts/`, loaded
+  when wanted and unloaded when their window closes (ARexx's stays once
+  loaded: scripts may wait in it). The window classes close with the
+  last ReAction window. A part is CTerm's own source built with -DPART;
+  it sees CTerm only through PartEnv (partlist.h: V variables, A
+  arrays of no size, F calls), the Makefile makes partuse.h from the
+  list, and the link fails if libnix gave a part a library base of its
+  own (it would be NULL: libstubs' D symbols). Traps: a name in the
+  list must not be a struct member or local name in a part (setwin's
+  snapshot members became k_*); a part's exported calls are static
+  with other names (the cterm.h prototypes are CTerm's stubs);
+  const arrays sit in the text hunk, so nm calls them T (functions);
+  serwin.c is in both window parts.
+
+**Numbers** (FS-UAE, private drive copies, wasabi on port 1240):
+
+| | 0.3b7 | 0.3b8 | 0.3b12 | 0.3b13 |
+|---|---|---|---|---|
+| CTerm (bytes) | 220,024 | 227,812 | 251,788 | 198,556 |
+| free, CTerm idle, stock A1200 (2 MB chip) | 85,752 | 60,056 | 39,960 | 119,408 |
+| free, CTerm idle, A1200 + 8 MB fast | | | 8,413,512 | 8,496,696 |
+| conbench, stock A1200 | 30.3 s | 96.4 s | fails/91-118 s | 30.7 s (now refused) |
+| conbench, A1200 + 8 MB fast | 16.78-16.92 (4) | 16.76 | 16.76-17.08 (6) | 17.00-17.40 (10) |
+| conbench, A1200 030/50 + 32 MB | | | 21.34, 21.50 | 21.98, 21.34, 21.46 |
+
+(Free memory before CTerm: 549,048 chip / 8,938,984 fast config. The
+stock 0.3b13 conbench was measured before the fast-RAM check came in.)
+On the fast A1200 0.3b13 is ~0.25 s (1.5 %) slower than 0.3b12 in the
+mean, not isolated: the first commit of this work (no parts) shows it,
+0.3b12's vt.c in today's tree gave 17.13 s (4 runs) - near the noise;
+on the 030/50 they are the same.
+
+Parts and their sizes: Settings 20,264 bytes, ARexx 16,992, PhoneBook
+13,292, Call 6,140, SpeedTest 4,476, Transfers 4,416.
+
+**The rule for new features:** measure Avail with CTerm idle (and with
+the feature in use) on the fast config before and after; anything not
+needed every second (a window, a protocol, a command set, a tool) goes
+into a part (`Parts/`, part.h) or a protocol file, loaded when used and
+gone when done. Never retry a failed allocation on every write, line or
+packet: ask once, fall back, and keep a reserve before any growing
+buffer takes the last memory.
 
 ## Reuse
 

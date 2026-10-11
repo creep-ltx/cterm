@@ -12,7 +12,7 @@
  *   fonts.c    Amiga and TrueType letters, each tab's own
  *   screen.c   screens, windows and menus
  *   keys.c     the keyboard, and the mouse for programs on hosts
- *   net.c      telnet, calling out, the Call window, phone book calls
+ *   net.c      telnet, calling out, phone book calls
  *   serial.c   serial lines: the settings and tabs; the line's own code
  *              is sermod.c, a file loaded when a line opens
  *   ssh.c      ssh (libssh2 on AmiSSL), in CTermSSH only
@@ -1265,10 +1265,21 @@ ULONG history_lines(void)
 }
 
 /* The emulator's question before each new history line (only while a
- * history grows, at most its length per tab). */
+ * history grows, at most its length per tab). Free memory is counted
+ * every 64th line or when what was left last time is used up: AvailMem
+ * walks every free block under Forbid, too slow for every line. */
 static int hist_room(long n)
 {
-    return AvailMem(MEMF_ANY) >= reserve() + (ULONG)n;
+    static LONG left;
+    static int asked;
+    if (left < n || !(++asked & 63)) {
+        ULONG a = AvailMem(MEMF_ANY), keep = reserve();
+        left = a > keep ? (LONG)(a - keep) : 0;
+        if (left < n)
+            return 0;
+    }
+    left -= n;
+    return 1;
 }
 
 BOOL asl_open(void)
@@ -1368,12 +1379,36 @@ int main(int argc, char **argv)
     return m_rc;
 }
 
+/* CTerm needs fast memory, as it needs OS 3.2 (an Amiga with 3.2 has
+ * some): with chip memory only, the Shell's programs and CTerm fight for
+ * the same 2 MB, and the display's DMA slows CTerm's code down. Said in
+ * the Shell, or in a requester from Workbench. */
+static BOOL fast_ok(int argc)
+{
+    static const char why[] = "CTerm needs an Amiga with extra memory "
+                              "(fast RAM).";
+    if (AvailMem(MEMF_FAST) && (TypeOfMem((APTR)fast_ok) & MEMF_FAST))
+        return TRUE;
+    if (argc > 0) {
+        PutStr((STRPTR)why);
+        PutStr((STRPTR)"\n");
+    } else {
+        struct EasyStruct es = { sizeof(struct EasyStruct), 0,
+                                 (UBYTE *)"CTerm", (UBYTE *)why,
+                                 (UBYTE *)"OK" };
+        EasyRequestArgs(NULL, &es, NULL, NULL);
+    }
+    return FALSE;
+}
+
 static int cterm_main(int argc, char **argv)
 {
     tab0.t_utf8 = TRUE;
     int rc = RETURN_OK;
     (void)version;
     (void)argv;
+    if (!fast_ok(argc))
+        return RETURN_FAIL;
     if (argc > 0) {
         LONG args[17] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
         int k;
