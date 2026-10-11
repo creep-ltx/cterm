@@ -243,6 +243,8 @@ struct Pane {
     UBYTE blank[PROWS], painted[PROWS]; /* shown blank; painted in pgen */
     UBYTE sdir;                         /* how it splits next: 'h' side by
                                            side, 'v' above each other */
+    UBYTE pre;                          /* with dwindle: the next split
+                                           chosen by hand (0: by shape) */
 };
 
 /* Keys as a file browser's panels get them (keys.c): characters as
@@ -305,7 +307,7 @@ enum { KA_NONE, KA_NEWTAB, KA_CALL, KA_BOOK, KA_SERIAL, KA_ANSWER, KA_SFTP,
        KA_P_OPEN, KA_P_KILL, KA_P_FLEFT, KA_P_FRIGHT, KA_P_FUP, KA_P_FDOWN,
        KA_P_MLEFT, KA_P_MRIGHT, KA_P_MUP, KA_P_MDOWN, KA_P_SPLITH,
        KA_P_SPLITV, KA_P_FULL, KA_P_TABS, KA_P_PANES, KA_P_SHOW1,
-       KA_P_SHOW9 = KA_P_SHOW1 + 8,
+       KA_P_SHOW9 = KA_P_SHOW1 + 8, KA_P_DWINDLE,
        KA_N };                          /* KA_ED_*: console.h's CE_* order */
 struct KeyAct {
     const char *name;                   /* in the file */
@@ -355,7 +357,7 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_ZSEND, M_HIDE, M_SPLITH, M_SPLITV, M_NEXTPANE, M_CLOSEPANE,
        M_SFTP, M_POPEN, M_PKILL, M_PFLEFT, M_PFRIGHT, M_PFUP, M_PFDOWN,
        M_PMLEFT, M_PMRIGHT, M_PMUP, M_PMDOWN, M_PSPLITH, M_PSPLITV, M_PFULL,
-       M_PTABS, M_PPANES };
+       M_PTABS, M_PPANES, M_PDWINDLE };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -686,7 +688,11 @@ void pane_drag_end(void);
  * direction (PD_*), tab number (1..) or, for PO_KILL, ask (a transfer)
  * - FALSE: not done (no room, no pane there: beep) */
 enum { PO_OPEN, PO_KILL, PO_FOCUS, PO_MOVE, PO_DIR, PO_FULL, PO_SHOW,
-       PO_TABS, PO_PANES };
+       PO_TABS, PO_PANES, PO_DWINDLE };
+/* Dwindle (Hyprland's way): a new pane splits the active one along its
+ * longer side - side by side when it is wider than high. Kept in the
+ * prefs; LA+H/V then choose the next split only. */
+extern BOOL dwindle;
 enum { PD_LEFT, PD_RIGHT, PD_UP, PD_DOWN };
 BOOL pane_do(int op, int arg);
 BOOL pane_kept(struct Tab *t);          /* behind a filled window: its

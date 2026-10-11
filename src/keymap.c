@@ -164,6 +164,7 @@ const struct KeyAct keys_acts[] = {
     { "show7", KC_PANES, 0 },
     { "show8", KC_PANES, 0 },
     { "show9", KC_PANES, 0 },
+    { "dwindle", KC_PANES, M_PDWINDLE },
 };
 
 /* (one entry an action, in the enum's order) */
@@ -227,7 +228,7 @@ static const struct KeyBind defbinds[] = {
     { L('3'), KA_P_SHOW1 + 2 }, { L('4'), KA_P_SHOW1 + 3 },
     { L('5'), KA_P_SHOW1 + 4 }, { L('6'), KA_P_SHOW1 + 5 },
     { L('7'), KA_P_SHOW1 + 6 }, { L('8'), KA_P_SHOW1 + 7 },
-    { L('9'), KA_P_SHOW1 + 8 },
+    { L('9'), KA_P_SHOW1 + 8 }, { L('d'), KA_P_DWINDLE },
 #undef L
 #undef F
 #undef S

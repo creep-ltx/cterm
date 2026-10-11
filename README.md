@@ -397,6 +397,7 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
 | Left Amiga+Q | closes the pane you are in and its tab (the Shell ends, a call hangs up). A file transfer running there: CTerm asks first. The panes beside it take the room. The last pane: the same as Close tab |
 | Left Amiga+H | from now on this pane splits side by side (the new pane on the right) |
 | Left Amiga+V | from now on this pane splits one above the other (the new pane below) |
+| Left Amiga+D | dwindle on or off: new panes split by shape (below) |
 | Left Amiga+arrows | to the pane on the left, right, above or below |
 | Left Amiga+Shift+arrows | the pane changes places with the one on that side |
 | Left Amiga+F | the pane fills the window; the others go on behind it. Again: back as it was |
@@ -404,6 +405,12 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
 | Left Amiga+T | all panes become tabs: the whole window shows the tab you were in, the others run on behind it, the tab bar lists them |
 | Left Amiga+P | all tabs become panes, laid out by themselves (below) |
 
+- **Dwindle** (Left Amiga+D, or Panes/Automatic split; kept in the
+  settings): as Hyprland's dwindle layout, a new pane splits the one you
+  are in along its longer side - side by side when it is wider than
+  high, one below the other when it is higher. On a wide screen the
+  panes spiral inwards: beside, below, beside... With dwindle on, Left
+  Amiga+H or V chooses the way for the next pane only.
 - **Which way a new pane goes:** each pane remembers its own way (side
   by side at first). Left Amiga+H or V changes it for the pane you are
   in, and a pane split off it takes the same way. The window's title
@@ -674,6 +681,7 @@ The keys CTerm comes with:
 | Left Amiga+Shift+Left, Right, Up, Down | `moveleft`, `moveright`, `moveup`, `movedown` | change places with the pane that way |
 | Left Amiga+H, V | `splith`, `splitv` | new panes side by side, one below the other |
 | Left Amiga+F | `full` | the pane fills the window (again: back) |
+| Left Amiga+D | `dwindle` | dwindle on or off: split by shape |
 | Left Amiga+T, P | `tabs`, `panes` | all panes to tabs, all tabs to panes |
 | Left Amiga+1 to 9 | `show1` .. `show9` | that tab in this pane |
 | **Calling and transfers** `[call]` | | |

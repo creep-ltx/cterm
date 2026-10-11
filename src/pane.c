@@ -34,6 +34,7 @@
 
 struct Pane panes[MAXPANES];
 int npanes = 1;
+BOOL dwindle;                           /* split by shape (PO_DWINDLE) */
 struct Pane *apane = &panes[0];         /* the active pane: the shown tab's */
 struct Pane *cpane = &panes[0];         /* the pane drawn now */
 
@@ -778,11 +779,25 @@ BOOL pane_do(int op, int arg)
         panes_changed();
     }
     switch (op) {
-    case PO_OPEN:
-        if (!pane_split(apane->sdir)) {
+    case PO_OPEN: {
+        /* dwindle: along the longer side (in pixels), unless LA+H/V
+         * chose this one; the other way if that one has no room */
+        int w = apane->x1 - apane->x0 + 1, h = apane->y1 - apane->y0 + 1;
+        int dir = apane->pre ? apane->pre
+                : dwindle ? (w >= h ? 'h' : 'v') : apane->sdir;
+        BOOL hand = apane->pre != 0;
+        apane->pre = 0;
+        if (!pane_split(dir) &&
+            (!dwindle || hand || !pane_split(dir == 'h' ? 'v' : 'h'))) {
             title_hint("no room for another pane");
             return FALSE;
         }
+        return TRUE;
+    }
+    case PO_DWINDLE:
+        dwindle = !dwindle;
+        title_hint(dwindle ? "new panes: split by shape (dwindle)"
+                           : "new panes: split as LA+H / LA+V say");
         return TRUE;
     case PO_KILL:
         if (zoomed) {
@@ -812,6 +827,12 @@ BOOL pane_do(int op, int arg)
         }
         return TRUE;
     case PO_DIR:
+        if (dwindle) {                  /* the next split only */
+            apane->pre = arg;
+            title_hint(arg == 'h' ? "next pane: beside this one"
+                                  : "next pane: below this one");
+            return TRUE;
+        }
         apane->sdir = arg;
         if (zoomed)
             zdir[zactive] = arg;

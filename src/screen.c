@@ -58,6 +58,8 @@ static struct NewMenu newmenu[] = {
     {   NM_SUB, (STRPTR)"Right", 0, 0, 0, (APTR)M_PMRIGHT },
     {   NM_SUB, (STRPTR)"Up", 0, 0, 0, (APTR)M_PMUP },
     {   NM_SUB, (STRPTR)"Down", 0, 0, 0, (APTR)M_PMDOWN },
+    {  NM_ITEM, (STRPTR)"Automatic split (dwindle)", 0,
+       CHECKIT | MENUTOGGLE, 0, (APTR)M_PDWINDLE },
     {  NM_ITEM, (STRPTR)"Fill the window", 0, CHECKIT | MENUTOGGLE, 0,
        (APTR)M_PFULL },
     {  NM_ITEM, (STRPTR)"All panes to tabs", 0, 0, 0, (APTR)M_PTABS },
@@ -94,7 +96,8 @@ static struct NewMenu newmenu[] = {
 };
 struct Window *setwin;
 /* the items whose ticks follow the shown tab or pane: menu_ticks */
-static const UBYTE tickid[] = { M_UTF8, M_PC, M_PSPLITH, M_PSPLITV, M_PFULL };
+static const UBYTE tickid[] = { M_UTF8, M_PC, M_PSPLITH, M_PSPLITV, M_PFULL,
+                                M_PDWINDLE };
 #define NTICK ((int)sizeof tickid)
 static struct MenuItem *ticks[NTICK];
 
@@ -212,6 +215,7 @@ void menu_ticks(void)
     on[2] = apane->sdir != 'v';         /* the active pane's direction */
     on[3] = apane->sdir == 'v';
     on[4] = pane_zoomed();
+    on[5] = dwindle;
     for (i = 0; i < NTICK; i++)
         if (ticks[i] && !(ticks[i]->Flags & CHECKED) != !on[i])
             same = FALSE;
@@ -545,6 +549,10 @@ BOOL menu_pick(ULONG id)
             beep();                     /* four already, or no room */
         break;
     case M_NEXTPANE: pane_next(); break;
+    case M_PDWINDLE:
+        pane_do(PO_DWINDLE, 0);
+        save_prefs();
+        break;
     case M_POPEN: case M_PKILL: case M_PFLEFT: case M_PFRIGHT: case M_PFUP:
     case M_PFDOWN: case M_PMLEFT: case M_PMRIGHT: case M_PMUP: case M_PMDOWN:
     case M_PSPLITH: case M_PSPLITV: case M_PFULL: case M_PTABS:
