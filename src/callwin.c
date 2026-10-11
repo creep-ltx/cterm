@@ -298,13 +298,26 @@ static void callwin_run(void)
         return;
     }
     if (go && host[0]) {
-        char entry[136];
+        char entry[136], *at, *pw;
         strcpy(entry, ssh ? "ssh:" : "");
         strcat(entry, host);
+        /* a URL's password is not remembered with the recent calls */
+        if ((pw = strstr(entry, "://")) && (at = strrchr(pw, '@')) &&
+            (pw = strchr(pw + 3, ':')) && pw < at)
+            memmove(pw, at, strlen(at) + 1);
         if (pc)
             strcat(entry, "!");
         calls_add(entry);
         save_prefs();
+        if (strstr(host, "://")) {      /* ftp://, sftp://: the browser */
+            BookEntry *e = AllocVec(sizeof *e, MEMF_ANY);
+            if (e) {
+                book_url(e, host, FK_NONE);
+                call_place(e, call_newtab);
+                FreeVec(e);
+            }
+            return;
+        }
         if (call_newtab && (has_ssh || !ssh))  /* ssh in CTerm: CTermSSH's,
                                                   * a window */
             call_tab(host, pc, ssh);

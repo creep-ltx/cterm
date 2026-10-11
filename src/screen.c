@@ -17,6 +17,7 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Phone book...", (STRPTR)"B", 0, 0, (APTR)M_BOOK },
     {  NM_ITEM, (STRPTR)"Serial terminal", 0, 0, 0, (APTR)M_SERIAL },
     {  NM_ITEM, (STRPTR)"Answer call (ATA)", 0, 0, 0, (APTR)M_ANSWER },
+    {  NM_ITEM, (STRPTR)"Open SFTP browser", 0, 0, 0, (APTR)M_SFTP },
     {  NM_ITEM, (STRPTR)"Close tab", (STRPTR)"W", 0, 0, (APTR)M_CLOSETAB },
     {  NM_ITEM, (STRPTR)"Start log...", (STRPTR)"L", 0, 0, (APTR)M_LOG },
     {  NM_ITEM, (STRPTR)"Stop log", 0, 0, 0, (APTR)M_LOGSTOP },
@@ -380,6 +381,7 @@ void switch_display(void)
         close_settings();               /* its screen may be going */
     xwin_shut();
     bookwin_close();
+    files_screen(FALSE);
     BOOL keep = want_mode == SCR_OWN && scrmode == SCR_OWN &&
                 want_depth == owndepth;
     want_switch = FALSE;
@@ -395,6 +397,7 @@ void switch_display(void)
         open_display();
     }
     tell_sizes();
+    files_screen(TRUE);                 /* the browsers on the new one */
     save_prefs();
 }
 
@@ -420,6 +423,7 @@ BOOL menu_pick(ULONG id)
     case M_BOOK: bookwin_open(); break;
     case M_SERIAL: serial_terminal(TRUE); break;
     case M_ANSWER: serial_answer(); break;
+    case M_SFTP: files_menu(); break;
     case M_SETTINGS: open_settings(); break;
     case M_NEWTAB: tab_new_shell(); break;
     case M_CLOSETAB: tab_close_current(); break;

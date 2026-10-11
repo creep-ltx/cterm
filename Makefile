@@ -79,7 +79,7 @@ Protocols/Serial: src/sermod.c src/sermod.h src/serial.h
 NM = $(HOME)/opt/amiga/bin/m68k-amigaos-nm
 PARTFLAGS = -Os -m68020 -noixemul -nostartfiles -fomit-frame-pointer -Wall -Wno-pointer-sign -Iinclude -DPART
 PARTHDR = src/cterm.h src/part.h src/partlist.h src/partuse.h src/vt.h src/serial.h src/book.h
-PARTS = Parts/Settings Parts/PhoneBook Parts/ARexx Parts/Call Parts/Transfers Parts/SpeedTest
+PARTS = Parts/Settings Parts/PhoneBook Parts/ARexx Parts/Call Parts/Transfers Parts/SpeedTest Parts/Files
 parts: $(PARTS)
 src/partuse.h: src/partlist.h
 	sed -n -e 's/^V(\(.*\))$$/#define \1 (*penv->\1)/p' -e 's/^A(\(.*\))$$/#define \1 (penv->\1)/p' -e 's/^F(\(.*\))$$/#define \1 (penv->\1)/p' $< > $@
@@ -90,8 +90,8 @@ define partlink
 endef
 Parts/Settings: src/partstart.c src/setwin.c src/serwin.c $(PARTHDR)
 	$(call partlink,src/setwin.c src/serwin.c)
-Parts/PhoneBook: src/partstart.c src/bookwin.c src/serwin.c $(PARTHDR)
-	$(call partlink,src/bookwin.c src/serwin.c)
+Parts/PhoneBook: src/partstart.c src/bookwin.c src/serwin.c src/askwin.c $(PARTHDR)
+	$(call partlink,src/bookwin.c src/serwin.c src/askwin.c)
 Parts/ARexx: src/partstart.c src/rexx.c $(PARTHDR)
 	$(call partlink,src/rexx.c)
 Parts/Call: src/partstart.c src/callwin.c $(PARTHDR)
@@ -100,6 +100,9 @@ Parts/Transfers: src/partstart.c src/xwin.c $(PARTHDR)
 	$(call partlink,src/xwin.c)
 Parts/SpeedTest: src/partstart.c src/bench.c $(PARTHDR)
 	$(call partlink,src/bench.c)
+# the file browser: SFTP (CTermSSH's ssh.c, through sftp_ops) and FTP
+Parts/Files: src/partstart.c src/files.c src/ftp.c src/askwin.c src/files.h src/ssh.h $(PARTHDR)
+	$(call partlink,src/files.c src/ftp.c src/askwin.c)
 
 deploy: CTerm CTermSSH CTermTour protocols parts
 	wasabi mkdir Work:Utils/CTerm 2>/dev/null || true

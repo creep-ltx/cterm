@@ -19,7 +19,8 @@ static struct List bwlist;              /* the places' names */
 static int bcur = -1;                   /* the entry shown: -1 none */
 
 static STRPTR kindlabels[] = { (STRPTR)"telnet", (STRPTR)"ssh",
-                               (STRPTR)"serial", NULL };
+                               (STRPTR)"serial", (STRPTR)"sftp (files)",
+                               (STRPTR)"ftp (files)", NULL };
 static STRPTR lettlabels[] = { (STRPTR)"CTerm's setting",
                                (STRPTR)"Amiga font", (STRPTR)"TrueType",
                                (STRPTR)"PC font (IBM VGA)", NULL };
@@ -90,6 +91,7 @@ static void entry_read(void)
 {
     BookEntry *e;
     const char *t;
+    ULONG v;
     if (bcur < 0 || bcur >= nbook || !bwobj)
         return;
     e = &book[bcur];
@@ -116,21 +118,32 @@ static void entry_read(void)
         e->script[sizeof e->script - 1] = 0;
     }
     e->port = bget(B_PORT, INTEGER_Number);
-    e->ssh = bget(B_KIND, CHOOSER_Selected) == 1;
-    e->serial = bget(B_KIND, CHOOSER_Selected) == 2;
+    v = bget(B_KIND, CHOOSER_Selected);
+    e->ssh = v == 1 || v == 3;
+    e->serial = v == 2;
+    e->fkind = v == 3 ? FK_SFTP : v == 4 ? FK_FTP : FK_NONE;
     e->letters = bget(B_LET, CHOOSER_Selected);
     e->chars = bget(B_CHR, CHOOSER_Selected);
     book_tidy(e);
 }
 
+/* The kind in the chooser */
+static int kind_of(const BookEntry *e)
+{
+    return e->serial ? 2 : e->fkind == FK_SFTP ? 3 : e->fkind == FK_FTP ? 4
+                                                    : e->ssh;
+}
+
 /* The fields that mean something for the kind of place: an address and
- * port for telnet and ssh, a phone number and a line for serial. */
+ * port for telnet, ssh, sftp and ftp, a phone number and a line for
+ * serial; More... (the Line... button) for sftp and ftp. */
 static void kind_fields(const BookEntry *e, BOOL none)
 {
     bset(B_HOST, GA_Disabled, none || e->serial);
     bset(B_PORT, GA_Disabled, none || e->serial);
     bset(B_PHONE, GA_Disabled, none || !e->serial);
-    bset(B_LINE, GA_Disabled, none || !e->serial);
+    bset(B_LINE, GA_Disabled, none || (!e->serial && !e->fkind));
+    bset(B_LINE, GA_Text, (ULONG)(e->fkind ? "More..." : "Line..."));
 }
 
 /* The entry shown, into the fields (none: empty and asleep). */
@@ -142,7 +155,7 @@ static void entry_show(void)
     bset(B_NAME, STRINGA_TextVal, (ULONG)e->name);
     bset(B_HOST, STRINGA_TextVal, (ULONG)e->host);
     bset(B_PORT, INTEGER_Number, e->port);
-    bset(B_KIND, CHOOSER_Selected, e->serial ? 2 : e->ssh);
+    bset(B_KIND, CHOOSER_Selected, kind_of(e));
     bset(B_PHONE, STRINGA_TextVal, (ULONG)e->phone);
     bset(B_USER, STRINGA_TextVal, (ULONG)e->user);
     bset(B_PASS, STRINGA_TextVal, (ULONG)e->pass);
@@ -278,13 +291,13 @@ static void bookwin_open_(void)
     add(h, bg[B_PORT] = IntegerObject, GA_ID, B_PORT, GA_RelVerify, TRUE,
         GA_TabCycle, TRUE, INTEGER_Number, e->port, INTEGER_Minimum, 0,
         INTEGER_Maximum, 65535, INTEGER_Arrows, FALSE, End, NULL);
-    add(h, chooser(B_KIND, kindlabels, e->serial ? 2 : e->ssh), "Connection");
+    add(h, chooser(B_KIND, kindlabels, kind_of(e)), "Connection");
     add(g, h, "Port");
     /* a serial line: the number a modem dials (none: a null modem), and
      * the line's settings in a window of their own */
     h = HLayoutObject, End;
     add(h, string(B_PHONE, e->phone, sizeof e->phone - 1, FALSE), NULL);
-    if (h && button(B_LINE, "Line..."))
+    if (h && button(B_LINE, e->fkind ? "More..." : "Line..."))
         SetAttrs(h, LAYOUT_AddChild, (ULONG)bg[B_LINE],
                  CHILD_WeightedWidth, 0, TAG_END);
     add(g, h, "Phone");
@@ -348,7 +361,7 @@ static void bookwin_open_(void)
         for (i = 0; i < 2; i++) {
             if (bg[tcp[i]] && e->serial)
                 SetAttrs(bg[tcp[i]], GA_Disabled, TRUE, TAG_END);
-            if (bg[ser[i]] && !e->serial)
+            if (bg[ser[i]] && !e->serial && (!i || !e->fkind))
                 SetAttrs(bg[ser[i]], GA_Disabled, TRUE, TAG_END);
         }
     }
@@ -462,7 +475,11 @@ static void bookwin_events_(void)
                 entry_read();
                 if (bcur >= 0 && bcur < nbook) {
                     BookEntry *e = &book[bcur];
-                    serwin_edit(&e->line, e->init, e->dial, bwwin);
+                    if (e->fkind)       /* More...: the drawer to start in */
+                        ask_line("CTerm: start drawer",
+                                 "On the host", e->dir, sizeof e->dir, bwwin);
+                    else
+                        serwin_edit(&e->line, e->init, e->dial, bwwin);
                 }
                 break;
             case B_SCRIPT:

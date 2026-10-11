@@ -1,7 +1,8 @@
 /*
  * book - CTerm's phone book: the places called, each with how to call it
- * (telnet, ssh or a serial line, the port), who to log in as, and how to show it (the
- * letters, the characters). Kept in ENVARC:CTerm/phonebook as text.
+ * (telnet, ssh or a serial line, the port; or SFTP and FTP, which open
+ * the file browser), who to log in as, and how to show it (the letters,
+ * the characters). Kept in ENVARC:CTerm/phonebook as text.
  */
 #ifndef BOOK_H
 #define BOOK_H
@@ -13,6 +14,7 @@
 
 enum { BL_CTERM, BL_AMIGA, BL_TT, BL_PC };     /* letters: CTerm's own... */
 enum { BC_UTF8, BC_LATIN1, BC_PC };            /* characters */
+enum { FK_NONE, FK_SFTP, FK_FTP };             /* a file browser's place */
 
 typedef struct {
     char name[48];
@@ -20,7 +22,7 @@ typedef struct {
     char user[64], pass[64];
     char down[160], up[160];        /* drawers; empty: the global ones */
     int port;               /* 0: the usual one (23 telnet, 22 ssh) */
-    int ssh;                /* 1: ssh, 0: telnet */
+    int ssh;                /* 1: ssh (SFTP too), 0: telnet */
     int letters, chars;
     int serial;             /* 1: a serial line (ssh is 0) */
     SerLine line;           /* its device and settings */
@@ -28,6 +30,8 @@ typedef struct {
     char init[64];          /* its own init, after the modem's */
     char dial[24];          /* its own dial prefix (empty: the modem's) */
     char script[108];       /* an ARexx script run when the call is up */
+    int fkind;              /* FK_SFTP, FK_FTP: files, not a terminal */
+    char dir[128];          /* their drawer on the host to start in */
 } BookEntry;
 
 extern BookEntry *book;              /* BOOK_MAX of them, or NULL */
@@ -40,9 +44,14 @@ void book_load(void);
 void book_use(void);                    /* loaded, the first time */
 BOOL book_save(void);
 int book_find(const char *name);        /* -1: none */
-/* A URL in host (telnet://, ssh://user@host:port/) into its fields. */
+/* A URL in host (telnet://, ssh://user@host:port/, ftp://user:pass@
+ * host/dir, sftp://...) into its fields. */
 void book_tidy(BookEntry *e);
-/* What to dial: "host:port" for telnet, "user@host:port" for ssh, the
+/* A place that is only a URL or host (CTerm FTP, ARexx's FTP): kind is
+ * FK_SFTP or FK_FTP when the text names no scheme. */
+void book_url(BookEntry *e, const char *url, int kind);
+/* What to dial: "host:port" for telnet and FTP, "user@host:port" for ssh
+ * and SFTP, the
  * number (or "serial.device 0") for a serial line. */
 void book_target(const BookEntry *e, char *out, int max);
 void book_blank(BookEntry *e, const char *name);

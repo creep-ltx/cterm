@@ -2,7 +2,8 @@
 
 A terminal for AmigaOS 3.2 and up, in C: the Amiga Shell in a window of its own,
 and a terminal for other computers (telnet, ssh, a serial line or a modem,
-BBSes, programs on a PC), in one program. VT100/xterm emulation, Amiga and TrueType fonts, 2 to 16
+BBSes, programs on a PC), in one program, with a file browser for SFTP and
+FTP. VT100/xterm emulation, Amiga and TrueType fonts, 2 to 16
 million colours, Latin-1, UTF-8 and the PC's character set.
 
 ## What it needs
@@ -16,9 +17,9 @@ million colours, Latin-1, UTF-8 and the PC's character set.
 
 | File or drawer | What is in it | Without it |
 |---|---|---|
-| `CTermSSH` | ssh | ssh calls do not start |
+| `CTermSSH` | ssh and SFTP | ssh and SFTP calls do not start |
 | `Protocols/` | Zmodem, XYmodem, Hydra; Serial (serial lines and modems) | that transfer, or serial lines, say they are missing |
-| `Parts/` | Settings, PhoneBook, ARexx, Call, Transfers, SpeedTest | that window or feature says it is missing |
+| `Parts/` | Settings, PhoneBook, ARexx, Call, Transfers, SpeedTest, Files (the SFTP and FTP browser) | that window or feature says it is missing |
 | `Fonts/` | the PC's VGA font | PC BBSes use the Amiga font |
 | `Rexx/` | example ARexx scripts | |
 
@@ -35,6 +36,8 @@ used it), so a feature never used costs no memory.
 | `HOST name[:port]` | call a telnet host (port 23 if none is given) |
 | `SSH user@host[:port]` | call an ssh host (port 22) |
 | `KEY file` | with SSH: log in with this private key |
+| `SFTP user@host[:port][/drawer]` | open the file browser on an ssh host (SFTP) |
+| `FTP [user[:password]@]host[:port][/drawer]` | open the file browser on an FTP host (port 21; no user: anonymous) |
 | `PC` | a PC BBS: the PC character set (CP437), the PC's colours and its own font (IBM VGA 8x16, from `Fonts/` beside CTerm) |
 | `LATIN1` | Latin-1 instead of UTF-8 (Amiga BBSes) |
 | `COLS n` / `ROWS n` | the window's size in letters |
@@ -52,6 +55,63 @@ delete that file to choose another PC.
 Project/Call... (Right Amiga+K) asks for a host and remembers the last
 eight; the phone book's places are listed first. A call opens in a new
 tab (or a window of its own); when it ends, Return calls again.
+
+## Files on other computers: SFTP and FTP
+
+CTerm has a file browser for copying files to and from other computers:
+SFTP (files over ssh, as safe as ssh) and FTP (the old way: the password
+goes over the network as it is - use it only where that does not matter,
+or on your own network).
+
+- **Opening it:** a phone book place of the kind `sftp` or `ftp`
+  (Call, a double-click, `CTerm BOOK "name"`), `ftp://` or `sftp://` typed
+  in the Call window (`ftp://user:password@host/drawer`), `CTerm FTP ...`
+  or `CTerm SFTP ...` from the Shell, or in an ssh tab Project/Open SFTP
+  browser (the same host and login, a connection of its own). SFTP is
+  CTermSSH's: CTerm starts it for an SFTP place, as it does for ssh.
+- **Its tab:** each place gets a small tab of its own where its messages
+  go: the host's greeting, a host key question, a password asked for,
+  each file sent or received. The browser window and the tab are one
+  thing: closing the window hangs up and closes the tab, closing the tab
+  closes the window. Return in the tab opens the window again.
+- **The window** lists the drawer on the other computer: drawers first,
+  then files, with their sizes and dates. A double-click enters a
+  drawer (`..` goes up) or downloads a file. Parent goes up, the path
+  field takes a drawer typed in (Return), Refresh lists it again. Shift
+  and a click choose several.
+- **Download** fetches the chosen files into the place's download
+  drawer, else the Files tab's, else `PROGDIR:Downloads` (the status line
+  says which). A file that is there already is never written over: a
+  number is added (`name.1`). A name the Amiga cannot take (with `:` or
+  `/` in it) gets `_` instead.
+- **Upload...** sends files chosen in a requester (several at once) into
+  the drawer shown; a file of that name there is replaced only if you
+  say so.
+- **New drawer...**, **Rename...** and **Delete** (it asks first; a drawer
+  must be empty) work on the other computer.
+- **CTerm goes on while files move:** the other tabs, the Shell, a second
+  browser. The browser shows how far it is (bytes, per cent, speed), and
+  the tab's panel and Transfer/Show transfers... show it as for Zmodem.
+  Stop (in the browser, the panel or the Transfers window, or Esc in the
+  tab) stops it. A stopped download keeps `name.part`; downloading the
+  same file again goes on from where it stopped. One transfer at a time
+  in all of CTerm.
+- **Logins:** SFTP checks the host's key and logs in as ssh does (a key
+  file in `ENVARC:CTerm/`, else the phone book's password, else it asks
+  in the tab). FTP uses the phone book's user and password, asks in the
+  tab for a password it has not got, or logs in as anonymous with no
+  user. An FTP host that hung up on a quiet line is called again by
+  itself at the next click.
+- **The phone book** has the kinds `sftp (files)` and `ftp (files)`;
+  their More... button (where Line... is for a serial line) sets the
+  drawer on the other computer the browser starts in.
+- The browser is a file of its own, `Parts/Files` (32 KB): loaded when a
+  place is called, gone when the last one hangs up.
+- Dates: FTP hosts that list the old way show their own clock; SFTP and
+  the newer FTP listing (MLSD) give UTC, which is shown as it is.
+- Not there yet: FTPS (FTP with TLS), active FTP (passive only, which is
+  what works through home routers), downloading whole drawers, a list
+  of the Amiga's side in the same window.
 
 ## Serial lines and modems
 
@@ -125,10 +185,12 @@ the right. What you type counts at once and is saved when the window
 closes. Call (or a double-click on a place) calls it in a new tab and
 closes the book. Each place has
 
-- a name, the address (a host name, an IP number, or a `telnet://` or
-  `ssh://user@host:port` link, which is taken apart) and the port;
+- a name, the address (a host name, an IP number, or a `telnet://`,
+  `ssh://user@host:port`, `sftp://` or `ftp://` link, which is taken
+  apart) and the port;
 - telnet, ssh or serial (a serial line: the phone number and the line's
-  settings, see Serial lines and modems);
+  settings, see Serial lines and modems), or sftp and ftp, which open
+  the file browser (see Files on other computers);
 - your user name and password. At the host's prompt, Project/Send user
   name (Right Amiga+U) and Send password (Right Amiga+P) type them with
   Return; the keys can be changed on the Keys tab. An ssh login is given
@@ -331,6 +393,12 @@ limit, 10 for an error, 20 for a failure):
 | `PANE SIDE` / `UNDER` | splits the pane you are in: a new Shell beside it or below it (RESULT: how many panes) |
 | `PANE NEXT`, `PANE SELECT n`, `PANE CLOSE`, `PANE COUNT`, `PANE CURRENT` | the panes; the commands that follow go to the tab of the pane chosen |
 | `PHONEBOOK` | the places' names, each in quotes |
+| `SFTP place`, `FTP place` | opens the file browser: a phone book place, or `[user@]host[:port][/drawer]` (or a URL), in a new tab; RC 0 when it is connected. The commands below go to that tab |
+| `LIST` | the files in the browser's drawer, each in quotes, drawers with a `/` at the end |
+| `CD drawer` | goes to that drawer (`..` up); RESULT: where it is now |
+| `GET name... [TO drawer]` | downloads files from the drawer (TO: into that drawer on the Amiga); RC 5 when some failed |
+| `PUT file...` | uploads Amiga files into the drawer (a file of that name there is replaced) |
+| `MKDIR name`, `DELETE name`, `RENAME name TO newname` | on the other computer (DELETE: a file, or an empty drawer) |
 | `VERSION`, `HELP [command]`, `QUIT` | |
 
 Commands go to the tab the script last called, opened or chose

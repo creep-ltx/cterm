@@ -62,6 +62,7 @@ void reaction_close(void)
 /* No window of the classes open any more: they may go. */
 void reaction_drop(void)
 {
-    if (!setwin && !bookwin_sigmask() && !xwin_sigmask())
+    if (!setwin && !bookwin_sigmask() && !xwin_sigmask() &&
+        !files_sigmask())
         reaction_close();
 }

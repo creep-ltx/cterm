@@ -117,7 +117,7 @@ static void refuse(void)
 /* A transfer is running in some tab. The engines are not resumable: one
  * started while another runs would run inside it (x_get serves the other
  * tabs) and freeze it until it ended - so one at a time, in all tabs. */
-static BOOL xfer_running(void)
+BOOL xfer_busy(void)
 {
     int i;
     for (i = 0; i < ntabs; i++)
@@ -808,7 +808,7 @@ static int start_xfer(int what, const char *const *given, int ngiven,
         refresh();
         return -1;
     }
-    if (xfer_running()) {
+    if (xfer_busy()) {
         say("\r\n\x1b[2m[one transfer at a time: wait for the other one]\x1b[0m\r\n");
         refresh();
         return -1;
@@ -893,7 +893,7 @@ int transfer_rexx(int what, const char *const *paths, int n,
 BOOL transfer_hydra_queue(const char *const *paths, int n)
 {
     int i;
-    if (xfer_running() || n <= 0 ||
+    if (xfer_busy() || n <= 0 ||
         (!hq && !(hq = AllocVec(NUP * 256, MEMF_ANY))))
         return FALSE;
     for (i = 0; i < n && i < NUP; i++) {
@@ -917,7 +917,7 @@ void transfer_menu(int what)
     if (what == M_HSEND) {
         /* Hydra starts from the host; these wait for its next session
          * (not while one runs: it is sending from this very list) */
-        if (xfer_running()) {
+        if (xfer_busy()) {
             say("\r\n\x1b[2m[one transfer at a time: wait for the other one]\x1b[0m\r\n");
             refresh();
             return;
@@ -958,6 +958,36 @@ static UBYTE *tail_of(struct Tab *t)
     return tails[free_].b;
 }
 
+/* The file browser's transfer (Parts/Files) in its tab: shown as a
+ * protocol's - the panel, the tab's name, the Transfers window. how: 1
+ * it begins, 0 how it goes (a few times a second), 2 it has ended. */
+void xfer_show(struct Tab *t, struct Xfer *x, int how)
+{
+    struct Tab *keep = T;
+    ULONG now = ticks50();
+    if (how == 1) {
+        x->t0 = x->tlast = now;
+        t->t_xfer = x;
+    } else if (how == 0 && now - x->tlast < 12)
+        return;
+    x->tlast = now;
+    T = t;
+    if (how == 2) {
+        t->t_xfer = NULL;
+        if (win && pane_of(t))
+            redraw_all();               /* the rows under the panel */
+    } else if (win)
+        xfer_panel();
+    if (win && tabbar_h())
+        draw_tabbar();
+    xwin_update();
+    if (how == 2) {
+        title_update_now();
+        refresh();
+    }
+    T = keep;
+}
+
 /* What came from the host: does a transfer begin in it? If so, what came
  * before goes to the screen as usual (raw: telnet still on it for telnet
  * tabs), the transfer runs, and TRUE says the rest was taken. A start
@@ -983,7 +1013,7 @@ BOOL transfer_take(UBYTE *buf, LONG n)
         at = 0;
     if (!kind || !win || T->t_xfer)
         return FALSE;
-    if (xfer_running()) {               /* another tab's: say no, cleanly */
+    if (xfer_busy()) {               /* another tab's: say no, cleanly */
         refuse();
         say("\r\n\x1b[2m[a transfer was refused: another one is running]\x1b[0m\r\n");
         return TRUE;

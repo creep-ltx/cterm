@@ -31,7 +31,8 @@ VT100/xterm emulation. Decided 2026-10-09.
 | Panes: the window split, the layout tree, dividers | `src/pane.c` | Yes |
 | Main loop, settings, menus | `src/main.c` | Yes |
 | The parts' loader, their stubs, the ARexx port | `src/parts.c`, `src/part.h`, `src/partlist.h` | Yes |
-| Parts (files of their own, `Parts/`): settings window, phone book window, ARexx's commands, Call window, Transfers window, speed test | `src/setwin.c`, `src/bookwin.c` (+ `src/serwin.c`), `src/rexx.c`, `src/callwin.c`, `src/xwin.c`, `src/bench.c` | Yes |
+| Parts (files of their own, `Parts/`): settings window, phone book window, ARexx's commands, Call window, Transfers window, speed test, the SFTP/FTP file browser | `src/setwin.c`, `src/bookwin.c` (+ `src/serwin.c`, `src/askwin.c`), `src/rexx.c`, `src/callwin.c`, `src/xwin.c`, `src/bench.c`, `src/files.c` + `src/ftp.c` (+ `src/askwin.c`) | Yes |
+| SFTP's calls for the browser (CTermSSH only, through `sftp_ops`) | `src/ssh.c`, `src/ssh.h` | Yes |
 | PC relay: runs a program in a pty, connects to the Amiga | `pc/cterm-relay.py` | PC |
 
 ### The emulator (`vt.c`)
@@ -492,6 +493,115 @@ In the order the user and I agreed (2026-10-10):
     back as nearer ones (white text on white) - the screen has 16 pens
     for everyone; not the panes'.
 
+- **Done 2026-10-11 (0.3b14): SFTP and FTP, a file browser** (the
+  user's spec, 2026-10-11).
+  - **The pieces:** `Parts/Files` (src/files.c: the window, transfers,
+    SFTP's waits; src/ftp.c: FTP; src/askwin.c: a line asked in a small
+    window, also in PhoneBook) is loaded when a place is called and
+    unloaded with the last connection (FilesPart in part.h: call, menu,
+    events, sigmask, tab_gone, screen, rexx, idle). SFTP is libssh2's
+    `libssh2_sftp_*` in CTermSSH's ssh.c, reached through `sftp_ops`
+    (a table; NULL in CTerm, so the part is one file for both programs).
+    ssh_open's setup is shared (host key, key file, password,
+    keyboard-interactive) - `want_sftp` makes it start SFTP instead of a
+    pty and shell. CTerm itself keeps: the tab fields (t_fkind, t_fdir,
+    t_rf), the stubs in parts.c, `loop_wfd` (loop_round also waits for a
+    socket to take bytes), `xfer_show` (a part's transfer shown as a
+    protocol's), the phone book's kinds and `dir=`, URLs (`book_url`,
+    `call_place`), the `SFTP`/`FTP` start words, the menu item.
+  - **A place = a tab + a window.** The tab holds the messages (the FTP
+    greeting, ssh's host key question and password prompt - term_ask
+    works there as for ssh - each file done); the window lists the
+    drawer. Closing the window hangs up and closes the tab (so CTermSSH
+    started for an SFTP place ends with it); closing the tab closes the
+    window; Return in the tab opens it again. A screen switch or hiding
+    closes the windows (files_screen(FALSE)) and opens them again after
+    (TRUE); the connection stays.
+  - **No freezing:** every wait is `await()`: loop_round with the socket
+    (read) or loop_wfd (write), 1 s at a time, giving up on Stop, the tab
+    closing or quitting (and after 60 s of silence). A long transfer
+    that never waits also runs loop_round(-1, 0) every 0.1 s, so the
+    window and Stop work. The browser's own events come back into the
+    part while it waits (depth counter): everything but Stop is asleep
+    (busy), closing the window while busy stops and closes after.
+  - **Transfers** as Zmodem's: T->t_xfer for the panel, the tab name and
+    the Transfers window; one at a time in all of CTerm (xfer_busy, also
+    Zmodem/Hydra refuse while a browser's runs). Downloads: name.part,
+    renamed when whole; a part shorter than the file goes on (FTP REST,
+    SFTP seek); a file there is never written over (name.1...); names
+    made safe (last part, UTF-8 to Latin-1, ':' '/' '\' and controls to
+    '_', at most 100). Uploads: Latin-1 names to UTF-8; a file of the
+    name on the host is replaced only after a requester (Replace / Skip
+    / Stop; ARexx's PUT replaces).
+  - **FTP:** blocking control and data sockets, read only when WaitSelect
+    says so (a data socket made non-blocking lost its data in FS-UAE's
+    bsdsocket: a download stood still); writes 2 KB at a time when
+    writable (the low-water mark). EPSV, else PASV (its address ignored:
+    the data goes to the host called, as curl does); MLSD, else LIST
+    (Unix ls -l with the year or the time, links, names with spaces;
+    DOS/IIS style); TYPE I; REST + RETR; STOR; MKD, RMD, DELE,
+    RNFR/RNTO, SIZE, CWD/CDUP/PWD. After a stop, a NOOP's 200 shows
+    where the host's 426/226 end. A 421 or a dead line: called again
+    (and logged in again: the password typed is kept for that, wiped at
+    the end) at the next command, once. Refusals that are expected
+    (EPSV, MLSD, SIZE, the 426 after a stop) are not shown.
+  - **SFTP:** every call non-blocking (SF_AGAIN: wait the way
+    sf_dirs says); 32 KB reads (libssh2 reads ahead 4x the buffer);
+    symbolic links followed with stat (the first 32) to tell drawers
+    from files; a call given up in the middle (Stop while listing) drops
+    the connection, so the next command starts clean; closing a file
+    after a stop is done with `tidy` set (a Stop does not stop the
+    clean-up). The start drawer: the place's, else realpath(".") (the
+    home drawer).
+  - **ARexx:** SFTP/FTP place (a new tab, like CALL), LIST, CD, GET
+    (TO), PUT, MKDIR, DELETE, RENAME - queued (they wait), on the ARexx
+    tab. CALL takes ftp:// and sftp:// too.
+  - **The phone book:** kinds "sftp (files)" and "ftp (files)"; Line...
+    becomes More... (the start drawer, `dir=` in the file); the window
+    stays 542x198.
+  - **Found on the way:** loop_round(-1, 0) with SocketBase open did a
+    WaitSelect with no sockets and a zero time, which FS-UAE's bsdsocket
+    turned into a wait for a signal (a download stood still until the
+    mouse moved): now a SetSignal look. parts_free() was never called:
+    ARexx's part (18 KB) stayed in memory after every CTerm that a
+    script had talked to (~20 KB lost per run, now ~6 KB).
+  - **Tested in FS-UAE** (verified 2026-10-11; tests/ftp/ftpd.py, the
+    test sshd with `Subsystem sftp internal-sftp`, tests/files/uae.sh:
+    a private drive with wasabid on port 1240): FTP on the A1200 + 8 MB
+    fast: 3 MB and 8 MB downloads md5-identical (8 MB in 1.6 s), stops
+    from the browser, the Transfers window and by closing the tab, each
+    resumed with REST and md5-identical (also after the server was
+    restarted: called again by itself), names "weird:name.txt" ->
+    weird_name.txt and "odd: name ÅÄÖ.txt" (UTF-8 on the host) ->
+    "odd_ name ÅÄÖ.txt", existing names numbered (big.bin.1, .2, .3),
+    uploads by ARexx (8 MB in 6.7 s, md5) and the requester (Replace
+    asked), "up é.txt" Latin-1 -> UTF-8 on the host; New drawer,
+    Rename, Delete (asked) from the window; LIST and PASV with a host
+    without MLSD and EPSV; a Shell tab typed in during a slow download;
+    CTerm FTP user:pass@host, ftp://user:pass@host/sub in the Call
+    window; hide/show and a switch from the own screen to Workbench with
+    the browser open (it came back); tests/files/t-files.rexx (LIST,
+    MKDIR, CD, PUT, RENAME, GET, DELETE, a missing file RC 10). SFTP on
+    the A1200 030/50 + 32 MB (AmiSSL wants more than the 8 MB config
+    had left): CTermSSH BOOK "Test SFTP" (key login, the host key
+    known), 4 MB download md5-identical, a stop and a resume by seek
+    md5-identical, PUT 300 KB md5, t-files.rexx all RC 0, a symlinked
+    drawer, the odd name; Project/Open SFTP browser from an ssh tab (the
+    home drawer). The window on a 640x256 Workbench (608x235) and on a
+    1280x512 own screen (728x461).
+  - **Speed** on the emulated 030/50: SFTP ~30 KB/s down and up - the
+    ssh shell channel itself carried 1 MB in 70 s (~14 KB/s) there, FTP
+    8 MB in 6.2 s (1.3 MB/s) on the same machine: encryption on a 50 MHz
+    68030 is the limit, not the browser. Not yet tried on the PiStorm
+    A1200.
+  - **Cost:** CTerm 198,556 -> 202,348 bytes (+3.8 KB; book.c now -Os);
+    CTermSSH 379,812 -> 411,464 (libssh2's sftp.o); Parts/Files 32,232;
+    PhoneBook 15,052 (+askwin), ARexx 18,220, Call 6,864. Memory: see
+    the table below.
+  - **Not done:** FTPS (AUTH TLS: AmiSSL is CTermSSH's only - later),
+    active FTP, whole drawers, the Amiga's side as a second list, upload
+    resume, local times for UTC dates (MLSD, SFTP).
+
 - Later idea: Hydra's chat with the other side during a transfer
   (HydraCom's CON device channel; AmiExpress has it) - niche, parked.
 - Also: an ssh password login tried against a real server,
@@ -653,11 +763,12 @@ call that uses ~0.5 KB (the Shell itself is a process of its own).
 
 **Numbers** (FS-UAE, private drive copies, wasabi on port 1240):
 
-| | 0.3b7 | 0.3b8 | 0.3b12 | 0.3b13 |
-|---|---|---|---|---|
-| CTerm (bytes) | 202,960 | 231,176 | 251,788 | 198,556 |
-| free, CTerm idle, stock A1200 (2 MB chip) | 85,752 | 60,056 | 39,960 | 119,408 |
-| free, CTerm idle, A1200 + 8 MB fast | | | 8,413,512 | 8,496,696 |
+| | 0.3b7 | 0.3b8 | 0.3b12 | 0.3b13 | 0.3b14 |
+|---|---|---|---|---|---|
+| CTerm (bytes) | 202,960 | 231,176 | 251,788 | 198,556 | 202,348 |
+| free, CTerm idle, stock A1200 (2 MB chip) | 85,752 | 60,056 | 39,960 | 119,408 | |
+| free, CTerm idle, A1200 + 8 MB fast | | | 8,413,512 | 8,496,696 | |
+| CTerm idle takes, A1200 + 8 MB fast (2026-10-11, same boot) | | | | 442,304, 438,448 | 440,968, 440,968 |
 | conbench, stock A1200 | 30.3 s | 96.4 s | fails/91-118 s | 30.7 s (now refused) |
 | conbench, A1200 + 8 MB fast | 16.78-16.92 (4) | 16.76 | 16.76-17.08 (6) | 17.00-17.40 (10) |
 | conbench, A1200 030/50 + 32 MB | | | 21.34, 21.50 | 21.98, 21.34, 21.46 |
@@ -670,7 +781,15 @@ mean, not isolated: the first commit of this work (no parts) shows it,
 on the 030/50 they are the same.
 
 Parts and their sizes: Settings 20,264 bytes, ARexx 16,992, PhoneBook
-13,292, Call 6,140, SpeedTest 4,476, Transfers 4,416.
+13,292, Call 6,140, SpeedTest 4,476, Transfers 4,416. (0.3b14: Files
+32,232, PhoneBook 15,052, ARexx 18,220, Call 6,864.)
+
+0.3b14, measured with Avail FLUSH on the fast config (tests/files/uae.sh,
+free before CTerm 8,948,840): the file browser open (an FTP place: its
+tab, the part, OS 3.2's window classes, the listing) takes 458.8 KB
+more (a Shell tab alone takes 92.4 KB), and all of it comes back when
+the window closes. What a CTerm run does not give back: 0.3b13 19,952 -
+23,872 bytes (ARexx's part), 0.3b14 6,160 - 6,360 (left to find).
 
 **The rule for new features:** measure Avail with CTerm idle (and with
 the feature in use) on the fast config before and after; anything not

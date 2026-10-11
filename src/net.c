@@ -7,7 +7,6 @@
 static void send_raw(const UBYTE *b, LONG n);
 static void telnet_option(int cmd, int opt);
 static BOOL dial(void);
-static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo);
 static void window_resized(void);
 static void call_start_book(const BookEntry *e);
 
@@ -582,7 +581,8 @@ static void window_resized(void)
 
 /* A line typed in the window while ssh sets up (a password: echo off),
  * or an answer to a question. FALSE: the window was closed. */
-static BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo)
+__attribute__((noinline)) BOOL term_ask(const char *prompt, char *buf, int max,
+                                        BOOL echo)
 {
     int n = 0;
     if (!echo && T->t_pass[0] && !T->t_passed) {
@@ -666,6 +666,8 @@ BOOL connect_out(void)
         return FALSE;
     }
     refresh();
+    if (T->t_fkind)                     /* SFTP, FTP: the file browser */
+        return files_call();
     if (!sshmode)
         return dial();
     {
@@ -834,12 +836,16 @@ void tab_from_book(const BookEntry *e)
     strcpy(T->t_down, e->down);
     strcpy(T->t_up, e->up);
     strcpy(T->t_script, e->script);
+    T->t_fkind = e->serial ? FK_NONE : e->fkind;
+    strcpy(T->t_fdir, e->dir);
 }
 
-/* Another CTerm (or CTermSSH) for a phone book entry: BOOK "name". */
+/* Another CTerm (or CTermSSH) for a place: BOOK "name", or for a file
+ * browser's place that is not in the book (a URL typed) SFTP or FTP and
+ * its address. */
 static void call_start_book(const BookEntry *e)
 {
-    char cmd[400], path[256];
+    char cmd[640], path[256];
     BPTR nil;
 #ifdef NO_SSH
     own_path(path, sizeof path, e->ssh ? "CTermSSH" : NULL);
@@ -848,8 +854,18 @@ static void call_start_book(const BookEntry *e)
 #endif
     strcpy(cmd, "Run >NIL: \"");
     strcat(cmd, path);
-    strcat(cmd, "\" BOOK \"");
-    strcat(cmd, e->name);
+    if (e->name[0] || !e->fkind) {
+        strcat(cmd, "\" BOOK \"");
+        strcat(cmd, e->name);
+    } else {
+        strcat(cmd, e->fkind == FK_SFTP ? "\" SFTP \"" : "\" FTP \"");
+        if (e->fkind == FK_FTP && e->user[0]) {
+            strcat(cmd, e->user);
+            strcat(cmd, "@");
+        }
+        book_target(e, cmd + strlen(cmd), 200);
+        strcat(cmd, e->dir);
+    }
     strcat(cmd, "\"");
     nil = Open((STRPTR)"NIL:", MODE_NEWFILE);
     if (SystemTags((STRPTR)cmd, SYS_Input, nil, SYS_Output, NULL,
@@ -857,10 +873,9 @@ static void call_start_book(const BookEntry *e)
         Close(nil);
 }
 
-/* Call phone book entry i: in a new tab of this window when it can be. */
-void call_book(int i, BOOL newtab)
+/* Call a place: in a new tab of this window when it can be. */
+void call_place(const BookEntry *e, BOOL newtab)
 {
-    const BookEntry *e = &book[i];
     struct Tab *t;
 #ifdef NO_SSH
     if (e->ssh)
@@ -874,7 +889,7 @@ void call_book(int i, BOOL newtab)
     tab_from_book(e);
     tab_show(ntabs - 1);
     say("\x1b[2m[calling ");
-    say(e->name);
+    say(e->name[0] ? e->name : dialhost);
     say("... Esc gives up]\x1b[0m\r\n");
     refresh();
     if (!connect_out())
@@ -884,6 +899,12 @@ void call_book(int i, BOOL newtab)
     refresh();
 }
 
+/* Call phone book entry i. */
+void call_book(int i, BOOL newtab)
+{
+    call_place(&book[i], newtab);
+}
+
 /* ARexx's CALL: a phone book place, host[:port] or SERIAL, in a new tab
  * (a place on ssh needs CTermSSH: not in CTerm's tabs). The RC: 0 up,
  * 10 not; *made: the tab (NULL: none was made). */
@@ -891,18 +912,31 @@ int call_rexx(const char *what, struct Tab **made)
 {
     int i = book_find(what);
     struct Tab *t;
+    BookEntry *u = NULL;
     BOOL ok;
     *made = NULL;
+    if (i < 0 && strstr(what, "://") &&
+        (u = AllocVec(sizeof *u, MEMF_ANY)))
+        book_url(u, what, FK_NONE);     /* ftp://, sftp://, ssh://... */
 #ifdef NO_SSH
-    if (i >= 0 && book[i].ssh && !book[i].serial)
+    if ((i >= 0 && book[i].ssh && !book[i].serial) || (u && u->ssh)) {
+        if (u)
+            FreeVec(u);
         return 10;
+    }
 #endif
-    if (!what[0] || !(t = tab_new()))
+    if (!what[0] || !(t = tab_new())) {
+        if (u)
+            FreeVec(u);
         return 10;
+    }
     T = t;
     *made = t;
     rexx_watch(t);                      /* the board's first words count */
-    if (i >= 0)
+    if (u) {
+        tab_from_book(u);
+        FreeVec(u);
+    } else if (i >= 0)
         tab_from_book(&book[i]);
     else if (!stricmp((char *)what, "SERIAL"))
         serial_tab_setup(NULL, NULL, NULL);

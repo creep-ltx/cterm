@@ -976,6 +976,114 @@ static LONG c_phonebook(struct RexxMsg *rm, LONG *a, BOOL top)
     return RC_OK;
 }
 
+/* ---- a file browser's place: SFTP, FTP, and its commands ---- */
+
+/* SFTP / FTP place: a phone book place, or [user@]host[:port][/drawer]
+ * (or a ftp:// sftp:// URL), in a new tab with its browser. */
+static LONG c_fopen(LONG *a, BOOL top, BOOL sftp)
+{
+    char url[200];
+    const char *name = (const char *)a[0];
+    struct Tab *t = NULL;
+    int rc;
+    if (!top)
+        return LATER;
+    url[0] = 0;
+    if (book_find(name) < 0 && !strstr(name, "://"))
+        strcpy(url, sftp ? "sftp://" : "ftp://");
+    strncat(url, name, sizeof url - 1 - strlen(url));
+    rc = call_rexx(url, &t);
+    if (t)
+        rxtab = t;
+    T = shown;
+    res_num(t ? tab_no(t) : 0);
+    return rc;
+}
+
+static LONG c_sftp(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    (void)rm;
+    return c_fopen(a, top, TRUE);
+}
+
+static LONG c_ftp(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    (void)rm;
+    return c_fopen(a, top, FALSE);
+}
+
+/* GET, PUT, LIST, CD, MKDIR, DELETE, RENAME on the tab's place: what
+ * (FR_*), a[0] the names (many: GET, PUT), a[1] TO */
+static LONG c_fcmd(LONG *a, BOOL top, int what)
+{
+    const char *one[2];
+    const char *const *names = one;
+    int n = 1;
+    char *res = NULL;
+    struct Tab *keep = T;
+    LONG rc;
+    if (!top)
+        return LATER;
+    one[0] = (const char *)a[0];
+    one[1] = NULL;
+    if (what == FR_GET || what == FR_PUT)
+        for (names = (const char *const *)a[0], n = 0; names[n]; n++)
+            ;
+    else if (what == FR_LIST)
+        n = 0;
+    T = target();
+    rc = files_rexx(what, names, n, what == FR_GET || what == FR_RENAME
+                                    ? (const char *)a[1] : NULL, &res);
+    T = keep;
+    if (res) {
+        res_set(res, -1);
+        FreeVec(res);
+    }
+    return rc;
+}
+
+static LONG c_get(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    (void)rm;
+    return c_fcmd(a, top, FR_GET);
+}
+
+static LONG c_put(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    (void)rm;
+    return c_fcmd(a, top, FR_PUT);
+}
+
+static LONG c_list(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    (void)rm;
+    return c_fcmd(a, top, FR_LIST);
+}
+
+static LONG c_cd(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    (void)rm;
+    return c_fcmd(a, top, FR_CD);
+}
+
+static LONG c_mkdir(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    (void)rm;
+    return c_fcmd(a, top, FR_MKDIR);
+}
+
+static LONG c_delete(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    (void)rm;
+    return c_fcmd(a, top, FR_DELETE);
+}
+
+static LONG c_rename(struct RexxMsg *rm, LONG *a, BOOL top)
+{
+    (void)rm;
+    return c_fcmd(a, top, FR_RENAME);
+}
+
 static LONG c_help(struct RexxMsg *rm, LONG *a, BOOL top);
 
 /* tmpl NULL: the command reads its own words (a[0]: the line); use:
@@ -1000,6 +1108,15 @@ static const struct {
     { "SCREEN", "WHAT/A", NULL, c_screen },
     { "WINDOW", "WHAT/A", NULL, c_window },
     { "PHONEBOOK", "", NULL, c_phonebook },
+    { "SFTP", "PLACE/A", NULL, c_sftp },
+    { "FTP", "PLACE/A", NULL, c_ftp },
+    { "GET", "NAME/A/M,TO/K", NULL, c_get },
+    { "PUT", "FILE/A/M", NULL, c_put },
+    { "LIST", "", NULL, c_list },
+    { "CD", "DRAWER/A", NULL, c_cd },
+    { "MKDIR", "NAME/A", NULL, c_mkdir },
+    { "DELETE", "NAME/A", NULL, c_delete },
+    { "RENAME", "NAME/A,TO/A", NULL, c_rename },
     { "VERSION", "", NULL, c_version },
     { "HELP", "COMMAND", NULL, c_help },
     { "QUIT", "", NULL, c_quit },

@@ -10,6 +10,7 @@
 #include <libraries/amisslmaster.h>
 #include <amissl/tags.h>
 #include <libssh2.h>
+#include <libssh2_sftp.h>
 #include <exec/memory.h>
 #include "ssh.h"
 
@@ -32,6 +33,7 @@ void ssh_set_key(const char *path)
 struct Ssh {
     LIBSSH2_SESSION *s_sess;
     LIBSSH2_CHANNEL *s_chan;
+    LIBSSH2_SFTP *s_sftp;               /* SFTP, instead of a shell */
     LONG s_fd;
     int s_busy;                         /* waiting for its socket */
 };
@@ -93,7 +95,7 @@ static BOOL ssl_open(void)
 /* Wait until the socket can go the way libssh2 wants (non-blocking), at
  * most secs. FALSE: the host stopped answering or the person gave up
  * (Esc, the close gadget) - gave_up stays set and every loop ends. */
-static BOOL gave_up, setting_up, wiping;
+static BOOL gave_up, setting_up, wiping, want_sftp;
 
 static BOOL wait_sock_for(LONG secs)
 {
@@ -536,6 +538,17 @@ static BOOL ssh_open_(const char *target, int cols, int rows,
             say("]\x1b[0m\r\n");
         return FALSE;
     }
+    if (want_sftp) {                    /* the file browser's: no shell */
+        while (!(cur->s_sftp = libssh2_sftp_init(sess)) &&
+               libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN &&
+               wait_sock())
+            ;
+        if (!cur->s_sftp) {
+            say_err("no SFTP on the host");
+            return FALSE;
+        }
+        return TRUE;
+    }
     while (!(chan = libssh2_channel_open_session(sess)) &&
            libssh2_session_last_errno(sess) == LIBSSH2_ERROR_EAGAIN &&
            wait_sock())
@@ -630,6 +643,12 @@ void ssh_close(void *h)
         return;
     /* a goodbye, but a dead host gets 3 s, not for ever */
     gave_up = FALSE;
+    if (cur->s_sftp) {
+        while (libssh2_sftp_shutdown(cur->s_sftp) == LIBSSH2_ERROR_EAGAIN &&
+               wait_sock_for(3))
+            ;
+        cur->s_sftp = NULL;
+    }
     if (chan) {
         while (libssh2_channel_free(chan) == LIBSSH2_ERROR_EAGAIN &&
                wait_sock_for(3))
@@ -664,3 +683,157 @@ void ssh_close(void *h)
         AmiSSLMasterBase = NULL;
     }
 }
+
+/* ---- SFTP, for the file browser (ssh.h: sftp_ops) ----
+ * Its own connection, set up as an ssh tab's (the host key, the login),
+ * then everything without blocking: the browser waits for the socket in
+ * CTerm's own round, so the window and the other tabs go on. */
+
+#define SH ((struct Ssh *)h)
+
+static void *sf_open(const char *target, ssh_ask_fn ask, ssh_say_fn sayf)
+{
+    void *h;
+    want_sftp = TRUE;
+    h = ssh_open(target, 80, 24, ask, sayf);
+    want_sftp = FALSE;
+    return h;
+}
+
+static LONG sf_socket(void *h)
+{
+    return SH->s_fd;
+}
+
+static int sf_dirs(void *h)
+{
+    int d = libssh2_session_block_directions(SH->s_sess);
+    return (d & LIBSSH2_SESSION_BLOCK_INBOUND ? SF_IN : 0) |
+           (d & LIBSSH2_SESSION_BLOCK_OUTBOUND ? SF_OUT : 0);
+}
+
+static LONG sf_err(void *h)
+{
+    return libssh2_session_last_errno(SH->s_sess);
+}
+
+static LONG sf_error(void *h)
+{
+    LONG rc = sf_err(h);
+    return rc == LIBSSH2_ERROR_SFTP_PROTOCOL
+           ? (LONG)libssh2_sftp_last_error(SH->s_sftp) : rc;
+}
+
+static void attr_take(const LIBSSH2_SFTP_ATTRIBUTES *at, SfAttr *a)
+{
+    memset(a, 0, sizeof *a);
+    if (at->flags & LIBSSH2_SFTP_ATTR_SIZE)
+        a->size = at->filesize > 0xffffffffULL ? 0xffffffffUL
+                                               : (ULONG)at->filesize;
+    if (at->flags & LIBSSH2_SFTP_ATTR_ACMODTIME)
+        a->mtime = at->mtime;
+    if (at->flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) {
+        a->dir = LIBSSH2_SFTP_S_ISDIR(at->permissions);
+        a->link = LIBSSH2_SFTP_S_ISLNK(at->permissions);
+    }
+}
+
+static LONG sf_opendir(void *h, const char *path, void **dh)
+{
+    LIBSSH2_SFTP_HANDLE *d = libssh2_sftp_open_ex(SH->s_sftp, path,
+        strlen(path), 0, 0, LIBSSH2_SFTP_OPENDIR);
+    *dh = d;
+    return d ? 0 : sf_err(h);
+}
+
+static LONG sf_readdir(void *dh, char *name, int max, SfAttr *a)
+{
+    LIBSSH2_SFTP_ATTRIBUTES at;
+    int rc = libssh2_sftp_readdir_ex(dh, name, max - 1, NULL, 0, &at);
+    if (rc >= 0) {
+        name[rc] = 0;
+        attr_take(&at, a);
+    }
+    return rc;
+}
+
+static LONG sf_closedir(void *dh)
+{
+    return libssh2_sftp_close_handle(dh);
+}
+
+static LONG sf_realpath(void *h, const char *path, char *out, int max)
+{
+    int rc = libssh2_sftp_symlink_ex(SH->s_sftp, path, strlen(path), out,
+                                     max - 1, LIBSSH2_SFTP_REALPATH);
+    if (rc >= 0)
+        out[rc] = 0;
+    return rc;
+}
+
+static LONG sf_stat(void *h, const char *path, SfAttr *a)
+{
+    LIBSSH2_SFTP_ATTRIBUTES at;
+    int rc = libssh2_sftp_stat_ex(SH->s_sftp, path, strlen(path),
+                                  LIBSSH2_SFTP_STAT, &at);
+    if (!rc)
+        attr_take(&at, a);
+    return rc;
+}
+
+static LONG sf_fopen(void *h, const char *path, int how, void **fh)
+{
+    static const unsigned long flags[3] = {
+        LIBSSH2_FXF_READ,
+        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC,
+        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_APPEND };
+    LIBSSH2_SFTP_HANDLE *f = libssh2_sftp_open_ex(SH->s_sftp, path,
+        strlen(path), flags[how % 3], 0644, LIBSSH2_SFTP_OPENFILE);
+    *fh = f;
+    return f ? 0 : sf_err(h);
+}
+
+static LONG sf_read(void *fh, UBYTE *b, LONG n)
+{
+    return libssh2_sftp_read(fh, (char *)b, n);
+}
+
+static LONG sf_write(void *fh, const UBYTE *b, LONG n)
+{
+    return libssh2_sftp_write(fh, (const char *)b, n);
+}
+
+static void sf_seek(void *fh, ULONG pos)
+{
+    libssh2_sftp_seek64(fh, pos);
+}
+
+static LONG sf_mkdir(void *h, const char *path)
+{
+    return libssh2_sftp_mkdir_ex(SH->s_sftp, path, strlen(path), 0755);
+}
+
+static LONG sf_rmdir(void *h, const char *path)
+{
+    return libssh2_sftp_rmdir_ex(SH->s_sftp, path, strlen(path));
+}
+
+static LONG sf_unlink(void *h, const char *path)
+{
+    return libssh2_sftp_unlink_ex(SH->s_sftp, path, strlen(path));
+}
+
+/* never over a file there (no OVERWRITE) */
+static LONG sf_rename(void *h, const char *from, const char *to)
+{
+    return libssh2_sftp_rename_ex(SH->s_sftp, from, strlen(from), to,
+        strlen(to), LIBSSH2_SFTP_RENAME_ATOMIC | LIBSSH2_SFTP_RENAME_NATIVE);
+}
+
+static const struct SftpOps sfops = {
+    sf_open, ssh_close, sf_socket, sf_dirs, sf_opendir, sf_readdir,
+    sf_closedir, sf_realpath, sf_stat, sf_fopen, sf_read, sf_write,
+    sf_seek, sf_closedir, sf_mkdir, sf_rmdir, sf_unlink, sf_rename,
+    sf_error
+};
+const struct SftpOps *sftp_ops = &sfops;

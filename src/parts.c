@@ -15,6 +15,7 @@
 /* ssh here (CTermSSH) or not: the parts are the same files for both */
 #ifdef NO_SSH
 BOOL has_ssh = FALSE;
+const struct SftpOps *sftp_ops = NULL;  /* SFTP is CTermSSH's (ssh.c) */
 #else
 BOOL has_ssh = TRUE;
 #endif
@@ -255,6 +256,83 @@ void speed_test(void)
     ((struct SpeedPart *)pt.fns)->test();
     pt.depth--;
     part_unload(&pt);
+}
+
+/* ---- the file browser: there while a place is connected or its
+ * window is open ---- */
+
+static struct Slot pf = { "Files", "the file browser" };
+#define FP ((struct FilesPart *)pf.fns)
+
+ULONG files_sigmask(void)
+{
+    return pf.fns ? FP->sigmask() : 0;
+}
+
+static void files_done(void)
+{
+    if (!--pf.depth && FP->idle())
+        part_unload(&pf);
+}
+
+BOOL files_call(void)
+{
+    BOOL ok;
+    if (!part_load(&pf))
+        return FALSE;
+    pf.depth++;
+    ok = FP->call();
+    files_done();
+    return ok;
+}
+
+void files_menu(void)
+{
+    if (!part_load(&pf))
+        return;
+    pf.depth++;
+    FP->menu();
+    files_done();
+}
+
+void files_events(void)
+{
+    if (!pf.fns)
+        return;
+    pf.depth++;
+    FP->events();
+    files_done();
+}
+
+void files_tab_gone(struct Tab *t)
+{
+    if (!pf.fns)
+        return;
+    pf.depth++;
+    FP->tab_gone(t);
+    files_done();
+}
+
+void files_screen(BOOL again)
+{
+    if (!pf.fns)
+        return;
+    pf.depth++;
+    FP->screen(again);
+    files_done();
+}
+
+int files_rexx(int what, const char *const *names, int n, const char *to,
+               char **res)
+{
+    int rc;
+    *res = NULL;
+    if (!pf.fns)
+        return 10;                      /* no place connected */
+    pf.depth++;
+    rc = FP->rexx(what, names, n, to, res);
+    files_done();
+    return rc;
 }
 
 /* ---- ARexx: the port is CTerm's, the commands the part's ---- */

@@ -220,6 +220,11 @@ struct Tab {
     LONG t_rxgot;                       /* ... its files, -1 failed */
     int t_toldc, t_toldr;               /* the size its host or Shell
                                            was last told (tell_sizes) */
+    int t_fkind;                        /* FK_SFTP, FK_FTP: a file
+                                           browser's tab (its messages),
+                                           not a terminal */
+    char t_fdir[128];                   /* ... the drawer it starts in */
+    void *t_rf;                         /* ... its connection (Parts/Files) */
 };
 
 /* A pane: a part of the window showing a tab (pane.c). */
@@ -252,7 +257,8 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_PC, M_CALL, M_COPY, M_PASTE, M_SETTINGS, M_NEWTAB, M_CLOSETAB,
        M_LOG, M_LOGSTOP, M_SENDUSER, M_SENDPASS, M_YRECV, M_XRECV, M_YSEND,
        M_XSEND, M_HSEND, M_XWIN, M_BOOK, M_SERIAL, M_ANSWER, M_REXX,
-       M_ZSEND, M_HIDE, M_SPLITH, M_SPLITV, M_NEXTPANE, M_CLOSEPANE };
+       M_ZSEND, M_HIDE, M_SPLITH, M_SPLITV, M_NEXTPANE, M_CLOSEPANE,
+       M_SFTP };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -440,6 +446,7 @@ void mouse_cell(int mx, int my, int *r, int *c);
 void own_path(char *buf, int max, const char *sibling);
 void tab_from_book(const BookEntry *e);
 void call_book(int i, BOOL newtab);
+void call_place(const BookEntry *e, BOOL newtab);
 /* bookwin.c: the phone book's own window */
 void bookwin_open(void);
 void bookwin_events(void);
@@ -463,6 +470,9 @@ void serial_tab_setup(const char *dev, LONG *unit, LONG *baud);
 void serial_tab_book(const BookEntry *e);
 /* serwin.c: a line's settings in a window of their own */
 BOOL serwin_edit(SerLine *l, char *init, char *dial, struct Window *over);
+/* askwin.c: a line asked in a small window (the parts that ask) */
+BOOL ask_line(const char *title, const char *label, char *buf, int max,
+              struct Window *over);
 void call_dialog(void);
 void reaction_close(void);
 void close_settings(void);
@@ -490,6 +500,29 @@ int call_rexx(const char *what, struct Tab **made);
 int transfer_rexx(int what, const char *const *paths, int n,
                   const char *xname);
 BOOL transfer_hydra_queue(const char *const *paths, int n);
+/* transfer.c, for the file browser's transfers: shown as the protocols'
+ * are (how: 0 going on, 1 begins, 2 has ended); one at a time */
+BOOL xfer_busy(void);
+void xfer_show(struct Tab *t, struct Xfer *x, int how);
+extern LONG loop_wfd;                   /* loop_round also waits for this
+                                           socket to take bytes (-1 none) */
+BOOL term_ask(const char *prompt, char *buf, int max, BOOL echo);
+/* parts.c: the file browser for SFTP and FTP places (Parts/Files) */
+BOOL files_call(void);                  /* T's place: connected, its
+                                           browser open */
+void files_menu(void);                  /* Project/Open SFTP browser */
+ULONG files_sigmask(void);
+void files_events(void);
+void files_tab_gone(struct Tab *t);     /* its connection, its window go */
+void files_screen(BOOL again);          /* windows closed with the screen,
+                                           and opened again */
+/* ARexx's GET, PUT, LIST, CD, MKDIR, DELETE, RENAME on T's place: the
+ * RC; *res a result (AllocVec, the caller frees) or NULL */
+enum { FR_LIST, FR_CD, FR_GET, FR_PUT, FR_MKDIR, FR_DELETE, FR_RENAME };
+int files_rexx(int what, const char *const *names, int n, const char *to,
+               char **res);
+extern const struct SftpOps *sftp_ops;  /* SFTP: CTermSSH's (ssh.c), or
+                                           NULL */
 /* rexx.c: the ARexx port */
 void rexx_open(void);
 void rexx_close(void);

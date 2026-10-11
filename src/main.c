@@ -15,7 +15,7 @@
  *   net.c      telnet, calling out, phone book calls
  *   serial.c   serial lines: the settings and tabs; the line's own code
  *              is sermod.c, a file loaded when a line opens
- *   ssh.c      ssh (libssh2 on AmiSSL), in CTermSSH only
+ *   ssh.c      ssh and SFTP (libssh2 on AmiSSL), in CTermSSH only
  *   clip.c     copy and paste, and the log
  *   book.c     the phone book's file
  *   classes.c  OS 3.2's window classes, for the windows made of them
@@ -31,6 +31,9 @@
  *   callwin.c  the Call window                           Parts/Call
  *   xwin.c     the Transfers window                      Parts/Transfers
  *   bench.c    the speed test in the Project menu        Parts/SpeedTest
+ *   files.c    the file browser, SFTP and FTP            Parts/Files
+ *   ftp.c      FTP, for the browser                      (Parts/Files)
+ *   askwin.c   a line asked in a small window (PhoneBook, Files)
  */
 #include "cterm.h"
 
@@ -125,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b13 (11.10.2026)";
+const char version[] = "$VER: CTerm 0.3b14 (11.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -628,7 +631,8 @@ static void title_update_(void)
         strcat(title, ": ");
         strcat(title, T->t_bookname);
     } else if (dialhost[0]) {
-        strcat(title, sshmode ? ": ssh " : ": ");
+        strcat(title, T->t_fkind == FK_SFTP ? ": sftp " : T->t_fkind
+                      ? ": ftp " : sshmode ? ": ssh " : ": ");
         strcat(title, dialhost);
     }
     if (T->t_log)
@@ -796,6 +800,8 @@ static void tab_drop(struct Tab *t)
         lfd = -1;
     }
     serial_close();                     /* a modem hung up, the line shut */
+    if (T->t_rf)
+        files_tab_gone(t);              /* its browser and connection */
     if (T->con) {
         /* its signals and memory go back now; only the port is kept
          * (signal-less, polled) while processes may still open "*" */
@@ -877,6 +883,8 @@ void tab_hangup(void)
         sock = -1;
     }
     serial_close();
+    if (T->t_rf)
+        files_tab_gone(T);
     rexx_tab_over(T);
     say("\r\n\x1b[0;2m[hung up - Return calls again]\x1b[0m\r\n");
 }
@@ -1083,10 +1091,12 @@ static BOOL shells_only(ULONG sigs)
  * window and the other tabs go on meanwhile; then tabs are not dropped
  * and the screen is not switched (run() does that, at the top). TRUE:
  * xfd has data. */
+LONG loop_wfd = -1;
+
 BOOL loop_round(LONG xfd, LONG ms)
 {
     struct Tab *me = T;
-    fd_set rd;
+    fd_set rd, wr;
     LONG maxfd = -1, n = 0;
     ULONG winsig = win ? 1UL << win->UserPort->mp_SigBit : 0;
     ULONG hidesig = hide_sigmask();
@@ -1095,7 +1105,7 @@ BOOL loop_round(LONG xfd, LONG ms)
     ULONG rxsig = rexx_sigmask();
     ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
                  xwin_sigmask() | bookwin_sigmask() | sersig | rxsig |
-                 hidesig;
+                 hidesig | files_sigmask();
     BOOL hostdata = FALSE, ready = FALSE;
     ULONG consigs = 0;
     int i;
@@ -1117,8 +1127,17 @@ BOOL loop_round(LONG xfd, LONG ms)
         if (xfd > maxfd)
             maxfd = xfd;
     }
-    if (maxfd < 0 && ms == 0 && !SocketBase) {
-        sigs = SetSignal(0, sigs) & sigs;   /* a look, no wait */
+    FD_ZERO(&wr);
+    if (loop_wfd >= 0) {                /* a browser's upload: room */
+        FD_SET(loop_wfd, &wr);
+        if (loop_wfd > maxfd)
+            maxfd = loop_wfd;
+    }
+    if (maxfd < 0 && ms == 0) {
+        /* a look, no wait - not a WaitSelect with no sockets and no
+         * time: FS-UAE's waited for a signal there (a file browser's
+         * download stood still) */
+        sigs = SetSignal(0, sigs) & sigs;
     } else if (maxfd < 0 && (ms < 0 || !SocketBase)) {
         /* no network: the plain Amiga wait - the socket library's
          * WaitSelect costs far more per round, and a flood of tiny
@@ -1149,8 +1168,8 @@ BOOL loop_round(LONG xfd, LONG ms)
         tv.tv_sec = ms > 0 ? ms / 1000 : 0;
         tv.tv_usec = ms > 0 ? (ms % 1000) * 1000 : 0;
         ULONG want = sigs;
-        n = WaitSelect(maxfd + 1, &rd, NULL, NULL, ms >= 0 ? &tv : NULL,
-                       &sigs);
+        n = WaitSelect(maxfd + 1, &rd, loop_wfd >= 0 ? &wr : NULL, NULL,
+                       ms >= 0 ? &tv : NULL, &sigs);
         /* a socket already readable returns at once without the signals
          * (lwip-amiga, seen on the A1200): during a stream of host data
          * the window was never served - Esc did not stop a transfer. The
@@ -1158,7 +1177,8 @@ BOOL loop_round(LONG xfd, LONG ms)
         if (n > 0)
             sigs |= SetSignal(0, want) & want;
     }
-    if (xfd >= 0 && n > 0 && FD_ISSET(xfd, &rd))
+    if (n > 0 && ((xfd >= 0 && FD_ISSET(xfd, &rd)) ||
+                  (loop_wfd >= 0 && FD_ISSET(loop_wfd, &wr))))
         ready = TRUE;
     serial_poll();                      /* every line: what came */
     /* anything but the Shells and the frame timer may look at the text */
@@ -1173,6 +1193,8 @@ BOOL loop_round(LONG xfd, LONG ms)
         xwin_events();
     if (sigs & bookwin_sigmask())
         bookwin_events();
+    if (sigs & files_sigmask())
+        files_events();
     if (sigs & rxsig)
         rexx_serve();                   /* before the hosts' bytes: an
                                          * UPLOAD waiting is seen first */
@@ -1410,13 +1432,14 @@ static int cterm_main(int argc, char **argv)
     if (!fast_ok(argc))
         return RETURN_FAIL;
     if (argc > 0) {
-        LONG args[17] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        LONG args[19];
         int k;
-        struct RDArgs *rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,"
-                                      "FROM/K,HOST/K,PC/S,SSH/K,KEY/K,BOOK/K,"
-                                      "TEXTDRAW/S,SERIAL/S,DEVICE/K,UNIT/N,"
-                                      "BAUD/N,SHOW/S",
-                                      args, NULL);
+        struct RDArgs *rda;
+        memset(args, 0, sizeof args);
+        rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,"
+                       "FROM/K,HOST/K,PC/S,SSH/K,KEY/K,BOOK/K,"
+                       "TEXTDRAW/S,SERIAL/S,DEVICE/K,UNIT/N,"
+                       "BAUD/N,SHOW/S,SFTP/K,FTP/K", args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
             return RETURN_FAIL;
@@ -1425,7 +1448,7 @@ static int cterm_main(int argc, char **argv)
         for (k = 0; k < 16 && !args[k]; k++)
             ;
         arg_show = args[16] != 0;
-        arg_plain = k == 16;
+        arg_plain = k == 16 && !args[17] && !args[18];
         if (args[0]) port = *(LONG *)args[0];
         if (args[1]) arg_latin1 = TRUE;
         if (args[2]) local = FALSE;     /* wait for the PC's relay */
@@ -1470,6 +1493,17 @@ static int cterm_main(int argc, char **argv)
             remember = FALSE;
             T->t_serial = TRUE;
             strcpy(dialhost, "serial");  /* the real name once prefs are in */
+            if (!args[3]) want_cols = 80;
+        }
+        if (args[17] || args[18]) {     /* the file browser: SFTP, FTP */
+            BookEntry *e = AllocVec(sizeof *e, MEMF_ANY);
+            if (e) {
+                book_url(e, (char *)args[args[17] ? 17 : 18],
+                         args[17] ? FK_SFTP : FK_FTP);
+                tab_from_book(e);
+                FreeVec(e);
+            }
+            remember = FALSE;
             if (!args[3]) want_cols = 80;
         }
         if (args[10]) {                 /* a phone book entry to call */
@@ -1633,6 +1667,7 @@ static int cterm_main(int argc, char **argv)
     close_settings();
     xwin_shut();                        /* before its classes and screen go */
     bookwin_close();
+    parts_free();                       /* ARexx's, which stays once used */
     reaction_close();
     clip_close();
     close_display(FALSE);

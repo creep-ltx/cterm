@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-sshd.sh start|stop - a private sshd for CTerm's ssh tests: your own
 # user, 127.0.0.1:2299, throwaway keys in /tmp/cterm-sshd (client key:
-# id_ed25519 there), key logins only. Recipe: Knowledge/go/tui-and-sockets.md.
+# id_ed25519 there), key logins only; SFTP too. Recipe: Knowledge/go/tui-and-sockets.md.
 d=/tmp/cterm-sshd
 case "$1" in
 stop) [ -f $d/pid ] && kill "$(cat $d/pid)" 2>/dev/null; rm -f $d/pid ;;
@@ -22,6 +22,7 @@ StrictModes no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 LogLevel VERBOSE
+Subsystem sftp internal-sftp
 CFG
   /usr/bin/sshd -f $d/sshd_config -E $d/log && echo "sshd on 127.0.0.1:2299 as $USER" ;;
 *) echo "usage: test-sshd.sh start|stop" >&2; exit 2 ;;

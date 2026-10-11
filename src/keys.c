@@ -7,9 +7,16 @@ static BOOL redial_key(const char *b);
 static void raw_report(int cls, int code, int qual);
 static void bar_pull(int y);
 
-/* After a call ended: Return calls again; other keys do nothing. */
+/* After a call ended: Return calls again; other keys do nothing. A
+ * file browser's tab: Return opens its browser (calling again first if
+ * the call ended). */
 static BOOL redial_key(const char *b)
 {
+    if (T->t_fkind) {
+        if (b[0] == '\r')
+            files_call();
+        return TRUE;
+    }
     if (local || !dialhost[0] || linked)
         return FALSE;
     if (b[0] == '\r') {

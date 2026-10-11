@@ -4,7 +4,7 @@
  *   name=AmigaNet BBS
  *   host=bbs.example.org
  *   port=23
- *   kind=telnet            (or ssh, or serial)
+ *   kind=telnet            (or ssh, serial, sftp, ftp)
  *   user=...
  *   pass=...
  *   letters=pc             (cterm, amiga, truetype, pc)
@@ -28,6 +28,11 @@
  *   init=AT&F1             (after the modem's own, Settings)
  *   dial=ATDP              (none: the modem's)
  *
+ * and for kind=sftp and kind=ftp (the file browser) the drawer on the
+ * host it starts in:
+ *
+ *   dir=/pub/amiga
+ *
  * an empty line between entries. The password is kept as it is: the
  * file is the Amiga's own, as in the BBS dialers of old.
  */
@@ -38,6 +43,7 @@
 #include <proto/dos.h>
 #include <exec/memory.h>
 #include "book.h"
+#pragma GCC optimize("Os")              /* called rarely: small before quick */
 
 #define BOOK_DIR  "ENVARC:CTerm"
 #define BOOK_FILE "ENVARC:CTerm/phonebook"
@@ -166,9 +172,12 @@ void book_load(void)
         else if (!stricmp(line, "script")) put(e->script, sizeof e->script, v);
         else if (!stricmp(line, "port")) e->port = atoi(v);
         else if (!stricmp(line, "kind")) {
-            e->ssh = !stricmp(v, "ssh");
+            e->fkind = !stricmp(v, "sftp") ? FK_SFTP
+                     : !stricmp(v, "ftp") ? FK_FTP : FK_NONE;
+            e->ssh = !stricmp(v, "ssh") || e->fkind == FK_SFTP;
             e->serial = !stricmp(v, "serial");
         }
+        else if (!stricmp(line, "dir")) put(e->dir, sizeof e->dir, v);
         else if (!stricmp(line, "device")) put(e->line.device, sizeof e->line.device, v);
         else if (!stricmp(line, "unit")) e->line.unit = atol(v);
         else if (!stricmp(line, "baud")) e->line.baud = atol(v) > 0 ? atol(v) : 38400;
@@ -229,7 +238,11 @@ BOOL book_save(void)
         field(f, "host", e->host);
         if (e->port)
             number(f, "port", e->port);
-        field(f, "kind", e->serial ? "serial" : e->ssh ? "ssh" : "telnet");
+        field(f, "kind", e->serial ? "serial" : e->fkind == FK_SFTP ? "sftp"
+                         : e->fkind == FK_FTP ? "ftp" : e->ssh ? "ssh"
+                         : "telnet");
+        if (e->fkind)
+            field(f, "dir", e->dir);
         if (e->serial) {
             field(f, "device", e->line.device);
             number(f, "unit", e->line.unit);
@@ -268,13 +281,17 @@ int book_find(const char *name)
 
 void book_tidy(BookEntry *e)
 {
+    static const char *const sch[] = { "telnet://", "ssh://", "sftp://",
+                                       "ftp://" };
     char *h = e->host, *p;
-    if (!strnicmp(h, "telnet://", 9)) {
-        e->ssh = 0;
-        memmove(h, h + 9, strlen(h + 9) + 1);
-    } else if (!strnicmp(h, "ssh://", 6)) {
-        e->ssh = 1;
-        memmove(h, h + 6, strlen(h + 6) + 1);
+    int i;
+    for (i = 0; i < 4; i++)
+        if (!strnicmp(h, (char *)sch[i], strlen(sch[i])))
+            break;
+    if (i < 4) {
+        e->ssh = i == 1 || i == 2;
+        e->fkind = i == 2 ? FK_SFTP : i == 3 ? FK_FTP : FK_NONE;
+        memmove(h, h + strlen(sch[i]), strlen(h + strlen(sch[i])) + 1);
     } else {
         /* host:port typed plainly (one colon: not an IPv6 address) */
         if ((p = strchr(h, ':')) && !strchr(p + 1, ':') && p[1] >= '0' &&
@@ -284,10 +301,18 @@ void book_tidy(BookEntry *e)
         }
         return;
     }
-    if ((p = strchr(h, '/')))           /* a path: nothing to call */
+    if ((p = strchr(h, '/'))) {         /* a path: the browser's drawer */
+        if (e->fkind && p[1])
+            put(e->dir, sizeof e->dir, p);
         *p = 0;
-    if ((p = strchr(h, '@'))) {         /* user@ */
+    }
+    if ((p = strrchr(h, '@'))) {        /* user@, user:password@ */
+        char *pw;
         *p = 0;
+        if (e->fkind && (pw = strchr(h, ':'))) {
+            *pw++ = 0;
+            put(e->pass, sizeof e->pass, pw);
+        }
         if (h[0])
             put(e->user, sizeof e->user, h);
         memmove(h, p + 1, strlen(p + 1) + 1);
@@ -323,7 +348,7 @@ void book_target(const BookEntry *e0, char *out, int max)
         strcat(out, "@");
     }
     strncat(out, e->host, max - strlen(out) - 8);
-    if (e->port && e->port != (e->ssh ? 22 : 23)) {
+    if (e->port && e->port != (e->ssh ? 22 : e->fkind == FK_FTP ? 21 : 23)) {
         char *p = num + sizeof num - 1;
         int n = e->port;
         *p = 0;
@@ -331,4 +356,14 @@ void book_target(const BookEntry *e0, char *out, int max)
         strcat(out, ":");
         strcat(out, p);
     }
+}
+
+void book_url(BookEntry *e, const char *url, int kind)
+{
+    book_blank(e, "");
+    if (!strstr(url, "://"))            /* the kind's scheme: user@, the
+                                         * port and a drawer taken apart */
+        strcpy(e->host, kind == FK_SFTP ? "sftp://" : "ftp://");
+    strncat(e->host, url, sizeof e->host - 1 - strlen(e->host));
+    book_tidy(e);
 }

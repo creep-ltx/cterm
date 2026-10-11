@@ -33,6 +33,47 @@ void ssh_write(void *h, const UBYTE *b, LONG n);
 void ssh_resize(void *h, int cols, int rows);
 void ssh_close(void *h);
 
+/* SFTP on an ssh connection of its own (CTermSSH: ssh.c), for the file
+ * browser (Parts/Files), which reaches it through sftp_ops (NULL in the
+ * small CTerm). open connects, checks the host key and logs in as
+ * ssh_open does, then starts SFTP. Every other call may answer SF_AGAIN:
+ * wait for the socket the way dirs says (SF_IN, SF_OUT) and make the
+ * same call again. Other answers below 0 are failures (error says
+ * which); read and readdir answer 0 at the end. */
+#define SF_AGAIN (-37)                  /* LIBSSH2_ERROR_EAGAIN */
+#define SF_IN    1
+#define SF_OUT   2
+#define SF_LOST(rc) ((rc) == -7 || (rc) == -13 || (rc) == -26 || \
+                     (rc) == -30 || (rc) == -43 || (rc) == -1)
+typedef struct {
+    ULONG size, mtime;                  /* bytes; seconds since 1970 */
+    UBYTE dir, link;                    /* a directory; a symbolic link */
+} SfAttr;
+struct SftpOps {
+    void *(*sf_open)(const char *target, ssh_ask_fn ask, ssh_say_fn say);
+    void (*sf_close)(void *h);
+    LONG (*sf_socket)(void *h);
+    int (*sf_dirs)(void *h);
+    LONG (*sf_opendir)(void *h, const char *path, void **dh);
+    LONG (*sf_readdir)(void *dh, char *name, int max, SfAttr *a);
+    LONG (*sf_closedir)(void *dh);
+    LONG (*sf_realpath)(void *h, const char *path, char *out, int max);
+    LONG (*sf_stat)(void *h, const char *path, SfAttr *a);
+    /* how: 0 to read, 1 to write a new one, 2 to add to its end */
+    LONG (*sf_fopen)(void *h, const char *path, int how, void **fh);
+    LONG (*sf_read)(void *fh, UBYTE *b, LONG n);
+    LONG (*sf_write)(void *fh, const UBYTE *b, LONG n);
+    void (*sf_seek)(void *fh, ULONG pos);
+    LONG (*sf_fclose)(void *fh);
+    LONG (*sf_mkdir)(void *h, const char *path);
+    LONG (*sf_rmdir)(void *h, const char *path);
+    LONG (*sf_unlink)(void *h, const char *path);
+    LONG (*sf_rename)(void *h, const char *from, const char *to);
+    /* the last failure: the SFTP status (>0: 2 no such file, 3 not
+     * allowed, 4 failed...) or libssh2's code (<0) */
+    LONG (*sf_error)(void *h);
+};
+
 #ifdef NO_SSH
 /* The small CTerm: ssh lives in CTermSSH, which CTerm starts instead
  * (a stock Amiga never loads libssh2; AmiSSL wants fast memory anyway). */
