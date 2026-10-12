@@ -279,7 +279,21 @@ static void paste_(UBYTE *buf, ULONG bufsize)
                     t[i] = '\r';
             if (back)
                 scroll_view(0);
-            if (local) {
+            if (local && con_raw(T->con) && vt_bracketed_paste(vt)) {
+                /* a program in the tab that asked (an editor): the text
+                 * between the marks, so it is not typed (no indenting) */
+                UBYTE *w = AllocVec(sz + 12, MEMF_ANY);
+                if (!w) {
+                    beep();
+                    return;
+                }
+                CopyMem("\x1b[200~", w, 6);
+                CopyMem(t, w + 6, sz);
+                CopyMem("\x1b[201~", w + 6 + sz, 6);
+                if (!con_paste(T->con, w, sz + 12))
+                    beep();
+                FreeVec(w);
+            } else if (local) {
                 if (!con_paste(T->con, t, sz))
                     beep();   /* no memory: not silently lost */
             } else {

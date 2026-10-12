@@ -100,6 +100,14 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    with a raw reader): arrows 9B A-D, Shift+Left 9B 20 41, F1-F10
    9B 0~ - 9B 9~, Help 9B ?~, Esc 1B, Backspace 08, Del 7F. Verified in
    FS-UAE with Ahiru inside CTerm (keys, clicks, wheel, panes, sixel).
+1g. **For Sumi (0.3b29):** a Shell tab's raw program that asked for
+   bracketed paste (?2004h) gets Shift/Alt/Ctrl+arrows as xterm's
+   ESC [ 1 ; mod X (the keymap gives Ctrl/Alt+arrows as plain arrows),
+   and CTerm's paste wrapped in ESC [ 200~ / 201~. Ctrl-C..F stay
+   signals (a program takes them as keys itself). A long hunt on
+   2026-10-12 for "CTerm freezes on quit after Sumi" ended in Sumi: a
+   bebbo -fbbb=- miscompile in its toolkit overran its grid; CTerm was
+   only where the damage was noticed (Knowledge toolchain-and-testing.md).
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).

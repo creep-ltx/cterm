@@ -191,6 +191,24 @@ BOOL key(struct IntuiMessage *m)
             con_edit(T->con, a - KA_ED_LEFT);
             return TRUE;
         }
+        if (code >= 0x4C && code <= 0x4F && T->con && con_raw(T->con) &&
+            vt_bracketed_paste(vt) &&
+            (q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT | IEQUALIFIER_CONTROL |
+                  IEQUALIFIER_LALT | IEQUALIFIER_RALT))) {
+            /* a program of today (it asked for bracketed paste: Sumi):
+             * Shift/Alt/Ctrl+arrows as xterm's ESC [ 1 ; mod X - the
+             * keymap gives Ctrl and Alt+arrows as plain arrows */
+            static const char dirs[4] = { 'A', 'B', 'C', 'D' };
+            int m = 1 + (q & (IEQUALIFIER_LSHIFT | IEQUALIFIER_RSHIFT) ? 1 : 0) +
+                    (q & (IEQUALIFIER_LALT | IEQUALIFIER_RALT) ? 2 : 0) +
+                    (q & IEQUALIFIER_CONTROL ? 4 : 0);
+            buf[0] = 0x1b; buf[1] = '['; buf[2] = '1'; buf[3] = ';';
+            buf[4] = '0' + m; buf[5] = dirs[code - 0x4C];
+            if (back)
+                scroll_view(0);
+            con_keys(T->con, (UBYTE *)buf, 6);
+            return TRUE;
+        }
         {
             struct InputEvent ie;
             memset(&ie, 0, sizeof ie);
