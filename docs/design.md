@@ -7,7 +7,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
-**Installed:** 0.3b30 on the A1200 (CTerm and parts; CTermSSH 0.3b27) (Work:Utils/CTerm: CTerm, CTermSSH,
+**Installed:** 0.3b31 on the A1200 (CTerm; parts 0.3b30; CTermSSH 0.3b27) (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
 hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
 AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
@@ -119,6 +119,12 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    static struct (main.c tab0), not tab_new's - a new "-1 means none"
    field must be set there too, or CTerm takes socket 0 for a call and
    crashes the Amiga at start. Verified in FS-UAE and on the A1200.
+1i. **Alt characters in a host's tab (0.3b31):** with Alt as Meta, a
+   plain ASCII character the keymap gives only with Alt is sent as
+   itself, not ESC + the key without Alt: the Swedish keymap's # is
+   Shift+Alt+3 and reached the board as ESC £ (nothing shown). Alt +
+   letters give Latin-1 there, so they stay Meta. Verified in FS-UAE
+   with keymap s against BBX.
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).

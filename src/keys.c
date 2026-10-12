@@ -281,6 +281,21 @@ BOOL key(struct IntuiMessage *m)
                                    : q;
             ie.ie_EventAddress = prev;
             n = MapRawKey(&ie, (STRPTR)buf + 1, sizeof buf - 1, NULL);
+            if (meta) {
+                /* a plain ASCII character the keymap gives only with Alt
+                 * (Swedish # is Shift+Alt+3; @ { [ on others): that
+                 * character, not Meta - Alt+letters are Latin-1 there */
+                UBYTE c[4];
+                LONG k;
+                ie.ie_Qualifier = q;
+                k = MapRawKey(&ie, (STRPTR)c, sizeof c, NULL);
+                if (k == 1 && c[0] >= 32 && c[0] < 127 &&
+                    !(n == 1 && (UBYTE)buf[1] == c[0])) {
+                    buf[1] = c[0];
+                    n = 1;
+                    meta = FALSE;
+                }
+            }
         }
         if (n <= 0)
             return TRUE;
