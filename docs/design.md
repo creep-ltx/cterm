@@ -7,7 +7,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
-**Installed:** 0.3b27 on the A1200 (CTerm, CTermSSH; parts as 0.3b24) (Work:Utils/CTerm: CTerm, CTermSSH,
+**Installed:** 0.3b30 on the A1200 (CTerm and parts; CTermSSH 0.3b27) (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
 hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
 AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
@@ -108,6 +108,17 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    2026-10-12 for "CTerm freezes on quit after Sumi" ended in Sumi: a
    bebbo -fbbb=- miscompile in its toolkit overran its grid; CTerm was
    only where the damage was noticed (Knowledge toolchain-and-testing.md).
+1h. **A call rings in the background (0.3b30):** the user could not
+   change tabs while a board was called. A telnet call (HOST, the Call
+   window, the phone book, Return to call again) now looks the name up
+   and connects without blocking; loop_round waits for it with
+   everything else (calls_fds/calls_sigmask, a 1 s tick for the 30 s
+   limit) and calls_poll takes the answer (net.c call_out). Esc in that
+   tab gives up; closing the tab drops it. ssh, the file browser, serial
+   lines and ARexx's CALL still wait as before. Trap met: tab 0 is a
+   static struct (main.c tab0), not tab_new's - a new "-1 means none"
+   field must be set there too, or CTerm takes socket 0 for a call and
+   crashes the Amiga at start. Verified in FS-UAE and on the A1200.
 2. Open, never reproduced: one yellow (recoverable) guru on the 030/50
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).

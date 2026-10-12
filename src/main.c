@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b29 (12.10.2026)";
+const char version[] = "$VER: CTerm 0.3b30 (12.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -763,7 +763,7 @@ struct Tab *tab_new(void)
         FreeVec(t);
         return NULL;
     }
-    t->t_sock = t->t_lfd = -1;
+    t->t_sock = t->t_lfd = t->t_csock = -1;
     t->t_local = TRUE;
     /* the default characters (Settings, Text); a phone book place, a
      * call or the browser may change them after */
@@ -827,6 +827,7 @@ static void tab_drop(struct Tab *t)
     T = t;
     term_sync(t);                       /* its last writes, into the log */
     log_stop();
+    call_stop(FALSE);                   /* a call still ringing */
     if (sock >= 0) {
         if (sshmode) {
             ssh_close(T->ssh);
@@ -1046,13 +1047,7 @@ static void run(void)
         say(keys_word(KA_STOP));
         say(" gives up]\x1b[0m\r\n");
         refresh();
-        if (!connect_out()) {
-            say("\x1b[2m[");
-            say(keys_word(KA_REDIAL));
-            say(" calls again]\x1b[0m\r\n");
-        }
-        else
-            rexx_after_call();          /* its place's login script */
+        call_out();                     /* rings while the window goes on */
     } else {
         lfd = listen_on();
         if (lfd < 0)
@@ -1151,7 +1146,8 @@ BOOL loop_round(LONG xfd, LONG ms)
     ULONG rxsig = rexx_sigmask();
     ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
                  xwin_sigmask() | bookwin_sigmask() | sersig | rxsig |
-                 hidesig | about_sigmask();
+                 hidesig | about_sigmask() | calls_sigmask();
+    BOOL dialing = calls_any();
     BOOL hostdata = FALSE, ready = FALSE;
     ULONG consigs = 0;
     int i;
@@ -1179,12 +1175,14 @@ BOOL loop_round(LONG xfd, LONG ms)
         if (loop_wfd > maxfd)
             maxfd = loop_wfd;
     }
-    if (maxfd < 0 && ms == 0) {
+    if (dialing)                        /* a call ringing: its answer */
+        maxfd = calls_fds(&wr, maxfd);
+    if (maxfd < 0 && ms == 0 && !dialing) {
         /* a look, no wait - not a WaitSelect with no sockets and no
          * time: FS-UAE's waited for a signal there (a file browser's
          * download stood still) */
         sigs = SetSignal(0, sigs) & sigs;
-    } else if (maxfd < 0 && (ms < 0 || !SocketBase)) {
+    } else if (maxfd < 0 && (ms < 0 || !SocketBase) && !dialing) {
         /* no network: the plain Amiga wait - the socket library's
          * WaitSelect costs far more per round, and a flood of tiny
          * writes is all rounds. A serial line's transfer waits here
@@ -1213,9 +1211,13 @@ BOOL loop_round(LONG xfd, LONG ms)
         struct timeval tv;
         tv.tv_sec = ms > 0 ? ms / 1000 : 0;
         tv.tv_usec = ms > 0 ? (ms % 1000) * 1000 : 0;
+        if (dialing && (ms < 0 || ms > 1000)) {
+            tv.tv_sec = 1;              /* a call's time limit: each second */
+            tv.tv_usec = 0;
+        }
         ULONG want = sigs;
-        n = WaitSelect(maxfd + 1, &rd, loop_wfd >= 0 ? &wr : NULL, NULL,
-                       ms >= 0 ? &tv : NULL, &sigs);
+        n = WaitSelect(maxfd + 1, &rd, loop_wfd >= 0 || dialing ? &wr : NULL,
+                       NULL, ms >= 0 || dialing ? &tv : NULL, &sigs);
         /* a socket already readable returns at once without the signals
          * (lwip-amiga, seen on the A1200): during a stream of host data
          * the window was never served - Esc did not stop a transfer. The
@@ -1283,6 +1285,8 @@ BOOL loop_round(LONG xfd, LONG ms)
         if (vt_take_bell(vt) && pane_of(T))
             beep();
     }
+    if (dialing)
+        calls_poll(&wr, n, n == 0 && !sigs);
     T = shown;
     title_update();
     if (win && !win->MenuStrip && menu)
@@ -1511,6 +1515,7 @@ static BOOL fast_ok(int argc)
 static int cterm_main(int argc, char **argv)
 {
     tab0.t_utf8 = TRUE;
+    tab0.t_csock = -1;                  /* no call ringing */
     int rc = RETURN_OK;
     (void)version;
     (void)argv;

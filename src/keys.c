@@ -26,16 +26,7 @@ static void redial(void)
     say(keys_word(KA_STOP));
     say(" gives up]\x1b[0m\r\n");
     refresh();
-    if (connect_out()) {
-        if (!T->t_serial)               /* a line says its own */
-            say("\x1b[2m[connected]\x1b[0m\r\n");
-        rexx_after_call();              /* its place's login script */
-    } else {
-        say("\x1b[2m[");
-        say(keys_word(KA_REDIAL));
-        say(" calls again]\x1b[0m\r\n");
-    }
-    refresh();                          /* the screen waited with the call */
+    call_out();                         /* rings while the window goes on */
 }
 
 /* One of the [window] actions: a menu item's, a tab, the history. */
@@ -227,8 +218,12 @@ BOOL key(struct IntuiMessage *m)
     }
     if (code != 0x7A && code != 0x7B &&
         (T->t_fkind || (dialhost[0] && !linked))) {
-        /* the call ended: only the redial key does something */
-        if (keys_find(KC_CALL, k) == KA_REDIAL)
+        /* the call ended: only the redial key does something; while
+         * one rings, the stop key gives up */
+        if (calling(T)) {
+            if (keys_find(KC_CALL, k) == KA_STOP)
+                call_stop(TRUE);
+        } else if (keys_find(KC_CALL, k) == KA_REDIAL)
             redial();
         return TRUE;
     }

@@ -227,6 +227,12 @@ struct Tab {
     void *t_rf;                         /* ... its connection (Parts/Files) */
     BOOL t_fui;                         /* ... its panels are up: keys and
                                            clicks are theirs */
+    LONG t_csock;                       /* a call ringing: its socket (-1),
+                                           net.c's call_out */
+    void *t_look;                       /* ... its name lookup, or NULL */
+    LONG t_cport;                       /* ... the port it calls */
+    struct timeval t_csince;            /* ... when it began */
+    LONG t_cidle;                       /* ... quiet seconds (no clock) */
 };
 
 /* A pane: a part of the window showing a tab (pane.c). As many as
@@ -522,6 +528,13 @@ void numstr_cat(char *out, LONG n);
 void say(const char *s);
 LONG listen_on(void);
 BOOL connect_out(void);
+void call_out(void);                    /* a call, ringing in the background */
+BOOL calling(struct Tab *t);
+void call_stop(BOOL words);
+ULONG calls_sigmask(void);
+LONG calls_fds(fd_set *wr, LONG maxfd);
+BOOL calls_any(void);
+void calls_poll(fd_set *wr, LONG n, BOOL quiet);
 void connected(void);
 void hung_up(void);
 void send_str(const char *s);

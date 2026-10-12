@@ -116,9 +116,7 @@ static void call_tab(const char *host, BOOL pc, BOOL ssh)
     say(dialhost);
     say_key("... ", KA_STOP, " gives up]\x1b[0m\r\n");
     refresh();
-    if (!connect_out())
-        say_key("\x1b[2m[", KA_REDIAL, " calls again]\x1b[0m\r\n");
-    refresh();
+    call_out();                         /* rings while the window goes on */
 }
 
 static void callwin_run(void)

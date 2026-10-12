@@ -163,22 +163,19 @@ void net_lookups_wait(void)
         Delay(10);
 }
 
-/* 1: found (*addr), 0: no such host, -1: given up (Esc, the close gadget,
- * Ctrl-C, NET_SECS), -2: could not start the lookup. */
-static int lookup(const char *host, ULONG *addr)
+/* A lookup started (NULL: could not be); its signal tells when it is
+ * done. */
+static struct Lookup *lookup_start(const char *host)
 {
     struct Lookup *l = AllocVec(sizeof *l, MEMF_PUBLIC | MEMF_CLEAR);
-    struct timeval t0, now;
-    LONG idle = 0;
-    int r = -1;
     if (!l)
-        return -2;
+        return NULL;
     strncpy(l->host, host, sizeof l->host - 1);
     l->parent = FindTask(NULL);
     l->sig = AllocSignal(-1);
     if (l->sig < 0) {
         FreeVec(l);
-        return -2;
+        return NULL;
     }
     SetSignal(0, 1UL << l->sig);
     Forbid();
@@ -191,9 +188,36 @@ static int lookup(const char *host, ULONG *addr)
         Permit();
         FreeSignal(l->sig);
         FreeVec(l);
-        return -2;
+        return NULL;
     }
     Permit();
+    return l;
+}
+
+/* A lookup's end, answered or given up on: it frees l itself if it still
+ * runs. */
+static void lookup_drop(struct Lookup *l)
+{
+    BYTE sig = l->sig;
+    Forbid();
+    if (l->done)
+        FreeVec(l);                     /* answered (perhaps just now) */
+    else
+        l->abandoned = TRUE;            /* it frees l itself */
+    Permit();
+    FreeSignal(sig);
+}
+
+/* 1: found (*addr), 0: no such host, -1: given up (Esc, the close gadget,
+ * Ctrl-C, NET_SECS), -2: could not start the lookup. */
+static int lookup(const char *host, ULONG *addr)
+{
+    struct Lookup *l = lookup_start(host);
+    struct timeval t0, now;
+    LONG idle = 0;
+    int r = -1;
+    if (!l)
+        return -2;
     term_now(&t0);
     for (;;) {
         struct timeval tv;
@@ -221,13 +245,7 @@ static int lookup(const char *host, ULONG *addr)
             NET_SECS)
             break;
     }
-    Forbid();
-    if (l->done)
-        FreeVec(l);                     /* answered (perhaps just now) */
-    else
-        l->abandoned = TRUE;            /* it frees l itself */
-    Permit();
-    FreeSignal(l->sig);
+    lookup_drop(l);
     return r;
 }
 
@@ -559,6 +577,212 @@ static BOOL dial(void)
     tstate = 0;
     tel_opts(TRUE);                     /* every option off, as it begins */
     return TRUE;
+}
+
+/* A telnet call that rings beside everything else: the window, its tabs
+ * and their Shells go on while the board answers (or not). The name is
+ * looked up in its own process, the connection made without blocking;
+ * the main loop (loop_round) waits for both with everything else, and
+ * calls_poll takes their answers. The stop key gives up (in that tab).
+ * ARexx's CALL still waits (its script wants the answer). */
+static void call_ended(BOOL ok, const char *why)
+{
+    if (T->t_look) {
+        lookup_drop((struct Lookup *)T->t_look);
+        T->t_look = NULL;
+    }
+    if (!ok) {
+        if (T->t_csock >= 0)
+            CloseSocket(T->t_csock);
+        T->t_csock = -1;
+        say(why);
+        say_key("\x1b[2m[", KA_REDIAL, " calls again]\x1b[0m\r\n");
+        refresh();
+        return;
+    }
+    {
+        LONG s = T->t_csock, on = 1, off = 0;
+        T->t_csock = -1;
+        IoctlSocket(s, NB_FIONBIO, (APTR)&off);
+        setsockopt(s, IPPROTO_TCP, 1 /* TCP_NODELAY */, &on, sizeof on);
+        sock = s;
+    }
+    tstate = 0;
+    tel_opts(TRUE);                     /* every option off, as it begins */
+    say("\x1b[2m[connected]\x1b[0m\r\n");
+    refresh();
+    rexx_after_call();                  /* its place's login script */
+    refresh();
+}
+
+/* The connection to addr begun (it may be made at once). */
+static void call_connect(ULONG addr)
+{
+    struct sockaddr_in sa;
+    LONG s, on = 1;
+    memset(&sa, 0, sizeof sa);
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(T->t_cport);
+    memcpy(&sa.sin_addr, &addr, 4);
+    s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) {
+        call_ended(FALSE, "\x1b[1;31m[no socket for the call]\x1b[0m\r\n");
+        return;
+    }
+    T->t_csock = s;
+    IoctlSocket(s, NB_FIONBIO, (APTR)&on);
+    if (connect(s, (struct sockaddr *)&sa, sizeof sa) == 0)
+        call_ended(TRUE, NULL);
+    /* else under way (or refused): the main loop waits for it to be
+     * writable, and getpeername tells which */
+}
+
+/* A call out from the shown tab (T), with the words said: a telnet call
+ * over TCP rings in the background; the rest (a line, ssh, a browser)
+ * as before. */
+void call_out(void)
+{
+    char name[128], *colon;
+    ULONG a;
+    LONG p = 23;
+    if (!T->t_serial && !SocketBase)
+        SocketBase = OpenLibrary("bsdsocket.library", 4);
+    if (T->t_serial || T->t_fkind || sshmode || !SocketBase) {
+        if (!connect_out())
+            say_key("\x1b[2m[", KA_REDIAL, " calls again]\x1b[0m\r\n");
+        else
+            rexx_after_call();          /* its place's login script */
+        refresh();
+        return;
+    }
+    if (calling(T))
+        return;
+    strncpy(name, dialhost, sizeof name - 1);
+    name[sizeof name - 1] = 0;
+    colon = strchr(name, ':');
+    if (colon) {
+        *colon = 0;
+        p = atol(colon + 1);
+    }
+    if (p <= 0 || p > 65535) {
+        call_ended(FALSE, "\x1b[1;31m[no such port]\x1b[0m\r\n");
+        return;
+    }
+    T->t_cport = p;
+    T->t_cidle = 0;
+    term_now(&T->t_csince);
+    a = inet_addr((STRPTR)name);
+    if (a != INADDR_NONE) {
+        call_connect(a);
+        return;
+    }
+    say("\x1b[2m[looking up the name...]\x1b[0m\r\n");
+    refresh();
+    if (!(T->t_look = lookup_start(name)))
+        call_ended(FALSE,
+                   "\x1b[1;31m[could not look up the name]\x1b[0m\r\n");
+}
+
+BOOL calling(struct Tab *t)
+{
+    return t->t_csock >= 0 || t->t_look != NULL;
+}
+
+/* The stop key in a tab that is calling (say: in words), or the tab
+ * gone (no words). */
+void call_stop(BOOL words)
+{
+    if (!calling(T))
+        return;
+    if (words)
+        call_ended(FALSE, "\x1b[1;31m[given up]\x1b[0m\r\n");
+    else {
+        if (T->t_look)
+            lookup_drop((struct Lookup *)T->t_look);
+        T->t_look = NULL;
+        if (T->t_csock >= 0)
+            CloseSocket(T->t_csock);
+        T->t_csock = -1;
+    }
+}
+
+/* For the main loop's wait: the lookups' signals; the connections into
+ * wr (the highest socket out, maxfd as it was if none). */
+ULONG calls_sigmask(void)
+{
+    ULONG m = 0;
+    int i;
+    for (i = 0; i < ntabs; i++)
+        if (tabs[i]->t_look)
+            m |= 1UL << ((struct Lookup *)tabs[i]->t_look)->sig;
+    return m;
+}
+
+LONG calls_fds(fd_set *wr, LONG maxfd)
+{
+    int i;
+    for (i = 0; i < ntabs; i++) {
+        LONG s = tabs[i]->t_csock;
+        if (s >= 0) {
+            FD_SET(s, wr);
+            if (s > maxfd)
+                maxfd = s;
+        }
+    }
+    return maxfd;
+}
+
+BOOL calls_any(void)
+{
+    int i;
+    for (i = 0; i < ntabs; i++)
+        if (calling(tabs[i]))
+            return TRUE;
+    return FALSE;
+}
+
+/* After the main loop's wait: each call's news (T is set per tab). quiet:
+ * the wait ended with nothing at all (a second without a clock). */
+void calls_poll(fd_set *wr, LONG n, BOOL quiet)
+{
+    struct Tab *keep = T;
+    struct timeval now;
+    int i;
+    term_now(&now);
+    for (i = 0; i < ntabs; i++) {
+        T = tabs[i];
+        if (!calling(T))
+            continue;
+        if (quiet)
+            T->t_cidle++;
+        if (T->t_look) {
+            struct Lookup *l = (struct Lookup *)T->t_look;
+            if (l->done) {
+                ULONG a = l->addr;
+                BOOL found = l->found;
+                lookup_drop(l);
+                T->t_look = NULL;
+                if (!found)
+                    call_ended(FALSE,
+                               "\x1b[1;31m[no such host]\x1b[0m\r\n");
+                else
+                    call_connect(a);
+                continue;
+            }
+        } else if (n > 0 && FD_ISSET(T->t_csock, wr)) {
+            struct sockaddr_in peer;
+            socklen_t len = sizeof peer;
+            call_ended(getpeername(T->t_csock, (struct sockaddr *)&peer,
+                                   &len) == 0,
+                       "\x1b[1;31m[the call was refused]\x1b[0m\r\n");
+            continue;
+        }
+        if ((now.tv_secs ? (LONG)(now.tv_secs - T->t_csince.tv_secs)
+                         : T->t_cidle) >= NET_SECS)
+            call_ended(FALSE,
+                       "\x1b[1;31m[the call was not answered]\x1b[0m\r\n");
+    }
+    T = keep;
 }
 
 /* The window got a new size while CTerm waits: laid out, and the hosts
@@ -896,11 +1120,7 @@ void call_place(const BookEntry *e, BOOL newtab)
     say(e->name[0] ? e->name : dialhost);
     say_key("... ", KA_STOP, " gives up]\x1b[0m\r\n");
     refresh();
-    if (!connect_out())
-        say_key("\x1b[2m[", KA_REDIAL, " calls again]\x1b[0m\r\n");
-    else
-        rexx_after_call();              /* its login script */
-    refresh();
+    call_out();                         /* rings while the window goes on */
 }
 
 /* Call phone book entry i. */
