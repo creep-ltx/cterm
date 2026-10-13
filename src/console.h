@@ -28,6 +28,7 @@ enum { CE_LEFT, CE_RIGHT, CE_START, CE_END, CE_WORDLEFT, CE_WORDRIGHT,
        CE_BACK, CE_DELETE, CE_WORDBACK, CE_KILLSTART, CE_KILLEND, CE_CLEAR,
        CE_OLDER, CE_NEWER, CE_SEARCH, CE_COMPLETE, CE_ACCEPT, CE_EOF, CE_N };
 void con_edit(struct Con *c, int what);  /* cooked: an editing key */
+BOOL con_keeping(struct Con *c);         /* typed-ahead keys are kept as keys now */
 void con_reply(struct Con *c, const UBYTE *b, LONG n); /* DSR replies... */
 BOOL con_paste(struct Con *c, const UBYTE *b, LONG n); /* as text */
 void con_close_gadget(struct Con *c);   /* the window's close gadget */
@@ -59,5 +60,6 @@ int term_cursor_x(void *tab);
 int term_cursor_y(void *tab);
 int term_cols(void *tab);
 int term_rows(void *tab);
+int term_keys_ahead(void *tab);         /* the shell asked: typed-ahead keys stay keys */
 
 #endif

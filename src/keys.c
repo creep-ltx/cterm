@@ -176,7 +176,7 @@ BOOL key(struct IntuiMessage *m)
         }
         if (code == 0x7A) { scroll_view(back + 3); return TRUE; }
         if (code == 0x7B) { scroll_view(back - 3); return TRUE; }
-        if (T->con && !con_raw(T->con) && (a = keys_find(KC_SHELL, k))) {
+        if (T->con && !con_raw(T->con) && !con_keeping(T->con) && (a = keys_find(KC_SHELL, k))) {
             if (back)
                 scroll_view(0);
             con_edit(T->con, a - KA_ED_LEFT);

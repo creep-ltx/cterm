@@ -81,6 +81,11 @@ struct Con {
     int nhist, hpos;
     UBYTE spat[64];                     /* a history search's text, or "" */
 
+    /* keys typed while nobody reads, kept as keys (a shell that edits its
+     * own line asked, CSI ?7727 h): as bash's terminal keeps them */
+    UBYTE ahead[INMAX];
+    LONG aheadlen;
+
     /* a paste not yet taken: fed in as the reader asks for it */
     UBYTE *paste;
     LONG plen, ppos;
@@ -769,8 +774,66 @@ void con_keys(struct Con *c, const UBYTE *b, LONG n)
     if (c->rawmode) {
         push_input(c, b, n);
         serve(c);
+    } else if (c->nreads == 0 && !c->editing && term_keys_ahead(c->user)) {
+        /* nobody reads and the shell edits its own line (csh): the keys
+         * wait as keys - Tab and all - for whoever reads next, as on a
+         * Unix terminal; the letters are shown as typed (echo) */
+        for (i = 0; i < n && c->aheadlen < INMAX; i++) {
+            UBYTE k = b[i];
+            c->ahead[c->aheadlen++] = k;
+            if ((k >= 32 && k < 127) || k >= 160) term_take(c->user, &k, 1);
+            else if (k == 13) term_take(c->user, (const UBYTE *)"\n", 1);
+        }
+        term_render_soon(c->user);
     } else
         edit_key(c, b, n);
+}
+
+/* What was typed ahead goes to the reader that came: a raw one (the shell's
+ * own editor) gets the keys as they were, a cooked one (a program, the ROM
+ * Shell) gets them through the line editor now, as if typed now. */
+static void ahead_give(struct Con *c)
+{
+    LONG n = c->aheadlen;
+    if (!n) return;
+    c->aheadlen = 0;
+    if (c->rawmode) {
+        push_input(c, c->ahead, n);
+        serve(c);
+    } else {
+        /* as if typed now: Return ends the line, Tab completes, Backspace
+         * and Del delete, letters go in; other sequences (arrows) are
+         * dropped - a program reading a line has no use for them */
+        UBYTE *t = AllocVec(n, MEMF_ANY);
+        LONG i;
+        if (!t) return;
+        CopyMem(c->ahead, t, n);
+        for (i = 0; i < n; i++) {
+            UBYTE k = t[i];
+            if (k == 13 || k == 10) {
+                con_edit(c, CE_ACCEPT);
+                if (con_keeping(c)) {               /* the reader is served: the rest waits again */
+                    LONG left = n - i - 1;
+                    CopyMem(t + i + 1, c->ahead, left);
+                    c->aheadlen = left;
+                    break;
+                }
+                continue;
+            }
+            else if (k == 9) con_edit(c, CE_COMPLETE);
+            else if (k == 8) con_edit(c, CE_BACK);
+            else if (k == 0x7F) con_edit(c, CE_DELETE);
+            else if (k == 0x9B || k == 0x1B) {      /* a sequence: to its final byte */
+                for (i++; i < n && !(t[i] >= 0x40 && t[i] <= 0x7E && !(k == 0x1B && t[i] == '[')); i++) ;
+            } else edit_key(c, &k, 1);
+            if (c->rawmode) {                       /* the line's end gave it to a raw reader */
+                push_input(c, t + i + 1, n - i - 1);
+                serve(c);
+                break;
+            }
+        }
+        FreeVec(t);
+    }
 }
 
 /* Pasted text, typed in as text: added to what is still going in. Newlines
@@ -813,6 +876,13 @@ void con_close_gadget(struct Con *c)
         c->eof_pending = TRUE;
         serve(c);
     }
+}
+
+/* Keys typed now are kept as keys (nobody reads, the shell asked, ?7727):
+ * the key table gives them as the keymap's bytes, not as editing actions. */
+BOOL con_keeping(struct Con *c)
+{
+    return c && !c->rawmode && c->nreads == 0 && !c->editing && term_keys_ahead(c->user);
 }
 
 /* A program has the console raw (Ed, More): it may hold the window. */
@@ -936,6 +1006,7 @@ void con_handle(struct Con *c, ULONG sigs)
             }
             if (c->nreads < READMAX) {
                 c->reads[c->nreads++] = p;
+                if (!c->rawmode) ahead_give(c);     /* typed ahead: through the editor now */
                 serve(c);
                 paste_feed(c);          /* the next of a paste, if any */
                 if (c->nreads) {
@@ -950,6 +1021,7 @@ void con_handle(struct Con *c, ULONG sigs)
         case ACTION_WAIT_CHAR:
             if (c->rawmode)
                 paste_feed(c);
+            if (c->rawmode && c->aheadlen) ahead_give(c);
             if (c->inlen > 0 || c->eof_pending) {
                 ReplyPkt(p, DOSTRUE, 0);
             } else if (p->dp_Arg1 <= 0) {
@@ -979,8 +1051,19 @@ void con_handle(struct Con *c, ULONG sigs)
             if (c->rawmode != (p->dp_Arg1 != 0))
                 term_raw(c->user, p->dp_Arg1 != 0);
             c->rawmode = p->dp_Arg1 != 0;
-            if (c->rawmode)
+            if (c->rawmode) {
                 c->editing = FALSE;
+                ahead_give(c);              /* the shell's editor: the keys as typed */
+            } else if (c->inlen && term_keys_ahead(c->user)) {
+                /* back to cooked with raw keys still queued (typed after the
+                 * shell's Return): they wait as kept keys, for the editor of
+                 * whoever reads next (Ask) or the shell's next prompt */
+                LONG n = c->inlen < INMAX - c->aheadlen ? c->inlen : INMAX - c->aheadlen;
+                memmove(c->ahead + n, c->ahead, c->aheadlen);
+                CopyMem(c->inq, c->ahead, n);
+                c->aheadlen += n;
+                c->inlen = 0;
+            }
             term_flush(c->user);
             ReplyPkt(p, DOSTRUE, 0);
             break;

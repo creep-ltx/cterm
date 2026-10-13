@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b32 (13.10.2026)";
+const char version[] = "$VER: CTerm 0.3b33 (13.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -238,6 +238,7 @@ void term_write(void *t, const UBYTE *b, LONG n)
 }
 /* the tab's own size: its pane's */
 int term_cols(void *t) { return vt_cols(((struct Tab *)t)->t_vt); }
+int term_keys_ahead(void *t) { term_sync(t); return vt_keys_ahead(((struct Tab *)t)->t_vt); }
 int term_rows(void *t) { return vt_rows(((struct Tab *)t)->t_vt); }
 int term_cursor_x(void *t)
 {

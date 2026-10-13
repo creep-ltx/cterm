@@ -60,6 +60,7 @@ struct Vt {
     int top, bot;                   /* the scroll region, inclusive */
     int autowrap, origin, insert, lnm, cursor_on, app_cursor, app_keypad;
     int bracketed, reverse, utf8;
+    int keysahead;                  /* ?7727: keys typed ahead stay keys (a shell editing its own line) */
     int mouse, mouse_sgr;               /* 9, 1000, 1002, 1003; SGR form */
     int focus, sync;                    /* 1004 focus reports; 2026 */
     int cshape, cblink;                 /* DECSCUSR: 0 block, 1 underline,
@@ -930,6 +931,7 @@ static void full_reset(Vt *v)
     v->lnm = v->amigamode;                  /* the Amiga: LF is a new line */
     v->cursor_on = 1;
     v->app_cursor = v->app_keypad = v->bracketed = v->reverse = 0;
+    v->keysahead = 0;
     v->mouse = v->mouse_sgr = v->focus = v->sync = 0;
     v->cshape = v->cblink = 0;
     v->g[0] = v->g[1] = 'B';
@@ -1032,6 +1034,7 @@ static void set_mode(Vt *v, int on)
                 }
                 break;
             case 2004: v->bracketed = on; break;
+            case 7727: v->keysahead = on; break;
             case 9: case 1000: case 1002: case 1003:
                 v->mouse = on ? p : 0;  /* the last one asked wins */
                 break;
@@ -1059,6 +1062,7 @@ static int mode_state(Vt *v, int p)
     case 25: return v->cursor_on ? 1 : 2;
     case 1049: return v->alt ? 1 : 2;
     case 2004: return v->bracketed ? 1 : 2;
+    case 7727: return v->keysahead ? 1 : 2;
     case 9: case 1000: case 1002: case 1003: return v->mouse == p ? 1 : 2;
     case 1006: return v->mouse_sgr ? 1 : 2;
     case 1004: return v->focus ? 1 : 2;
@@ -3145,6 +3149,7 @@ int vt_history(const Vt *v) { return v->hist_len; }
 int vt_app_cursor(const Vt *v) { return v->app_cursor; }
 int vt_app_keypad(const Vt *v) { return v->app_keypad; }
 int vt_bracketed_paste(const Vt *v) { return v->bracketed; }
+int vt_keys_ahead(const Vt *v) { return v->keysahead; }
 int vt_alt_screen(const Vt *v) { return v->alt; }
 int vt_reverse_video(const Vt *v) { return v->reverse; }
 int vt_mouse(const Vt *v, int *sgr) { *sgr = v->mouse_sgr; return v->mouse; }
