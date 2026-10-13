@@ -128,7 +128,8 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b33 (13.10.2026)";
+/* the version string: src/ver.c, linked first (see there) */
+extern const char version[];
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;

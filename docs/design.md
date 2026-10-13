@@ -7,6 +7,13 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
+**The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
+across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
+
+**2026-10-13, 0.3b33:** `CSI ?7727 h` (csh asks for it): keys typed while nobody reads stay keys
+- echoed, then handed to the next reader as typed (raw to csh, whose Tab then completes; through
+the line editor to a program reading a line, like Ask). As on a Unix terminal.
+
 **2026-10-13, 0.3b32 (INSTALLED on the A1200 with make deploy, 0.3b31 kept as CTerm-0.3b31.bak and Parts-0.3b31.bak; the user's prefs have shell=csh; parts PART_VERSION 11, copy them
 together):** a new Shell tab can start a shell of the person's after S:Shell-Startup:
 `shell=` in CTerm.prefs (Settings, Files tab, "A new Shell tab ... Then runs"), or `SHELL/K`

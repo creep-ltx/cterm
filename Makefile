@@ -23,8 +23,12 @@ HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h 
 # CTerm: everything but ssh (small enough for a stock A1200)
 # -flto: the parts (split into files) inlined across files again - the
 # split had cost a stock A1200 ~1 s of conbench's 42 (measured 2026-10-10)
-CTerm: $(SRC) $(HDR) src/ppaint.o src/keymap.o
-	$(CC) $(CFLAGS) -flto -DNO_SSH $(SRC) src/ppaint.o src/keymap.o -o CTerm
+CTerm: $(SRC) $(HDR) src/ppaint.o src/keymap.o src/ver.o
+	$(CC) $(CFLAGS) -flto -DNO_SSH src/ver.o $(SRC) src/ppaint.o src/keymap.o -o CTerm
+
+# the version string first in the code, not through -flto (src/ver.c)
+src/ver.o: src/ver.c
+	$(CC) -c -noixemul -m68020 src/ver.c -o src/ver.o
 
 # The keys (keymap.c) on their own, without bebbo's backend pass: it
 # compiled keys_find's loop as cmp.w (a0)+ and then a0 used as if it had
@@ -33,9 +37,9 @@ src/keymap.o: src/keymap.c $(HDR)
 	$(CC) $(CFLAGS) -fbbb=- -c src/keymap.c -o $@
 
 # CTermSSH: the same with ssh (libssh2 on AmiSSL), started by CTerm for ssh
-CTermSSH: $(SRC) $(HDR) src/ssh.c src/ppaint.o src/keymap.o $(TP)/lib/libssh2.a
+CTermSSH: $(SRC) $(HDR) src/ssh.c src/ppaint.o src/keymap.o src/ver.o $(TP)/lib/libssh2.a
 	$(CC) $(CFLAGS) $(SSHINC) -c src/ssh.c -o src/ssh.o
-	$(CC) $(CFLAGS) -flto $(SRC) src/ssh.o src/ppaint.o src/keymap.o $(SSHLIB) -o CTermSSH
+	$(CC) $(CFLAGS) -flto src/ver.o $(SRC) src/ssh.o src/ppaint.o src/keymap.o $(SSHLIB) -o CTermSSH
 
 # The hand-written inner loops (vasm, Motorola syntax)
 src/ppaint.o: src/ppaint.s
