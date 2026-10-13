@@ -316,6 +316,10 @@ static Object *page_files(void)
     g = r_group("A phone book entry's own drawers come first "
                 "(Project/Phone book...)");
     r_put(p, g);
+    /* a shell of the person's after S:Shell-Startup (csh); empty: the Shell alone */
+    g = r_group("A new Shell tab (empty: the Shell alone)");
+    r_add(g, r_string(S_SHELL, shellcmd, sizeof shellcmd, FALSE), "Then runs");
+    r_put(p, g);
     return r_wrap(p);
 }
 
@@ -980,6 +984,7 @@ static void finish_settings_(int how)
         }
 #define MTXT(id, f) if ((t = (const char *)get_attr(id, STRINGA_TextVal))) { \
         strncpy(f, t, sizeof f - 1); f[sizeof f - 1] = 0; }
+        MTXT(S_SHELL, shellcmd);
         MTXT(S_MINIT, modem.init);
         MTXT(S_MINIT2, modem.init2);
         MTXT(S_MDIAL, modem.dial);

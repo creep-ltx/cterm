@@ -128,7 +128,7 @@ struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
 
-const char version[] = "$VER: CTerm 0.3b31 (12.10.2026)";
+const char version[] = "$VER: CTerm 0.3b32 (13.10.2026)";
 
 struct Library *SocketBase = NULL;
 struct Library *KeymapBase = NULL;
@@ -398,6 +398,7 @@ static void hex_cat(char *out, ULONG v, int digits)
     strcat(out, t);
 }
 
+char shellcmd[128];              /* a new Shell tab runs this after S:Shell-Startup (csh) */
 BOOL envonly;                    /* Use: until a reboot, not saved */
 BOOL used_only;                  /* the settings were Used, not Saved */
 BOOL saved_pc;                   /* the setting; pcmode may be PC's */
@@ -474,6 +475,10 @@ static void load_prefs_(char *buf)
             else if (!stricmp(p, "ownscreen")) ownprog = val[0] != '0';
             else if (!stricmp(p, "keyuser")) userkey[0] = val[0];
             else if (!stricmp(p, "keypass")) passkey[0] = val[0];
+            else if (!stricmp(p, "shell")) {
+                strncpy(shellcmd, val, sizeof shellcmd - 1);
+                shellcmd[sizeof shellcmd - 1] = 0;
+            }
             else if (!stricmp(p, "dldir")) {
                 strncpy(dldir, val, sizeof dldir - 1);
                 dldir[sizeof dldir - 1] = 0;
@@ -560,6 +565,7 @@ static void save_prefs_(char *buf)
     if (!ownprog) strcat(buf, "\nownscreen=0");
     if (dwindle) strcat(buf, "\ndwindle=1");
     if (gaps) { strcat(buf, "\ngaps="); numstr_cat(buf, gaps); }
+    if (shellcmd[0]) { strcat(buf, "\nshell="); strcat(buf, shellcmd); }
     if (dldir[0]) { strcat(buf, "\ndldir="); strcat(buf, dldir); }
     if (uldir[0]) { strcat(buf, "\nuldir="); strcat(buf, uldir); }
     if (bgfile[0]) {
@@ -885,7 +891,7 @@ struct Tab *shell_tab(void)
         return NULL;
     T = t;
     vt_set_amiga(vt, 1);
-    T->con = con_start("S:Shell-Startup", T);
+    T->con = con_start("S:Shell-Startup", shellcmd, T);
     if (!T->con)
         say("CTerm could not start a Shell.\r\n");
     T = keep;
@@ -1016,7 +1022,7 @@ static void run(void)
         BPTR l = Lock((STRPTR)script, ACCESS_READ);
         if (l)
             UnLock(l);
-        T->con = con_start(l ? script : NULL, T);
+        T->con = con_start(l ? script : NULL, shellcmd, T);
         ML("shell");
 #ifdef MEMLOG
         memlog_save();                  /* the marks so far, CTerm idle */

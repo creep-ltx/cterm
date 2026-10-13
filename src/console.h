@@ -14,7 +14,7 @@ struct Con;
 struct Window;
 
 /* A Shell on a console of its own; user is handed to the term_ calls. */
-struct Con *con_start(const char *startup, void *user);
+struct Con *con_start(const char *startup, const char *then, void *user);
 void con_stop(struct Con *c);
 ULONG con_sigmask(struct Con *c);       /* its port, its end, the timer */
 void con_handle(struct Con *c, ULONG sigs);   /* answer what has come */

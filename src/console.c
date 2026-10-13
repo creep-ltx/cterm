@@ -1140,7 +1140,7 @@ void con_retire(struct Con *c)
     con_free(c);
 }
 
-struct Con *con_start(const char *startup, void *user)
+struct Con *con_start(const char *startup, const char *then, void *user)
 {
     struct Process *pr;
     struct Con *c = AllocVec(sizeof *c, MEMF_ANY | MEMF_CLEAR);
@@ -1172,6 +1172,13 @@ struct Con *con_start(const char *startup, void *user)
     if (startup && startup[0]) {
         strcpy(c->startcmd, "Execute ");
         strncat(c->startcmd, startup, sizeof c->startcmd - 10);
+    }
+    /* then a shell of the person's (csh): the next line of the same
+     * Execute() string (3.2 runs each line, Knowledge writing-a-shell.md D);
+     * the ROM Shell stays under it, so its exit gives the ROM Shell back */
+    if (then && then[0] && strlen(c->startcmd) + strlen(then) + 2 < sizeof c->startcmd) {
+        if (c->startcmd[0]) strcat(c->startcmd, "\n");
+        strcat(c->startcmd, then);
     }
     c->child_running = TRUE;
     /* 4 KB of stack (was 16): the helper only waits in Execute, ~0.5 KB

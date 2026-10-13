@@ -370,7 +370,7 @@ enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_TTSIZE, S_SPACE, S_CHARS, S_PCFONT, S_ALT, S_THEME, S_PART,
        S_R, S_G, S_B, S_RESET, S_PIC, S_NOPIC, S_SEE, S_KLIST, S_KTEXT,
        S_KPRESS, S_KNONE, S_KDEF,
-       S_DLDIR, S_ULDIR,
+       S_DLDIR, S_ULDIR, S_SHELL,
        S_MINIT, S_MINIT2, S_MDIALK, S_MDIAL, S_MSUFFIX, S_MHANG, S_MHANGCMD,
        S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE, S_PICS, S_GAPS, S_OWNPROG,
        S_SAVE, S_USE, S_CANCEL, S_N };
@@ -413,6 +413,7 @@ extern BOOL altmeta;
 extern char userkey[2];
 extern char passkey[2];
 extern char dldir[160], uldir[160];
+extern char shellcmd[128];        /* a new Shell tab runs it after S:Shell-Startup */
 extern char pcttfile[160];
 extern int fontover;
 extern BOOL ttaa;
