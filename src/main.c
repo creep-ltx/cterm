@@ -399,6 +399,8 @@ static void hex_cat(char *out, ULONG v, int digits)
 }
 
 char shellcmd[128];              /* a new Shell tab runs this after S:Shell-Startup (csh) */
+static char argshell[128];       /* SHELL/K: the same for this run only, never saved */
+#define TABSHELL (argshell[0] ? argshell : shellcmd)
 BOOL envonly;                    /* Use: until a reboot, not saved */
 BOOL used_only;                  /* the settings were Used, not Saved */
 BOOL saved_pc;                   /* the setting; pcmode may be PC's */
@@ -891,7 +893,7 @@ struct Tab *shell_tab(void)
         return NULL;
     T = t;
     vt_set_amiga(vt, 1);
-    T->con = con_start("S:Shell-Startup", shellcmd, T);
+    T->con = con_start("S:Shell-Startup", TABSHELL, T);
     if (!T->con)
         say("CTerm could not start a Shell.\r\n");
     T = keep;
@@ -1022,7 +1024,7 @@ static void run(void)
         BPTR l = Lock((STRPTR)script, ACCESS_READ);
         if (l)
             UnLock(l);
-        T->con = con_start(l ? script : NULL, shellcmd, T);
+        T->con = con_start(l ? script : NULL, TABSHELL, T);
         ML("shell");
 #ifdef MEMLOG
         memlog_save();                  /* the marks so far, CTerm idle */
@@ -1528,14 +1530,14 @@ static int cterm_main(int argc, char **argv)
     if (!fast_ok(argc))
         return RETURN_FAIL;
     if (argc > 0) {
-        LONG args[19];
+        LONG args[20];
         int k;
         struct RDArgs *rda;
         memset(args, 0, sizeof args);
         rda = ReadArgs("PORT/N,LATIN1/S,LISTEN/S,COLS/N,ROWS/N,"
                        "FROM/K,HOST/K,PC/S,SSH/K,KEY/K,BOOK/K,"
                        "TEXTDRAW/S,SERIAL/S,DEVICE/K,UNIT/N,"
-                       "BAUD/N,SHOW/S,SFTP/K,FTP/K", args, NULL);
+                       "BAUD/N,SHOW/S,SFTP/K,FTP/K,SHELL/K", args, NULL);
         if (!rda) {
             PrintFault(IoErr(), "CTerm");
             return RETURN_FAIL;
@@ -1552,6 +1554,10 @@ static int cterm_main(int argc, char **argv)
         if (args[4]) want_rows = *(LONG *)args[4];
         if (args[2] || args[3] || args[4] || args[5] || args[6])
             remember = FALSE;
+        if (args[19]) {                 /* SHELL csh: this run's tabs, not saved */
+            strncpy(argshell, (char *)args[19], sizeof argshell - 1);
+            argshell[sizeof argshell - 1] = 0;
+        }
         if (args[5]) {                  /* the Shell runs this script first */
             strncpy(fromfile, (char *)args[5], sizeof fromfile - 1);
             fromfile[sizeof fromfile - 1] = 0;
