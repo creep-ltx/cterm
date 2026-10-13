@@ -7,7 +7,7 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
-**2026-10-13, 0.3b32 (built, NOT installed on the A1200; parts PART_VERSION 11, copy them
+**2026-10-13, 0.3b32 (INSTALLED on the A1200 with make deploy, 0.3b31 kept as CTerm-0.3b31.bak and Parts-0.3b31.bak; the user's prefs have shell=csh; parts PART_VERSION 11, copy them
 together):** a new Shell tab can start a shell of the person's after S:Shell-Startup:
 `shell=` in CTerm.prefs (Settings, Files tab, "A new Shell tab ... Then runs"), or `SHELL/K`
 for one run (not saved). The command is the next line of the tab's Execute() string (3.2 runs
