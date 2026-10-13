@@ -7,6 +7,14 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
+**2026-10-13, 0.3b32 (built, NOT installed on the A1200; parts PART_VERSION 11, copy them
+together):** a new Shell tab can start a shell of the person's after S:Shell-Startup:
+`shell=` in CTerm.prefs (Settings, Files tab, "A new Shell tab ... Then runs"), or `SHELL/K`
+for one run (not saved). The command is the next line of the tab's Execute() string (3.2 runs
+each line), so the ROM Shell stays under it: `exit` in csh gives the ROM Shell back, `EndCLI`
+closes the tab. Made for CShell's csh (~/Projects/CShell); tried in FS-UAE and on the A1200
+from RAM:CT (`RAM:CT/CTerm SHELL RAM:csh`).
+
 **Installed:** 0.3b31 on the A1200 (CTerm; parts 0.3b30; CTermSSH 0.3b27) (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
 hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
