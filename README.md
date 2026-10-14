@@ -421,6 +421,11 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
   round and 5 between two panes. On a full screen the position bar sits
   in the right gap (narrower in a gap under 8). Untick both Outer gaps
   and Scroll bar for panes that reach every edge.
+- **Each pane its own scroll bar** (Scroll bar on): a thin bar along the
+  pane's right edge, inside its border, shows that pane's history and
+  where you are in it (the knob in the border's colour; no bar while a
+  pane has no history). Click or pull it: that pane becomes the one you
+  are in and scrolls. One pane alone: the window's bar, as before.
 - **Pane border** (Settings, Screen tab, 0 to 8 pixels) and its colours
   (Colours tab, "Colour of": Active pane's border, Other panes' borders;
   the theme's until set, "Back to the theme's colours" returns to them).

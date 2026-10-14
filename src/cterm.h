@@ -251,7 +251,11 @@ struct Pane {
                                            side, 'v' above each other */
     UBYTE pre;                          /* with dwindle: the next split
                                            chosen by hand (0: by shape) */
+    int bx0, bx1;                       /* its own scroll bar (split, Scroll bar on): x, 0 none */
+    LONG btotal, btop;                  /* what the bar shows now (-1: draw it) */
+    int brows, bact;
 };
+#define PANEBAR 4                       /* a pane's own bar, pixels wide (and 1 beside the text) */
 
 /* Keys as a file browser's panels get them (keys.c): characters as
  * they are (Return 13, Esc 27, Tab 9, Backspace 8, Del 127, Ctrl+R 18),
@@ -729,7 +733,8 @@ extern BOOL outergaps, ownbact, ownbin;
 extern int bordersize;
 extern ULONG bordact, bordin;
 ULONG pane_border_rgb(BOOL active);
-int posbar_w(void);                     /* full screen's place bar: its width at the right edge */
+int posbar_w(void);
+int pane_bar_at(int x, int y);          /* a pane's own bar under the mouse: its index, -1 none */                     /* full screen's place bar: its width at the right edge */
 BOOL backdrop_area(LONG x, LONG y, LONG w, LONG h);
 enum { PD_LEFT, PD_RIGHT, PD_UP, PD_DOWN };
 BOOL pane_do(int op, int arg);

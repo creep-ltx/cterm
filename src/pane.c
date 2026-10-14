@@ -60,8 +60,20 @@ int posbar_w(void)
     return POSBAR;
 }
 
-/* room a pane keeps round its letters: the border and a pixel beside it */
-#define PADW (2 * bordersize + 2)
+/* A pane's own scroll bar under (x, y): its index, -1 none. */
+int pane_bar_at(int x, int y)
+{
+    int i;
+    for (i = 0; i < npanes; i++) {
+        struct Pane *p = &panes[i];
+        if (p->bx0 && x >= p->bx0 - 1 && x <= p->bx1 && y >= p->oy && y < p->oy + p->rows * ch)
+            return i;
+    }
+    return -1;
+}
+
+/* room a pane keeps round its letters: the border, a pixel beside it, its bar */
+#define PADW (2 * bordersize + 2 + (scrollbar ? PANEBAR + 1 : 0))
 #define PADH (2 * bordersize)
 struct Pane *apane = &panes[0];         /* the active pane: the shown tab's */
 struct Pane *cpane = &panes[0];         /* the pane drawn now */
@@ -180,7 +192,13 @@ static void lay(int n, int x0, int y0, int x1, int y1)
         /* the text: inside the border and a pixel more at the sides */
         p->ox = x0 + b + 1;
         p->oy = y0 + b;
-        p->cols = (x1 + 1 - p->ox - b - 1) / cw;
+        p->bx0 = p->bx1 = 0;
+        p->btotal = -1;
+        if (edge && scrollbar) {        /* its own bar, inside the border at the right */
+            p->bx1 = x1 - b;
+            p->bx0 = p->bx1 - PANEBAR + 1;
+        }
+        p->cols = (x1 + 1 - p->ox - b - 1 - (p->bx0 ? PANEBAR + 1 : 0)) / cw;
         p->rows = (y1 - y0 + 1 - 2 * b) / ch;
         if (p->cols < minc) p->cols = minc;
         if (p->rows < minr) p->rows = minr;
@@ -208,7 +226,8 @@ static void lay(int n, int x0, int y0, int x1, int y1)
  * position bar on the right sits in that gap when it is wide enough. */
 static void area(int *x0, int *y0, int *x1, int *y1)
 {
-    int bar = fullscreen && scrollbar ? posbar_w() + 2 : 0, og = npanes > 1 && outergaps ? gaps : 0;
+    /* split: every pane has its own bar, the window's position bar is not needed */
+    int bar = fullscreen && scrollbar && npanes < 2 ? posbar_w() + 2 : 0, og = npanes > 1 && outergaps ? gaps : 0;
     if (og >= 3 && bar > og) bar = og;  /* the bar is in the gap (posbar_w) */
     *x0 = win->BorderLeft + og;
     *y0 = win->BorderTop + tabbar_h() + og;
@@ -270,7 +289,7 @@ void panes_frames(void)
     planes_save();
     if (outergaps && gaps > 0) {        /* the outer gaps (not the position bar) */
         int ax0, ay0, ax1, ay1, wx0 = win->BorderLeft, wy0 = win->BorderTop + tabbar_h();
-        int wx1 = win->Width - win->BorderRight - 1 - (fullscreen && scrollbar ? posbar_w() + 1 : 0);
+        int wx1 = win->Width - win->BorderRight - 1;
         int wy1 = win->Height - win->BorderBottom - 1;
         area(&ax0, &ay0, &ax1, &ay1);
         clear_rect(wx0, wy0, wx1, ay0 - 1);
@@ -337,6 +356,11 @@ void pane_activate(struct Pane *p)
         draw_tabbar();
         knob_forget();
         update_knob();
+        pane_use(old);                  /* the old pane's own bar: no longer lit */
+        T = old->tab;
+        update_knob();
+        pane_use(p);
+        T = p->tab;
     }
     pane_use(apane);
     T = shown;

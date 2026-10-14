@@ -2301,11 +2301,55 @@ void add_scroller(void)
     k_total = -1;                       /* a new knob: set it */
 }
 
-/* The scroll bar's knob, or full screen's place bar, says where we are. */
+/* A pane's own bar (split, Scroll bar on): the history as a track, the
+ * part shown as the knob in its border's colour; nothing while there is
+ * no history. Drawn when what it shows changed. */
+static void pane_bar(struct Pane *p, LONG total, LONG top)
+{
+    int x0 = p->bx0, x1 = p->bx1, y0 = p->oy, h = rows * ch, act = p == apane, a, b;
+    LONG keepbase = pbase;
+    UBYTE keepmask = pmask;
+    if (!x0 || (p->btotal == total && p->btop == top && p->brows == rows && p->bact == act))
+        return;
+    p->btotal = total; p->btop = top; p->brows = rows; p->bact = act;
+    planes_full();
+    rp_forget();
+    if (!backdrop_put(x0, y0, x1 - x0 + 1, h)) {
+        apen(defbg);
+        RectFill(rp, x0, y0, x1, y0 + h - 1);
+    }
+    if (total > rows) {
+        a = y0 + (LONG)h * top / total;
+        b = y0 + (LONG)h * (top + rows) / total - 1;
+        if (b < a + 3) b = a + 3;
+        if (b > y0 + h - 1) b = y0 + h - 1;
+        apen(mix(defbg, deffg, 15));
+        if (a > y0)
+            RectFill(rp, x0, y0, x1, a - 1);
+        if (b < y0 + h - 1)
+            RectFill(rp, x0, b + 1, x1, y0 + h - 1);
+        apen(pane_border_rgb(act));
+        RectFill(rp, x0, a, x1, b);
+    }
+    pbase = keepbase;
+    pmask = keepmask;
+    SetWriteMask(rp, pmask);
+    rp_forget();
+}
+
+/* The scroll bar's knob, or full screen's place bar, says where we are;
+ * split, each pane's own bar. */
 void update_knob(void)
 {
     LONG total = vt_history(vt) + rows, top = vt_history(vt) - back;
-    if (!win || cpane != apane)
+    if (!win)
+        return;
+    if (npanes > 1 && scrollbar) {
+        pane_bar(cpane, total, top);
+        if (fullscreen)
+            return;                     /* no window bar to keep */
+    }
+    if (cpane != apane)
         return;                         /* the active pane's, only */
     if (total == k_total && top == k_top && rows == k_rows)
         return;

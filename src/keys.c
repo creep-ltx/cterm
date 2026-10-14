@@ -612,6 +612,21 @@ BOOL window_events(void)
                 mouse_reporting();
                 break;
             }
+            if (copy.Code == SELECTDOWN && npanes > 1 && scrollbar &&
+                pane_bar_at(copy.MouseX, copy.MouseY) >= 0) {
+                /* a pane's own bar: that pane, scrolled to where it was clicked */
+                struct Pane *p = &panes[pane_bar_at(copy.MouseX, copy.MouseY)];
+                if (p != apane) {
+                    sel_clear();
+                    pane_activate(p);
+                }
+                if (vt_history(vt) > 0) {
+                    bardrag = TRUE;
+                    bar_pull(copy.MouseY);
+                    mouse_reporting();
+                }
+                break;
+            }
             if ((copy.Code == SELECTDOWN || copy.Code == MIDDLEDOWN) &&
                 npanes > 1) {
                 /* a click in another pane makes it the active one (and
@@ -623,7 +638,7 @@ BOOL window_events(void)
                     break;
                 }
             }
-            if (copy.Code == SELECTDOWN && fullscreen && scrollbar &&
+            if (copy.Code == SELECTDOWN && fullscreen && scrollbar && npanes < 2 &&
                 copy.MouseX >= win->Width - POSBAR - 4 && copy.MouseY >= oy &&
                 copy.MouseY < oy + rows * ch && vt_history(vt) > 0) {
                 bardrag = TRUE;         /* the thin bar, pulled */

@@ -10,6 +10,15 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**2026-10-14, 0.3b37 (INSTALLED, parts too: PART_VERSION 13; 0.3b36 kept as CTerm-0.3b36.bak and
+Parts-0.3b36.bak):** the user: each pane its own scroll bar (different amounts of output). Split
+with Scroll bar on: a PANEBAR (4 px) bar inside each pane's border at its right (lay() reserves it,
+struct Pane bx0/bx1, cached btotal/btop/brows/bact); update_knob draws cpane's (it runs per pane
+already); pane_activate repaints the old one unlit; a click on a bar activates that pane and pulls
+it (pane_bar_at). Split full screen needs no window position bar any more. Tabs keep the one bar
+(one tab shows at a time). Verified on the A1200: a 150-line pane's bar beside a short pane's
+none; a click at its top scrolled only that pane to its first line.
+
 **2026-10-14, 0.3b36 (INSTALLED, parts too: PART_VERSION 12; 0.3b35 kept as CTerm-0.3b35.bak and
 Parts-0.3b35.bak):** the user on gaps: an outer gap on the right only (it was the full screen's
 position-bar room, 8 px), none elsewhere; "5 px gaps: 5 outer and at most 5 between", outer gaps
