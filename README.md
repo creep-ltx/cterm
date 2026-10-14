@@ -407,10 +407,28 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
 | Left Amiga+arrows | to the pane on the left, right, above or below |
 | Left Amiga+Shift+arrows | the pane changes places with the one on that side |
 | Left Amiga+F | the pane fills the window; the others go on behind it. Again: back as it was |
-| Left Amiga+1 to 9 | tab 1 to 9 in the pane you are in (a tab shown in another pane changes places with this one's) |
+| Left Amiga+1 to 9 | workspace 1 to 9 (below); an empty one opens with a new Shell |
+| Left Amiga+Shift+1 to 9 | the tab you are in moves to that workspace (the keys follow your keymap: Shift+3 is £ on some) |
+| Left Amiga+R | resize mode: the arrows move the edge of the pane you are in; on the scratchpad the arrows size it and Shift+arrows move it; Return or Esc ends |
+| Left Amiga+- | the scratchpad (below): shown, given the keys, hidden |
+| Left Amiga+Shift+- | the tab you are in becomes the scratchpad |
 | Left Amiga+T | all panes become tabs: the whole window shows the tab you were in, the others run on behind it, the tab bar lists them |
 | Left Amiga+P | all tabs become panes, laid out by themselves (below) |
 
+- **Workspaces** (as i3's): nine, each with its own panes and tabs. The
+  bar at the top shows the ones in use (click one to go there); the tab
+  bar and Right Amiga+1-9 count the shown workspace's tabs. Every tab
+  keeps running whichever workspace is shown.
+- **The scratchpad** (as i3's): one Shell that floats over the panes,
+  shown and hidden with Left Amiga+-. Click a pane to work there while it
+  stays on show; Left Amiga+- again gives it the keys, again hides it.
+  Left Amiga+R sizes and moves it.
+- **Saved layouts** (Panes/Save layout..., Open layout..., in
+  `ENVARC:CTerm/Layouts`): every workspace's panes, where their dividers
+  are, their tabs and the scratchpad, each tab as what starts it again - a
+  Shell in its drawer with the program that ran in it, or a host. Panes/
+  Open this layout at start: CTerm opens with it (its first Shell takes
+  the first pane).
 - **Gaps** (Settings, Screen tab, "Gap between panes", 0 to 32
   pixels; seen at once): every pane has a thin border, the one you are in
   lit; the gap is the room between two panes' borders, all of it, showing

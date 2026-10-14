@@ -27,6 +27,8 @@
  */
 #include "cterm.h"
 #include <proto/layers.h>
+#include <proto/asl.h>
+#include "book.h"
 
 #define DIVW gaps                       /* the room between two panes */
 #define MAXNODES (2 * MAXPANES - 1)
@@ -1317,6 +1319,415 @@ static BOOL resize_mode(void)
     title_hint(apane == &fpane ? "resize: arrows size, Shift+arrows move, Return ends"
                                : "resize: arrows move the pane's edge, Return ends");
     return TRUE;
+}
+
+/* ---- saved layouts ----
+ *
+ * Panes/Save layout writes every workspace's panes (the splits, where the
+ * dividers are), its other tabs and the scratchpad as text, each tab as
+ * what would start it again: a Shell in its drawer with the program that
+ * runs in it, or a host. Panes/Open layout builds them back (the tabs
+ * there stay, as tabs); at the start, the first Shell takes the first
+ * pane. In CTerm itself, not a part: it is the layout's own tree.
+ *
+ *   ; CTerm layout
+ *   ws 1
+ *   split h 500
+ *   pane shell "Work:" "Ahiru"
+ *   pane host "nas.local"
+ *   tab shell "RAM:" ""
+ *   end
+ *   scratch 175 150 650 600 shell "SYS:" ""
+ *   shown 1
+ */
+char startlayout[200];                  /* prefs layout=: opened at the start */
+char lastlayout[200];                   /* the one saved or opened last */
+
+static void lw_str(BPTR f, const char *s)
+{
+    char q[208];
+    int o = 0;
+    q[o++] = '"';
+    for (; *s && o < (int)sizeof q - 3; s++)
+        if (*s != '"' && *s != '\n')
+            q[o++] = *s;
+    q[o++] = '"';
+    q[o] = 0;
+    FPuts(f, (STRPTR)q);
+}
+
+/* what starts tab t again */
+static void lw_spec(BPTR f, struct Tab *t)
+{
+    char dir[200], prog[120];
+    if (t && !t->t_local && (t->t_bookname[0] || t->t_dialhost[0])) {
+        FPuts(f, (STRPTR)"host ");
+        lw_str(f, t->t_bookname[0] ? t->t_bookname : t->t_dialhost);
+        FPuts(f, (STRPTR)"\n");
+        return;
+    }
+    dir[0] = prog[0] = 0;
+    if (t && t->con)
+        con_shell_info(t->con, dir, sizeof dir, prog, sizeof prog);
+    FPuts(f, (STRPTR)"shell ");
+    lw_str(f, dir);
+    FPuts(f, (STRPTR)" ");
+    lw_str(f, prog);
+    FPuts(f, (STRPTR)"\n");
+}
+
+static void lw_tree(BPTR f, struct PNode *nd, struct Tab **ptab, int n, int depth)
+{
+    char l[24];
+    if (depth > MAXNODES)
+        return;
+    if (nd[n].split) {
+        strcpy(l, nd[n].split == 'h' ? "split h " : "split v ");
+        numstr_cat(l, nd[n].at);
+        strcat(l, "\n");
+        FPuts(f, (STRPTR)l);
+        lw_tree(f, nd, ptab, nd[n].a, depth + 1);
+        lw_tree(f, nd, ptab, nd[n].b, depth + 1);
+    } else {
+        FPuts(f, (STRPTR)"pane ");
+        lw_spec(f, ptab[(int)nd[n].pane]);
+    }
+}
+
+BOOL layout_write(const char *path)
+{
+    BPTR f = Open((STRPTR)path, MODE_NEWFILE);
+    struct Tab *live[MAXPANES];
+    int w, i, k;
+    char l[24];
+    if (!f)
+        return FALSE;
+    FPuts(f, (STRPTR)"; CTerm layout (Panes/Save layout)\n");
+    zoom_out();
+    for (i = 0; i < npanes; i++)
+        live[i] = panes[i].tab;
+    for (w = 0; w < NWS; w++) {
+        BOOL here = w == curws;
+        struct PNode *nd = here ? nodes : wsl[w].nodes;
+        struct Tab **pt = here ? live : wsl[w].tab;
+        int np = here ? npanes : wsl[w].npanes;
+        if (!ws_used(w))
+            continue;
+        strcpy(l, "ws ");
+        numstr_cat(l, w + 1);
+        strcat(l, "\n");
+        FPuts(f, (STRPTR)l);
+        if (here || (wsl[w].used && np > 0))
+            lw_tree(f, nd, pt, 0, 0);
+        for (i = 0; i < ntabs; i++) {   /* its tabs in no pane */
+            struct Tab *t = tabs[i];
+            if (t->t_ws != w)
+                continue;
+            for (k = 0; k < np && pt[k] != t; k++)
+                ;
+            if (k < np && (here || wsl[w].used))
+                continue;
+            if (!here && !wsl[w].used && np == 0) {
+                FPuts(f, (STRPTR)"pane ");     /* never shown: one pane */
+                lw_spec(f, t);
+                np = -1;                /* the rest are tabs */
+                continue;
+            }
+            FPuts(f, (STRPTR)"tab ");
+            lw_spec(f, t);
+        }
+        FPuts(f, (STRPTR)"end\n");
+    }
+    if (stab) {
+        strcpy(l, "scratch ");
+        numstr_cat(l, ffx); strcat(l, " ");
+        numstr_cat(l, ffy); strcat(l, " ");
+        numstr_cat(l, ffw); strcat(l, " ");
+        numstr_cat(l, ffh); strcat(l, " ");
+        FPuts(f, (STRPTR)l);
+        lw_spec(f, stab);
+    }
+    strcpy(l, "shown ");
+    numstr_cat(l, curws + 1);
+    strcat(l, "\n");
+    FPuts(f, (STRPTR)l);
+    Close(f);
+    strncpy(lastlayout, path, sizeof lastlayout - 1);
+    return TRUE;
+}
+
+/* ---- reading one back ---- */
+
+static char *lr_text, *lr_p;
+
+/* a whole text file, 0-ended (AllocVec'ed), max bytes at most */
+static char *lr_readall(const char *path, LONG max)
+{
+    BPTR f = Open((STRPTR)path, MODE_OLDFILE);
+    LONG n;
+    char *t;
+    if (!f)
+        return NULL;
+    Seek(f, 0, OFFSET_END);
+    n = Seek(f, 0, OFFSET_BEGINNING);
+    if (n < 0 || n > max || !(t = AllocVec(n + 1, MEMF_ANY | MEMF_CLEAR))) {
+        Close(f);
+        return NULL;
+    }
+    if (Read(f, t, n) != n) {
+        FreeVec(t);
+        Close(f);
+        return NULL;
+    }
+    Close(f);
+    return t;
+}
+static struct Tab *lr_reuse;            /* the start's first Shell: the first pane's */
+static struct Tab *lr_hosts[MAXTABS];
+static int lr_nhosts;
+
+/* the next word of the line: a quoted string or a plain word */
+static char *lr_word(char **p)
+{
+    char *s = *p, *w;
+    while (*s == ' ' || *s == '\t')
+        s++;
+    if (*s == '"') {
+        w = ++s;
+        while (*s && *s != '"' && *s != '\n')
+            s++;
+    } else {
+        w = s;
+        while (*s && *s != ' ' && *s != '\t' && *s != '\n')
+            s++;
+    }
+    if (*s && *s != '\n')
+        *s++ = 0;
+    else if (*s == '\n')
+        *s = 0;                         /* (the line's end) */
+    *p = s;
+    return w;
+}
+
+/* the next line, comments and blanks skipped: NULL at the end */
+static char *lr_line(void)
+{
+    char *l;
+    for (;;) {
+        if (!lr_p || !*lr_p)
+            return NULL;
+        l = lr_p;
+        while (*lr_p && *lr_p != '\n')
+            lr_p++;
+        if (*lr_p)
+            *lr_p++ = 0;
+        while (*l == ' ' || *l == '\t')
+            l++;
+        if (*l && *l != ';')
+            return l;
+    }
+}
+
+/* A tab from its words (shell DIR PROG / host NAME), in curws. */
+static struct Tab *lr_tab(char *rest)
+{
+    char *kind = lr_word(&rest);
+    struct Tab *t;
+    if (!stricmp(kind, "host")) {
+        char *name = lr_word(&rest);
+        int i = book_find(name);
+        if (!(t = tab_new()))
+            return NULL;
+        T = t;
+        if (i >= 0)
+            tab_from_book(&book[i]);
+        else {
+            local = FALSE;
+            strncpy(dialhost, name, sizeof dialhost - 1);
+            strcpy(dialtitle, "CTerm: ");
+            strncat(dialtitle, dialhost, sizeof dialtitle - 10);
+        }
+        if (lr_nhosts < MAXTABS)
+            lr_hosts[lr_nhosts++] = t;  /* called once laid out */
+        return t;
+    }
+    {
+        char *dir = lr_word(&rest), *prog = lr_word(&rest);
+        if (lr_reuse) {                 /* the start's Shell: told, not made */
+            t = lr_reuse;
+            lr_reuse = NULL;
+            t->t_ws = curws;
+            if (t->con) {
+                char l[260];
+                if (dir[0]) {
+                    strcpy(l, "CD \"");
+                    strncat(l, dir, 200);
+                    strcat(l, "\"\n");
+                    con_reply(t->con, (UBYTE *)l, strlen(l));
+                }
+                if (prog[0]) {
+                    strncpy(l, prog, 250);
+                    l[250] = 0;
+                    strcat(l, "\n");
+                    con_reply(t->con, (UBYTE *)l, strlen(l));
+                }
+            }
+            return t;
+        }
+        t = shell_tab_at(dir[0] ? dir : NULL);
+        if (t && t->con && prog[0]) {
+            char l[260];
+            strncpy(l, prog, 250);
+            l[250] = 0;
+            strcat(l, "\n");
+            con_reply(t->con, (UBYTE *)l, strlen(l));
+        }
+        return t;
+    }
+}
+
+/* A subtree in preorder at node n: split lines, pane lines. */
+static BOOL lr_tree(int n, int depth)
+{
+    char *l = lr_line(), *w;
+    if (!l || depth > 6)
+        return FALSE;
+    w = lr_word(&l);
+    if (!stricmp(w, "split")) {
+        char *d = lr_word(&l);
+        int at = atoi(lr_word(&l)), a, b;
+        if ((a = node_new()) < 0)
+            return FALSE;
+        if ((b = node_new()) < 0) {
+            nodes[a].used = 0;
+            return FALSE;
+        }
+        nodes[n].split = d[0] == 'v' ? 'v' : 'h';
+        nodes[n].at = at > 50 && at < 950 ? at : 500;
+        nodes[n].a = a; nodes[n].b = b;
+        nodes[a].up = nodes[b].up = n;
+        return lr_tree(a, depth + 1) && lr_tree(b, depth + 1);
+    }
+    if (!stricmp(w, "pane") && npanes < MAXPANES) {
+        struct Tab *t = lr_tab(l);
+        if (!t)
+            return FALSE;
+        pane_fresh(npanes, t, 'h');
+        nodes[n].pane = npanes;
+        npanes++;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* Read a layout: its workspaces built (each as its own kept layout), the
+ * tabs started. reuse: the start's first Shell becomes the first pane. */
+BOOL layout_read(const char *path, BOOL reuse)
+{
+    char *l, *w;
+    int shownws = curws, n;
+    BOOL ok = TRUE;
+    struct Tab *keepT = T;
+    if (!(lr_text = lr_readall(path, 64 * 1024)))
+        return FALSE;
+    lr_p = lr_text;
+    lr_reuse = reuse && ntabs == 1 && tabs[0]->con ? tabs[0] : NULL;
+    lr_nhosts = 0;
+    float_hide();
+    ws_save();
+    while (ok && (l = lr_line())) {
+        w = lr_word(&l);
+        if (!stricmp(w, "ws")) {
+            n = atoi(lr_word(&l)) - 1;
+            if (n < 0 || n >= NWS) { ok = FALSE; break; }
+            curws = n;
+            if (!panes_room(MAXPANES)) { ok = FALSE; break; }
+            memset(nodes, 0, sizeof nodes);
+            nodes[0].used = 1;
+            nodes[0].up = nodes[0].a = nodes[0].b = -1;
+            nodes[0].at = 500;
+            npanes = 0;
+            if (!lr_tree(0, 0) || !npanes) { ok = FALSE; break; }
+            apane = &panes[0];
+            while ((l = lr_line())) {   /* its other tabs, to its end */
+                w = lr_word(&l);
+                if (!stricmp(w, "end"))
+                    break;
+                if (!stricmp(w, "tab"))
+                    lr_tab(l);
+            }
+            ws_save();
+        } else if (!stricmp(w, "scratch")) {
+            ffx = atoi(lr_word(&l)); ffy = atoi(lr_word(&l));
+            ffw = atoi(lr_word(&l)); ffh = atoi(lr_word(&l));
+            if (ffw < 200 || ffw > 1000) ffw = 650;
+            if (ffh < 150 || ffh > 1000) ffh = 600;
+            if (ffx < 0 || ffx + ffw > 1000) ffx = (1000 - ffw) / 2;
+            if (ffy < 0 || ffy + ffh > 1000) ffy = (1000 - ffh) / 2;
+            if (!stab) {
+                struct Tab *t = lr_tab(l);
+                if (t) {
+                    t->t_ws = -1;
+                    stab = t;
+                }
+            }
+        } else if (!stricmp(w, "shown")) {
+            n = atoi(lr_word(&l)) - 1;
+            if (n >= 0 && n < NWS)
+                shownws = n;
+        }
+    }
+    FreeVec(lr_text);
+    lr_text = NULL;
+    if (lr_reuse)                       /* the layout had no Shell for it */
+        lr_reuse = NULL;
+    curws = ws_used(shownws) ? shownws : curws;
+    if (!ws_load())
+        ws_rescue();
+    T = keepT;
+    panes_changed();
+    for (n = 0; n < lr_nhosts; n++) {   /* the hosts called, laid out now */
+        T = lr_hosts[n];
+        call_out();
+    }
+    T = shown;
+    strncpy(lastlayout, path, sizeof lastlayout - 1);
+    return ok;
+}
+
+/* the drawer the layouts live in, made if need be */
+static const char *layout_drawer(void)
+{
+    UnLock(CreateDir((STRPTR)"ENVARC:CTerm"));
+    UnLock(CreateDir((STRPTR)"ENVARC:CTerm/Layouts"));
+    return "ENVARC:CTerm/Layouts";
+}
+
+/* Panes/Save layout..., Panes/Open layout...: a file asked for */
+void layout_menu(BOOL save)
+{
+    struct FileRequester *req;
+    char path[220];
+    if (!asl_open())
+        return;
+    req = AllocAslRequestTags(ASL_FileRequest,
+        ASLFR_Window, (ULONG)win, ASLFR_SleepWindow, TRUE,
+        ASLFR_TitleText, (ULONG)(save ? "CTerm: save the layout as..." : "CTerm: open a layout"),
+        ASLFR_DoSaveMode, save, ASLFR_InitialDrawer, (ULONG)layout_drawer(),
+        ASLFR_InitialFile, (ULONG)(save ? "Default" : ""), ASLFR_RejectIcons, TRUE,
+        TAG_END);
+    if (!req)
+        return;
+    if (AslRequest(req, NULL) && req->fr_File[0]) {
+        strncpy(path, req->fr_Drawer, sizeof path - 1);
+        path[sizeof path - 1] = 0;
+        AddPart(path, req->fr_File, sizeof path);
+        if (save ? !layout_write(path) : !layout_read(path, FALSE))
+            beep();
+        else
+            title_hint(save ? "layout saved" : "layout opened");
+    }
+    FreeAslRequest(req);
 }
 
 /* ---- the i3 way ---- */

@@ -75,6 +75,11 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"New Shells in panes", 0, CHECKIT, 0, (APTR)M_INPANES },
     {  NM_ITEM, (STRPTR)"New Shells in tabs", 0, CHECKIT, 0, (APTR)M_INTABS },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Save layout...", 0, 0, 0, (APTR)M_LSAVE },
+    {  NM_ITEM, (STRPTR)"Open layout...", 0, 0, 0, (APTR)M_LOPEN },
+    {  NM_ITEM, (STRPTR)"Open this layout at start", 0, CHECKIT | MENUTOGGLE, 0,
+       (APTR)M_LSTART },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"All panes to tabs", 0, 0, 0, (APTR)M_PTABS },
     {  NM_ITEM, (STRPTR)"All tabs to panes", 0, 0, 0, (APTR)M_PPANES },
     { NM_TITLE, (STRPTR)"View", 0, 0, 0, 0 },
@@ -108,7 +113,7 @@ static struct NewMenu newmenu[] = {
 struct Window *setwin;
 /* the items whose ticks follow the shown tab or pane: menu_ticks */
 static const UBYTE tickid[] = { M_UTF8, M_PC, M_PSPLITH, M_PSPLITV, M_PFULL,
-                                M_PDWINDLE, M_INPANES, M_INTABS };
+                                M_PDWINDLE, M_INPANES, M_INTABS, M_LSTART };
 #define NTICK ((int)sizeof tickid)
 static struct MenuItem *ticks[NTICK];
 
@@ -235,6 +240,7 @@ void menu_ticks(void)
     on[5] = dwindle;
     on[6] = !tabmode;
     on[7] = tabmode;
+    on[8] = startlayout[0] != 0;
     for (i = 0; i < NTICK; i++)
         if (ticks[i] && !(ticks[i]->Flags & CHECKED) != !on[i])
             same = FALSE;
@@ -637,6 +643,20 @@ BOOL menu_pick(ULONG id)
     case M_SHCLOSE:
         if (tabmode) tab_close_current();
         else if (!pane_do(PO_KILL, 1)) beep();
+        break;
+    case M_LSAVE: layout_menu(TRUE); break;
+    case M_LOPEN: layout_menu(FALSE); break;
+    case M_LSTART:                      /* the layout saved or opened last */
+        if (startlayout[0])
+            startlayout[0] = 0;
+        else if (lastlayout[0])
+            strcpy(startlayout, lastlayout);
+        else {
+            beep();
+            title_hint("save or open a layout first");
+        }
+        title_hint(startlayout[0] ? "this layout opens at the start" : "no layout at the start");
+        save_prefs();
         break;
     case M_INPANES: case M_INTABS:
         tabmode = id == M_INTABS;

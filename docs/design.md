@@ -10,6 +10,36 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**2026-10-14, 0.3b38-0.3b40 (INSTALLED, parts too: PART_VERSION 14; 0.3b37 kept as CTerm-0.3b37.bak,
+Parts-0.3b37.bak, the keys as ENVARC:CTerm/CTerm.keys-0.3b37.bak):** the user asked for workspaces
+(also for tabs), the scratchpad as a floating window, resizing with the keyboard, saved layouts with
+their programs. pane.c:
+- **Workspaces:** a tab's t_ws (0-8); all tabs stay in tabs[] (served whichever shows), wsl[] keeps
+  each workspace's tree, tabs, directions and active pane; ws_switch saves/loads, an empty one gets a
+  Shell; ws_move (LA+Shift+n) takes the tab out of the layout; ws_rescue when a workspace's last tab
+  ends. Tab bar: workspace boxes while more than one is in use (tabbar_hit), the shown workspace's
+  tabs only; tab keys, show_tab, to_panes, zoom, pane_tab_gone filter by t_ws; other workspaces'
+  tabs keep their size. Keys: ws1-9, movews1-9 (shifted digits from MapRawKey, so the keymap's
+  own: £ for Shift+3), resize, scratch, toscratch (Shift + the raw key that gives -); a keys
+  file from before is moved over once (LA+n show n -> ws n).
+- **Scratchpad:** stab (t_ws -1) in fpane, laid out in per mille of the window; while shown every
+  other drawing goes through a clip region without its rectangle (InstallClipRegion via pane_use,
+  float_clip; removed before CloseWindow), it is drawn last (float_draw in redraw_all and
+  repair_damage), a pane under it scrolls by redrawing; pane_of/pane_at know it; other i3 keys
+  first give the keys back to the layout (float_unfocus); a workspace switch hides it.
+- **Resize mode:** LA+R, then arrows: the nearest split of that axis moves 4 columns / 2 rows
+  (drag_clamp's limits); on the scratchpad arrows size, Shift+arrows move; Return/Esc ends.
+- **Layouts:** layout_write/layout_read (format in pane.c's comment), menu items in Panes; a Shell
+  pane is "shell DIR PROG" from its CLI (cli_SetName, cli_CommandName; csh sets the command's name
+  while it runs), restored with CD in the Execute string and the program typed in (con_reply); hosts
+  by phone book name or host, called once laid out; prefs layout= opens one at the start.
+- **All of CTerm built with -fbbb=- now** (only keymap.c before): with the pass on, a click into a
+  pane under the scratchpad never reached pane_activate (seen with debug lines over wasabi debug).
+  conbench SCALE 10 on the A1200: 10.28/10.30 s before, 10.34/10.26 s after - the same.
+Verified on the A1200 each: workspaces (switch, move, close the last), scratchpad (over two panes,
+a loop scrolling under it, clicks, hide/show), resize (tiled divider 630 -> 788, scratchpad sized
+and moved), a layout saved (two workspaces, Ahiru running) and opened at start: all back.
+
 **2026-10-14, 0.3b37 (INSTALLED, parts too: PART_VERSION 13; 0.3b36 kept as CTerm-0.3b36.bak and
 Parts-0.3b36.bak):** the user: each pane its own scroll bar (different amounts of output). Split
 with Scroll bar on: a PANEBAR (4 px) bar inside each pane's border at its right (lay() reserves it,

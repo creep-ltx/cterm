@@ -1311,6 +1311,40 @@ void con_stop(struct Con *c)
     serve(c);
 }
 
+/* The tab's Shell: its current drawer and the program running in it
+ * (none while the Shell itself waits: its own name, csh, cshell). */
+void con_shell_info(struct Con *c, char *dir, int dsz, char *prog, int psz)
+{
+    struct Process *pr;
+    struct CommandLineInterface *cli;
+    dir[0] = prog[0] = 0;
+    if (!c)
+        return;
+    Forbid();
+    if (task_alive(c->shelltask) && c->shelltask->tc_Node.ln_Type == NT_PROCESS &&
+        (pr = (struct Process *)c->shelltask)->pr_CLI &&
+        (cli = BADDR(pr->pr_CLI))) {
+        UBYTE *b = BADDR(cli->cli_SetName);
+        int n;
+        if (b && (n = b[0]) > 0) {
+            if (n >= dsz) n = dsz - 1;
+            memcpy(dir, b + 1, n); dir[n] = 0;
+        }
+        b = BADDR(cli->cli_CommandName);
+        if (b && (n = b[0]) > 0) {
+            if (n >= psz) n = psz - 1;
+            memcpy(prog, b + 1, n); prog[n] = 0;
+        }
+    }
+    Permit();
+    {   /* the Shell itself waiting: no program */
+        const char *f = FilePart((STRPTR)prog);
+        if (!stricmp(f, "csh") || !stricmp(f, "cshell") || !stricmp(f, "Shell") ||
+            !stricmp(f, "Execute") || !stricmp(f, "NewShell"))
+            prog[0] = 0;
+    }
+}
+
 /* Only when nothing is open on the port any more. */
 void con_free(struct Con *c)
 {

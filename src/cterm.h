@@ -372,7 +372,7 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SFTP, M_POPEN, M_PKILL, M_PFLEFT, M_PFRIGHT, M_PFUP, M_PFDOWN,
        M_PMLEFT, M_PMRIGHT, M_PMUP, M_PMDOWN, M_PSPLITH, M_PSPLITV, M_PFULL,
        M_PTABS, M_PPANES, M_PDWINDLE, M_SHNEW, M_SHCLOSE, M_INPANES,
-       M_INTABS };
+       M_INTABS, M_LSAVE, M_LOPEN, M_LSTART };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -729,6 +729,13 @@ BOOL float_over(struct Pane *p);        /* does it lie over p */
 BOOL pane_resizing(void);               /* resize mode: the keys are its */
 void pane_resize_key(UWORD k);
 void redraw_pane_now(void);             /* draw.c: the pane in use whole */
+/* saved layouts (pane.c) */
+extern char startlayout[200], lastlayout[200];
+BOOL layout_write(const char *path);
+BOOL layout_read(const char *path, BOOL reuse);
+void layout_menu(BOOL save);
+struct Tab *shell_tab_at(const char *dir);   /* main.c: a Shell tab starting in dir */
+void con_shell_info(struct Con *c, char *dir, int dsz, char *prog, int psz);   /* its drawer, its program */
 /* Workspaces (i3's): 9 of them, each its own layout of panes and its own
  * tabs (a tab's t_ws); every tab runs whichever is shown. */
 #define NWS 9

@@ -496,6 +496,10 @@ static void load_prefs_(char *buf)
             }
             else if (!stricmp(p, "bgsee")) bgsee = atoi(val);
             else if (!stricmp(p, "dwindle")) dwindle = atoi(val) != 0;
+            else if (!stricmp(p, "layout")) {
+                strncpy(startlayout, val, sizeof startlayout - 1);
+                startlayout[sizeof startlayout - 1] = 0;
+            }
             else if (!stricmp(p, "newshells")) tabmode = !stricmp(val, "tabs");
             else if (!stricmp(p, "outergaps")) outergaps = atoi(val) != 0;
             else if (!stricmp(p, "border")) {
@@ -577,6 +581,7 @@ static void save_prefs_(char *buf)
     if (!ownprog) strcat(buf, "\nownscreen=0");
     if (dwindle) strcat(buf, "\ndwindle=1");
     if (tabmode) strcat(buf, "\nnewshells=tabs");
+    if (startlayout[0]) { strcat(buf, "\nlayout="); strcat(buf, startlayout); }
     if (gaps) { strcat(buf, "\ngaps="); numstr_cat(buf, gaps); }
     if (!outergaps) strcat(buf, "\noutergaps=0");
     if (bordersize != 1) { strcat(buf, "\nborder="); numstr_cat(buf, bordersize); }
@@ -717,6 +722,7 @@ static void title_update_(void)
 }
 
 static char fromfile[256];              /* FROM: the Shell's first script */
+static BOOL arg_plain;                  /* (below: no words at all) */
 
 /* ---- tabs ---------------------------------------------------------- */
 
@@ -930,6 +936,31 @@ struct Tab *shell_tab(void)
     return t;
 }
 
+/* A new tab with the Amiga Shell in it starting in dir (a saved
+ * layout's), not shown; T as it was. */
+struct Tab *shell_tab_at(const char *dir)
+{
+    struct Tab *t = tab_new(), *keep = T;
+    char then[300];
+    if (!t)
+        return NULL;
+    then[0] = 0;
+    if (dir && dir[0] && strlen(dir) < 200) {
+        strcpy(then, "CD \"");
+        strcat(then, dir);
+        strcat(then, "\"");
+    }
+    if (TABSHELL[0] && strlen(then) + strlen(TABSHELL) + 2 < sizeof then) {
+        if (then[0]) strcat(then, "\n");
+        strcat(then, TABSHELL);
+    }
+    T = t;
+    vt_set_amiga(vt, 1);
+    T->con = con_start("S:Shell-Startup", then, T);
+    T = keep;
+    return t;
+}
+
 /* A new tab with the Amiga Shell in it, shown. */
 void tab_new_shell(void)
 {
@@ -1056,6 +1087,8 @@ static void run(void)
             UnLock(l);
         T->con = con_start(l ? script : NULL, TABSHELL, T);
         ML("shell");
+        if (T->con && startlayout[0] && arg_plain && !fromfile[0])
+            layout_read(startlayout, TRUE);     /* Panes/Open at start */
 #ifdef MEMLOG
         memlog_save();                  /* the marks so far, CTerm idle */
 #endif
