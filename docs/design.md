@@ -10,6 +10,17 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**Open after 0.3b40 (2026-10-14):**
+- `show1`-`show9` (put tab n into the pane you are in) lost their keys to the workspaces (LA+1-9);
+  the user was told; offered LA+Ctrl+1-9 as their default - not done, waiting for their word.
+- A saved layout keeps a program's NAME only (cli_CommandName), not its arguments: Ahiru comes
+  back in its own default drawer. Idea: csh keeps the running command's whole line in a local
+  variable of its process (e.g. `_CMDLINE`) and con_shell_info reads it from the process's
+  pr_LocalVars; other shells keep the name.
+- CTerm has no git remote: only on this PC (CShell and AmiNFSv3 have theirs).
+- Keyboard resize of tiled panes moves one divider (4 columns / 2 rows a press); i3's
+  "resize grow/shrink" by percentage not done.
+
 **2026-10-14, 0.3b38-0.3b40 (INSTALLED, parts too: PART_VERSION 14; 0.3b37 kept as CTerm-0.3b37.bak,
 Parts-0.3b37.bak, the keys as ENVARC:CTerm/CTerm.keys-0.3b37.bak):** the user asked for workspaces
 (also for tabs), the scratchpad as a floating window, resizing with the keyboard, saved layouts with
