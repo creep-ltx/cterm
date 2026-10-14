@@ -18,6 +18,9 @@ across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
   variable of its process (e.g. `_CMDLINE`) and con_shell_info reads it from the process's
   pr_LocalVars; other shells keep the name.
 - Backed up to the NAS: remote `nas` = /mnt/nas/home/Code/CTerm.git (since 2026-10-14).
+- Proposed, NOT wanted for now (user, 2026-10-14): i3's tabbed container inside a split (LA+W
+  tabbed pane with its own tab row, LA+E back to split, every tab in exactly one pane). The user
+  is happy with one view per workspace (LA+P panes / LA+T tabs, kept per workspace).
 - Keyboard resize of tiled panes moves one divider (4 columns / 2 rows a press); i3's
   "resize grow/shrink" by percentage not done.
 
