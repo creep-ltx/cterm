@@ -11,6 +11,8 @@ VT100/xterm emulation. Decided 2026-10-09.
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
 **Open after 0.3b40 (2026-10-14):**
+- Bug (found by the Fude session on the A1200, 2026-10-14, not yet looked at): ARexx `QUIT`
+  does not close CTerm while a Shell tab is open (`endcli` in the tab does).
 - (done in 0.3b41, INSTALLED and tested on the A1200 2026-10-14 (CTerm-0.3b40.bak, CTerm.keys-0.3b40.bak kept): `show1`-`show9` default to LA+Ctrl+1-9, the user's choice; a keys file
   without the KEYMARK comment gets them once where free, then is written with the mark.)
 - A saved layout keeps a program's NAME only (cli_CommandName), not its arguments: Ahiru comes
