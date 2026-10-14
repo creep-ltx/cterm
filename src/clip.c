@@ -289,6 +289,9 @@ static void paste_(UBYTE *buf, ULONG bufsize)
                 }
                 CopyMem("\x1b[200~", w, 6);
                 CopyMem(t, w + 6, sz);
+                for (i = 0; i < sz; i++)        /* no marks of its own: an Esc in it goes */
+                    if (w[6 + i] == 0x1b)
+                        w[6 + i] = ' ';
                 CopyMem("\x1b[201~", w + 6 + sz, 6);
                 if (!con_paste(T->con, w, sz + 12))
                     beep();

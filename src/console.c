@@ -448,6 +448,18 @@ static void paste_feed(struct Con *c)
         if (c->rawmode) {
             if (c->inlen >= INMAX)
                 break;
+            /* the bracketed-paste marks clip.c put around it, whole (the
+             * text itself has no Esc left: clip.c took them out) */
+            if (ch == 0x1b && c->plen - c->ppos >= 6 &&
+                (!memcmp(c->paste + c->ppos, "\x1b[200~", 6) || !memcmp(c->paste + c->ppos, "\x1b[201~", 6))) {
+                if (c->inlen + 6 > INMAX)
+                    break;
+                CopyMem(c->paste + c->ppos, c->inq + c->inlen, 6);
+                c->inlen += 6;
+                c->ppos += 6;
+                fed = TRUE;
+                continue;
+            }
             c->ppos++;
             if (pasteable(ch) || ch == '\t' || ch == '\r')
                 c->inq[c->inlen++] = ch;

@@ -10,6 +10,12 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**2026-10-14, 0.3b34 (NOT installed: the user decides; tried on the A1200 from Work:Utils/CTerm/CTerm-0.3b34-test,
+removed after):** a bracketed paste reaches a raw reader whole - paste_feed (console.c) let no Esc through, so
+csh got `[200~text[201~` as typed text and ran it as a command. The marks now pass whole; clip.c turns an
+Esc inside the pasted text into a space first, so a clipboard cannot forge a mark. Verified with csh 0.1b6: a
+three-line paste ran as three commands.
+
 **2026-10-13, 0.3b33:** `CSI ?7727 h` (csh asks for it): keys typed while nobody reads stay keys
 - echoed, then handed to the next reader as typed (raw to csh, whose Tab then completes; through
 the line editor to a program reading a line, like Ask). As on a Unix terminal.
