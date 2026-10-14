@@ -37,6 +37,32 @@ int npanes = 1;
 BOOL dwindle;                           /* split by shape (PO_DWINDLE) */
 BOOL tabmode;                           /* new Shells in tabs (M_SHNEW) */
 int gaps;                               /* pixels between panes (prefs) */
+BOOL outergaps = TRUE;                  /* and round them (prefs outergaps=0: not) */
+int bordersize = 1;                     /* each pane's border (prefs border=) */
+ULONG bordact, bordin;                  /* its colours, when set (ownbact, ownbin) */
+BOOL ownbact, ownbin;
+
+/* a pane's border colour: the active one's, or the others' */
+ULONG pane_border_rgb(BOOL active)
+{
+    if (active)
+        return ownbact ? bordact : themes[theme].wbpens[1];
+    return ownbin ? bordin : mix(defbg, deffg, 25);
+}
+
+/* Full screen's position bar, at the window's right edge: POSBAR wide,
+ * kept clear of the text by 2. Split with outer gaps it lives in the right
+ * gap - narrower when the gap is (the right gap stays the others' size). */
+int posbar_w(void)
+{
+    if (npanes > 1 && outergaps && gaps >= 3 && gaps < POSBAR + 2)
+        return gaps - 1;
+    return POSBAR;
+}
+
+/* room a pane keeps round its letters: the border and a pixel beside it */
+#define PADW (2 * bordersize + 2)
+#define PADH (2 * bordersize)
 struct Pane *apane = &panes[0];         /* the active pane: the shown tab's */
 struct Pane *cpane = &panes[0];         /* the pane drawn now */
 
@@ -149,19 +175,19 @@ static void lay(int n, int x0, int y0, int x1, int y1)
     if (!d->split) {
         struct Pane *p = &panes[(int)d->pane];
         int edge = npanes > 1, minc = edge ? 2 : MINC, minr = edge ? 2 : MINR;
+        int b = edge ? bordersize : 1;  /* alone: as the window always had */
         p->x0 = x0; p->y0 = y0; p->x1 = x1; p->y1 = y1;
-        /* the text: 2 pixels in from the left and right, 1 from the top
-         * and bottom - as the window always had */
-        p->ox = x0 + 2;
-        p->oy = y0 + 1;
-        p->cols = (x1 + 1 - p->ox - 2) / cw;
-        p->rows = (y1 - y0 + 1 - 2) / ch;
+        /* the text: inside the border and a pixel more at the sides */
+        p->ox = x0 + b + 1;
+        p->oy = y0 + b;
+        p->cols = (x1 + 1 - p->ox - b - 1) / cw;
+        p->rows = (y1 - y0 + 1 - 2 * b) / ch;
         if (p->cols < minc) p->cols = minc;
         if (p->rows < minr) p->rows = minr;
         if (p->rows > PROWS) p->rows = PROWS;   /* the rows' marks */
         /* what a row's fills cover: the pane, but its frame (split) */
-        p->fx0 = x0 + edge;
-        p->fx1 = x1 - edge;
+        p->fx0 = x0 + (edge ? b : 0);
+        p->fx1 = x1 - (edge ? b : 0);
         return;
     }
     if (d->split == 'h') {
@@ -177,13 +203,17 @@ static void lay(int n, int x0, int y0, int x1, int y1)
     }
 }
 
-/* The text area's corners (all panes together). */
+/* The text area's corners (all panes together). Split, with outer gaps:
+ * the gap all round, the same as between two panes; the full screen's
+ * position bar on the right sits in that gap when it is wide enough. */
 static void area(int *x0, int *y0, int *x1, int *y1)
 {
-    *x0 = win->BorderLeft;
-    *y0 = win->BorderTop + tabbar_h();
-    *x1 = win->Width - win->BorderRight - 1 - (fullscreen ? POSBAR + 2 : 0);
-    *y1 = win->Height - win->BorderBottom - 1;
+    int bar = fullscreen && scrollbar ? posbar_w() + 2 : 0, og = npanes > 1 && outergaps ? gaps : 0;
+    if (og >= 3 && bar > og) bar = og;  /* the bar is in the gap (posbar_w) */
+    *x0 = win->BorderLeft + og;
+    *y0 = win->BorderTop + tabbar_h() + og;
+    *x1 = win->Width - win->BorderRight - 1 - (og > bar ? og : bar);
+    *y1 = win->Height - win->BorderBottom - 1 - og;
 }
 
 /* Every pane's place and size, from the window (layout_and_resize). */
@@ -208,11 +238,25 @@ int panes_maxcols(void)
 
 static void frame(struct Pane *p, ULONG rgb)
 {
+    int b = bordersize;
+    if (b <= 0)
+        return;
     apen(rgb);
-    RectFill(rp, p->x0, p->y0, p->x1, p->y0);
-    RectFill(rp, p->x0, p->y1, p->x1, p->y1);
-    RectFill(rp, p->x0, p->y0, p->x0, p->y1);
-    RectFill(rp, p->x1, p->y0, p->x1, p->y1);
+    RectFill(rp, p->x0, p->y0, p->x1, p->y0 + b - 1);
+    RectFill(rp, p->x0, p->y1 - b + 1, p->x1, p->y1);
+    RectFill(rp, p->x0, p->y0, p->x0 + b - 1, p->y1);
+    RectFill(rp, p->x1 - b + 1, p->y0, p->x1, p->y1);
+}
+
+/* the window's background, or the picture behind, on a rectangle */
+static void clear_rect(int x0, int y0, int x1, int y1)
+{
+    if (x1 < x0 || y1 < y0)
+        return;
+    if (!backdrop_area(x0, y0, x1 - x0 + 1, y1 - y0 + 1)) {
+        apen(defbg);
+        RectFill(rp, x0, y0, x1, y1);
+    }
 }
 
 /* The dividers, and a thin frame in the theme's highlight round the
@@ -224,6 +268,16 @@ void panes_frames(void)
     if (npanes < 2 || !win)
         return;
     planes_save();
+    if (outergaps && gaps > 0) {        /* the outer gaps (not the position bar) */
+        int ax0, ay0, ax1, ay1, wx0 = win->BorderLeft, wy0 = win->BorderTop + tabbar_h();
+        int wx1 = win->Width - win->BorderRight - 1 - (fullscreen && scrollbar ? posbar_w() + 1 : 0);
+        int wy1 = win->Height - win->BorderBottom - 1;
+        area(&ax0, &ay0, &ax1, &ay1);
+        clear_rect(wx0, wy0, wx1, ay0 - 1);
+        clear_rect(wx0, ay1 + 1, wx1, wy1);
+        clear_rect(wx0, ay0, ax0 - 1, ay1);
+        clear_rect(ax1 + 1, ay0, wx1, ay1);
+    }
     for (n = 0; n < MAXNODES; n++) {
         struct PNode *d = &nodes[n];
         if (!d->used || !d->split)
@@ -244,8 +298,7 @@ void panes_frames(void)
     /* every pane its border: the active one in the highlight, the
      * others dimmed */
     for (i = 0; i < npanes; i++)
-        frame(&panes[i], &panes[i] == apane ? themes[theme].wbpens[1]
-                                            : mix(defbg, deffg, 25));
+        frame(&panes[i], pane_border_rgb(&panes[i] == apane));
     planes_restore();
 }
 
@@ -341,8 +394,8 @@ static struct Pane *neighbour(struct Pane *p, int dir)
  * letters? */
 static BOOL halves_fit(int dir, int w, int h)
 {
-    return dir == 'h' ? (w - DIVW) / 2 >= MINC * cw + 4
-                      : (h - DIVW) / 2 >= MINR * ch + 2;
+    return dir == 'h' ? (w - DIVW) / 2 >= MINC * cw + PADW
+                      : (h - DIVW) / 2 >= MINR * ch + PADH;
 }
 
 /* The active pane in two (dir 'h': side by side, 'v': above each
@@ -574,8 +627,8 @@ static int tindex(struct Tab *t)
 /* c x r cells in the text area, each keeping its letters? */
 static BOOL grid_fits(int c, int r, int w, int h)
 {
-    return (w - (c - 1) * DIVW) / c >= MINC * cw + 4 &&
-           (h - (r - 1) * DIVW) / r >= MINR * ch + 2;
+    return (w - (c - 1) * DIVW) / c >= MINC * cw + PADW &&
+           (h - (r - 1) * DIVW) / r >= MINR * ch + PADH;
 }
 
 /* The grid for k panes (an odd k: one cell more, the active pane has
@@ -902,7 +955,7 @@ static int need(int n, int dir)
     struct PNode *d = &nodes[n];
     int a, b;
     if (!d->split)
-        return dir == 'h' ? MINC * cw + 4 : MINR * ch + 2;
+        return dir == 'h' ? MINC * cw + PADW : MINR * ch + PADH;
     a = need(d->a, dir);
     b = need(d->b, dir);
     if (d->split == dir)

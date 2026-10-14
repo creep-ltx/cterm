@@ -416,6 +416,14 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
   lit; the gap is the room between two panes' borders, all of it, showing
   the window's background (or the picture behind the text). 0: the
   borders touch.
+- **Outer gaps** (Settings, Screen tab, on unless unticked): the same gap
+  between the panes and the window's edges, so 5 means 5 pixels all
+  round and 5 between two panes. On a full screen the position bar sits
+  in the right gap (narrower in a gap under 8). Untick both Outer gaps
+  and Scroll bar for panes that reach every edge.
+- **Pane border** (Settings, Screen tab, 0 to 8 pixels) and its colours
+  (Colours tab, "Colour of": Active pane's border, Other panes' borders;
+  the theme's until set, "Back to the theme's colours" returns to them).
 - **Dwindle** (Left Amiga+D, or Panes/Automatic split; kept in the
   settings): as Hyprland's dwindle layout, a new pane splits the one you
   are in along its longer side - side by side when it is wider than

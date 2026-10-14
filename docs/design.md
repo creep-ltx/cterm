@@ -10,6 +10,15 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**2026-10-14, 0.3b36 (INSTALLED, parts too: PART_VERSION 12; 0.3b35 kept as CTerm-0.3b35.bak and
+Parts-0.3b35.bak):** the user on gaps: an outer gap on the right only (it was the full screen's
+position-bar room, 8 px), none elsewhere; "5 px gaps: 5 outer and at most 5 between", outer gaps
+switchable, border size and colour. Now: outer gaps (`outergaps=0` off) = gaps on every side when
+split; the bar lives in the right gap (posbar_w: gaps-1 wide under 8); `border=0..8`,
+`bordera=`/`borderi=` RRGGBB (Colours tab "Colour of"); Scroll bar off also drops the full
+screen's bar. Measured on the A1200 (frame pixels in grabs): gaps 12 -> 12 all round and between;
+gaps 5 + border 3 -> 5/5/5/5 and 5 between; outer off + bar off -> borders on the edges, 5 between.
+
 **2026-10-14, 0.3b35 (INSTALLED on the A1200, the user asked; 0.3b34 kept as CTerm-0.3b34.bak):**
 the user: "Amiga+Enter and Amiga+Q standard for both tabs and panes, it just depends on what mode is
 selected"; and a pane opened with LA+Return and closed with LA+Q stayed as a tab. (1) Panes menu:

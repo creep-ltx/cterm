@@ -497,6 +497,13 @@ static void load_prefs_(char *buf)
             else if (!stricmp(p, "bgsee")) bgsee = atoi(val);
             else if (!stricmp(p, "dwindle")) dwindle = atoi(val) != 0;
             else if (!stricmp(p, "newshells")) tabmode = !stricmp(val, "tabs");
+            else if (!stricmp(p, "outergaps")) outergaps = atoi(val) != 0;
+            else if (!stricmp(p, "border")) {
+                bordersize = atoi(val);
+                if (bordersize < 0 || bordersize > MAXBORDER) bordersize = 1;
+            }
+            else if (!stricmp(p, "bordera")) { bordact = hexval(val); ownbact = TRUE; }
+            else if (!stricmp(p, "borderi")) { bordin = hexval(val); ownbin = TRUE; }
             else if (!stricmp(p, "gaps")) {
                 gaps = atoi(val);
                 if (gaps < 0 || gaps > MAXGAPS) gaps = 0;
@@ -571,6 +578,10 @@ static void save_prefs_(char *buf)
     if (dwindle) strcat(buf, "\ndwindle=1");
     if (tabmode) strcat(buf, "\nnewshells=tabs");
     if (gaps) { strcat(buf, "\ngaps="); numstr_cat(buf, gaps); }
+    if (!outergaps) strcat(buf, "\noutergaps=0");
+    if (bordersize != 1) { strcat(buf, "\nborder="); numstr_cat(buf, bordersize); }
+    if (ownbact) { strcat(buf, "\nbordera="); hex_cat(buf, bordact, 6); }
+    if (ownbin) { strcat(buf, "\nborderi="); hex_cat(buf, bordin, 6); }
     if (shellcmd[0]) { strcat(buf, "\nshell="); strcat(buf, shellcmd); }
     if (dldir[0]) { strcat(buf, "\ndldir="); strcat(buf, dldir); }
     if (uldir[0]) { strcat(buf, "\nuldir="); strcat(buf, uldir); }

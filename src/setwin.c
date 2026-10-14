@@ -76,7 +76,9 @@ static LONG like_w, like_h;             /* the Workbench's mode, size and */
 static int like_depth;                  /* colours (24 for a card's 32) */
 
 static struct {                         /* what Cancel goes back to */
-    int k_theme, k_ttsize, k_fontsize, k_linespace, k_bgsee, k_gaps;
+    int k_theme, k_ttsize, k_fontsize, k_linespace, k_bgsee, k_gaps, k_border;
+    BOOL k_outer, k_ownbact, k_ownbin;
+    ULONG k_bordact, k_bordin;
     char k_bgfile[256];
     BOOL k_ownfg, k_ownbg, k_usett, k_s_utf8, k_pc, k_pcfont, k_altmeta;
     BOOL k_pics, k_ownprog;
@@ -93,7 +95,14 @@ static STRPTR letterlabels[] = { (STRPTR)"Amiga font", (STRPTR)"TrueType",
                                  NULL };
 static STRPTR charlabels[] = { (STRPTR)"UTF-8", (STRPTR)"Latin-1",
                                (STRPTR)"PC BBS (CP437)", NULL };
-static STRPTR partlabels[] = { (STRPTR)"Text", (STRPTR)"Background", NULL };
+static STRPTR partlabels[] = { (STRPTR)"Text", (STRPTR)"Background",
+                                (STRPTR)"Active pane's border", (STRPTR)"Other panes' borders", NULL };
+
+/* the colour the sliders show and set: text, background, the borders */
+static ULONG part_rgb(void)
+{
+    return setpart == 0 ? deffg : setpart == 1 ? defbg : pane_border_rgb(setpart == 2);
+}
 static STRPTR altlabels[] = { (STRPTR)"Meta for hosts (bash, emacs)",
                               (STRPTR)"Amiga characters everywhere", NULL };
 static STRPTR tablabels[] = { (STRPTR)"Screen", (STRPTR)"Text",
@@ -222,7 +231,7 @@ static void r_disable(int id, BOOL off)
 
 static void set_sliders(void)
 {
-    ULONG c = setpart ? defbg : deffg;
+    ULONG c = part_rgb();
     set_attr(S_R, SLIDER_Level, (c >> 16) & 255);
     set_attr(S_G, SLIDER_Level, (c >> 8) & 255);
     set_attr(S_B, SLIDER_Level, c & 255);
@@ -435,6 +444,9 @@ static Object *page_screen(void)
     r_add(g, r_check(S_BAR, "Scroll bar", pend_bar), NULL);
     r_add(g, r_slider(S_GAPS, 0, MAXGAPS, gaps, "%ld"),
           "Gap between panes");
+    r_add(g, r_check(S_OUTER, "Outer gaps (the same gap round the panes)", outergaps), NULL);
+    r_add(g, r_slider(S_BORDER, 0, MAXBORDER, bordersize, "%ld"),
+          "Pane border");
     r_put(p, g);
     return r_wrap(p);
 }
@@ -474,7 +486,7 @@ static Object *page_text(void)
 static Object *page_colours(void)
 {
     Object *h, *p = r_page(), *g = r_group("Colours");
-    ULONG c = setpart ? defbg : deffg;
+    ULONG c = part_rgb();
     r_add(g, r_chooser(S_THEME, themelabels, theme), "Theme");
     r_add(g, r_chooser(S_PART, partlabels, setpart), "Colour of");
     r_add(g, r_slider(S_R, 0, 255, (c >> 16) & 255, "%3ld"), "Red");
@@ -871,6 +883,9 @@ static void open_settings_(void)
     snap.k_fontsize = fontsize;
     snap.k_linespace = linespace;
     snap.k_gaps = gaps;
+    snap.k_outer = outergaps; snap.k_border = bordersize;
+    snap.k_bordact = bordact; snap.k_bordin = bordin;
+    snap.k_ownbact = ownbact; snap.k_ownbin = ownbin;
     snap.k_s_utf8 = utf8; snap.k_pc = pcmode;
     defchars = saved_pc ? 2 : saved_utf8 ? 0 : 1;
     snap.k_bgsee = bgsee;
@@ -1007,8 +1022,13 @@ static void finish_settings_(int how)
                        snap.k_fontsize != fontsize ||
                        snap.k_linespace != linespace;
         theme = snap.k_theme;
-        if (gaps != snap.k_gaps) {
+        if (gaps != snap.k_gaps || outergaps != snap.k_outer || bordersize != snap.k_border ||
+            bordact != snap.k_bordact || bordin != snap.k_bordin ||
+            ownbact != snap.k_ownbact || ownbin != snap.k_ownbin) {
             gaps = snap.k_gaps;
+            outergaps = snap.k_outer; bordersize = snap.k_border;
+            bordact = snap.k_bordact; bordin = snap.k_bordin;
+            ownbact = snap.k_ownbact; ownbin = snap.k_ownbin;
             panes_changed();
         }
         CopyMem(kept, keys_binds, sizeof kept);
@@ -1164,6 +1184,17 @@ static int settings_gadget(int id)
             panes_changed();
         }
         break;
+    case S_OUTER:
+        outergaps = get_attr(S_OUTER, GA_Selected) != 0;
+        panes_changed();
+        break;
+    case S_BORDER:
+        v = get_attr(S_BORDER, SLIDER_Level);
+        if ((int)v != bordersize) {
+            bordersize = v;
+            panes_changed();
+        }
+        break;
     case S_SPACE:
         v = get_attr(S_SPACE, SLIDER_Level);
         if ((int)v != linespace) {
@@ -1197,16 +1228,19 @@ static int settings_gadget(int id)
         break;
     case S_R: case S_G: case S_B: {
         int sh = id == S_R ? 16 : id == S_G ? 8 : 0;
-        ULONG c = setpart ? defbg : deffg;
+        ULONG c = part_rgb();
         v = get_attr(id, SLIDER_Level);
         c = (c & ~(255UL << sh)) | ((v & 255) << sh);
-        if (setpart) { mybg = c; ownbg = TRUE; }
-        else { myfg = c; ownfg = TRUE; }
-        colours_changed();
+        if (setpart == 1) { mybg = c; ownbg = TRUE; }
+        else if (setpart == 0) { myfg = c; ownfg = TRUE; }
+        else if (setpart == 2) { bordact = c; ownbact = TRUE; }
+        else { bordin = c; ownbin = TRUE; }
+        if (setpart >= 2) panes_changed();
+        else colours_changed();
         break;
     }
     case S_RESET:
-        ownfg = ownbg = FALSE;
+        ownfg = ownbg = ownbact = ownbin = FALSE;
         colours_changed();
         set_sliders();
         break;

@@ -1441,7 +1441,7 @@ static BOOL pp_cells(int r, int a, int b)
  * margin (a "y" at the start of a line), so a row clears its edges too. */
 int panes_right(void)
 {
-    return win->Width - win->BorderRight - 1 - (fullscreen ? POSBAR + 2 : 0);
+    return win->Width - win->BorderRight - 1 - (fullscreen && scrollbar ? POSBAR + 2 : 0);
 }
 
 /* The pane's: the whole text area, or the pane's inside its frame. */
@@ -2309,8 +2309,10 @@ void update_knob(void)
         return;                         /* the active pane's, only */
     if (total == k_total && top == k_top && rows == k_rows)
         return;
+    if (fullscreen && !scrollbar)
+        return;                         /* no bar: Settings, Scroll bar off */
     if (fullscreen && win) {
-        int x0 = win->Width - POSBAR, y0 = oy, h = rows * ch, a, b;
+        int x0 = win->Width - posbar_w(), y0 = oy, h = rows * ch, a, b;
         LONG keepbase = pbase;
         UBYTE keepmask = pmask;
         /* all planes, the text's mask kept: the bar's own pens would

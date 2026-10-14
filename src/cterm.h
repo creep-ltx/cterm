@@ -374,6 +374,7 @@ enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_DLDIR, S_ULDIR, S_SHELL,
        S_MINIT, S_MINIT2, S_MDIALK, S_MDIAL, S_MSUFFIX, S_MHANG, S_MHANGCMD,
        S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE, S_PICS, S_GAPS, S_OWNPROG,
+       S_OUTER, S_BORDER,
        S_SAVE, S_USE, S_CANCEL, S_N };
 
 /* ---- shared state ---- */
@@ -720,6 +721,15 @@ extern BOOL tabmode;                    /* new Shells (open/kill keys): tabs, no
  * background (the picture behind the text, if there is one). */
 #define MAXGAPS 32
 extern int gaps;
+/* Outer gaps: the same room round the panes as between them (prefs
+ * outergaps=0 turns them off); the border round each pane, 0-MAXBORDER
+ * pixels, in the theme's colours unless set (bordera= / borderi=). */
+#define MAXBORDER 8
+extern BOOL outergaps, ownbact, ownbin;
+extern int bordersize;
+extern ULONG bordact, bordin;
+ULONG pane_border_rgb(BOOL active);
+int posbar_w(void);                     /* full screen's place bar: its width at the right edge */
 BOOL backdrop_area(LONG x, LONG y, LONG w, LONG h);
 enum { PD_LEFT, PD_RIGHT, PD_UP, PD_DOWN };
 BOOL pane_do(int op, int arg);

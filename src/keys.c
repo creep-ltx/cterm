@@ -623,7 +623,7 @@ BOOL window_events(void)
                     break;
                 }
             }
-            if (copy.Code == SELECTDOWN && fullscreen &&
+            if (copy.Code == SELECTDOWN && fullscreen && scrollbar &&
                 copy.MouseX >= win->Width - POSBAR - 4 && copy.MouseY >= oy &&
                 copy.MouseY < oy + rows * ch && vt_history(vt) > 0) {
                 bardrag = TRUE;         /* the thin bar, pulled */
