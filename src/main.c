@@ -795,6 +795,7 @@ struct Tab *tab_new(void)
     vt_set_utf8(t->t_vt, t->t_utf8);
     if (t->t_pcmode)
         vt_set_cp437(t->t_vt, 1);
+    t->t_ws = curws;                    /* the workspace shown makes it */
     tabs[ntabs++] = t;
     pics_tab(t);
     return t;
@@ -808,6 +809,14 @@ void tab_show(int i)
     struct Pane *p;
     if (i < 0 || i >= ntabs)
         return;
+    if (tabs[i]->t_ws != curws) {       /* another workspace's: go there */
+        struct Tab *want = tabs[i];
+        pane_do(PO_WS, want->t_ws + 1);
+        for (i = 0; i < ntabs && tabs[i] != want; i++)
+            ;
+        if (i >= ntabs)
+            return;
+    }
     if ((p = pane_of(tabs[i])))
         apane = p;
     else
@@ -838,6 +847,8 @@ static int tab_index(struct Tab *t)
             break;
     return i;
 }
+
+int tab_number(struct Tab *t) { return tab_index(t); }
 
 /* A tab goes: its host hung up on, its emulator freed (a local tab only
  * once its Shell has ended). */
@@ -886,6 +897,8 @@ static void tab_drop(struct Tab *t)
     if (t != &tab0)
         FreeVec(t);
     T = keep == t ? NULL : keep;
+    if (!apane->tab || apane->tab->t_ws != curws)
+        ws_rescue();                    /* its workspace's last: another's */
     shown = apane->tab;
     if (ntabs > 0 && win) {
         T = shown;

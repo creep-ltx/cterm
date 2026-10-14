@@ -233,6 +233,7 @@ struct Tab {
     LONG t_cport;                       /* ... the port it calls */
     struct timeval t_csince;            /* ... when it began */
     LONG t_cidle;                       /* ... quiet seconds (no clock) */
+    int t_ws;                           /* its workspace, 0-8 (pane.c) */
 };
 
 /* A pane: a part of the window showing a tab (pane.c). As many as
@@ -318,6 +319,9 @@ enum { KA_NONE, KA_NEWTAB, KA_CALL, KA_BOOK, KA_SERIAL, KA_ANSWER, KA_SFTP,
        KA_P_MLEFT, KA_P_MRIGHT, KA_P_MUP, KA_P_MDOWN, KA_P_SPLITH,
        KA_P_SPLITV, KA_P_FULL, KA_P_TABS, KA_P_PANES, KA_P_SHOW1,
        KA_P_SHOW9 = KA_P_SHOW1 + 8, KA_P_DWINDLE,
+       /* i3's workspaces, its resize mode, its scratchpad */
+       KA_P_WS1, KA_P_WS9 = KA_P_WS1 + 8, KA_P_MOVEWS1,
+       KA_P_MOVEWS9 = KA_P_MOVEWS1 + 8, KA_P_RESIZE, KA_P_SCRATCH, KA_P_TOSCRATCH,
        KA_N };                          /* KA_ED_*: console.h's CE_* order */
 struct KeyAct {
     const char *name;                   /* in the file */
@@ -714,7 +718,16 @@ void pane_drag_end(void);
  * direction (PD_*), tab number (1..) or, for PO_KILL, ask (a transfer)
  * - FALSE: not done (no room, no pane there: beep) */
 enum { PO_OPEN, PO_KILL, PO_FOCUS, PO_MOVE, PO_DIR, PO_FULL, PO_SHOW,
-       PO_TABS, PO_PANES, PO_DWINDLE };
+       PO_TABS, PO_PANES, PO_DWINDLE, PO_WS, PO_MOVEWS };
+/* Workspaces (i3's): 9 of them, each its own layout of panes and its own
+ * tabs (a tab's t_ws); every tab runs whichever is shown. */
+#define NWS 9
+extern int curws;
+int ws_used(int n);                     /* how many tabs workspace n has */
+int ws_tabs(struct Tab **out);          /* the shown workspace's tabs, in order */
+void ws_rescue(void);                   /* the shown workspace emptied: another */
+int tab_number(struct Tab *t);          /* its place in tabs[], -1 none */
+int tabbar_hit(int x, int *ws);         /* the tab bar at x: a tab's place in tabs[], or *ws a workspace */
 /* Dwindle (Hyprland's way): a new pane splits the active one along its
  * longer side - side by side when it is wider than high. Kept in the
  * prefs; LA+H/V then choose the next split only. */

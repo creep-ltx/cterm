@@ -167,6 +167,17 @@ const struct KeyAct keys_acts[] = {
     { "show8", KC_PANES, 0 },
     { "show9", KC_PANES, 0 },
     { "dwindle", KC_PANES, M_PDWINDLE },
+    { "ws1", KC_PANES, 0 }, { "ws2", KC_PANES, 0 }, { "ws3", KC_PANES, 0 },
+    { "ws4", KC_PANES, 0 }, { "ws5", KC_PANES, 0 }, { "ws6", KC_PANES, 0 },
+    { "ws7", KC_PANES, 0 }, { "ws8", KC_PANES, 0 }, { "ws9", KC_PANES, 0 },
+    { "movews1", KC_PANES, 0 }, { "movews2", KC_PANES, 0 },
+    { "movews3", KC_PANES, 0 }, { "movews4", KC_PANES, 0 },
+    { "movews5", KC_PANES, 0 }, { "movews6", KC_PANES, 0 },
+    { "movews7", KC_PANES, 0 }, { "movews8", KC_PANES, 0 },
+    { "movews9", KC_PANES, 0 },
+    { "resize", KC_PANES, 0 },
+    { "scratch", KC_PANES, 0 },
+    { "toscratch", KC_PANES, 0 },
 };
 
 /* (one entry an action, in the enum's order) */
@@ -226,11 +237,12 @@ static const struct KeyBind defbinds[] = {
     { L(S(KM_UP)), KA_P_MUP }, { L(S(KM_DOWN)), KA_P_MDOWN },
     { L('h'), KA_P_SPLITH }, { L('v'), KA_P_SPLITV }, { L('f'), KA_P_FULL },
     { L('t'), KA_P_TABS }, { L('p'), KA_P_PANES },
-    { L('1'), KA_P_SHOW1 }, { L('2'), KA_P_SHOW1 + 1 },
-    { L('3'), KA_P_SHOW1 + 2 }, { L('4'), KA_P_SHOW1 + 3 },
-    { L('5'), KA_P_SHOW1 + 4 }, { L('6'), KA_P_SHOW1 + 5 },
-    { L('7'), KA_P_SHOW1 + 6 }, { L('8'), KA_P_SHOW1 + 7 },
-    { L('9'), KA_P_SHOW1 + 8 }, { L('d'), KA_P_DWINDLE },
+    { L('1'), KA_P_WS1 }, { L('2'), KA_P_WS1 + 1 },
+    { L('3'), KA_P_WS1 + 2 }, { L('4'), KA_P_WS1 + 3 },
+    { L('5'), KA_P_WS1 + 4 }, { L('6'), KA_P_WS1 + 5 },
+    { L('7'), KA_P_WS1 + 6 }, { L('8'), KA_P_WS1 + 7 },
+    { L('9'), KA_P_WS1 + 8 }, { L('d'), KA_P_DWINDLE },
+    { L('r'), KA_P_RESIZE }, { L('-'), KA_P_SCRATCH },
 #undef L
 #undef F
 #undef S
@@ -480,10 +492,39 @@ void keys_unbind(int a)
     keys_n = n;
 }
 
+/* The character Shift + a raw key gives on this keymap (Shift+1 is ! on
+ * most, Shift+- is _ on a Swedish one): for i3's Mod+Shift keys. */
+static UWORD shifted(UWORD code)
+{
+    struct InputEvent ie;
+    char b[4];
+    memset(&ie, 0, sizeof ie);
+    ie.ie_Class = IECLASS_RAWKEY;
+    ie.ie_Code = code;
+    ie.ie_Qualifier = IEQUALIFIER_LSHIFT;
+    if (MapRawKey(&ie, (STRPTR)b, sizeof b, NULL) != 1 || (UBYTE)b[0] <= ' ')
+        return 0;
+    return (UBYTE)b[0];
+}
+
+/* Left Amiga+Shift+1-9: a tab to workspace n; +Shift+-: to the scratchpad
+ * (only where the key is free). */
+static void shifted_defaults(void)
+{
+    int n;
+    UWORD c;
+    for (n = 0; n < NWS; n++)
+        if ((c = shifted(0x01 + n)) && !keys_find(KC_PANES, KQ_L | c))
+            keys_bind(KC_PANES, KQ_L | c, KA_P_MOVEWS1 + n);
+    if ((c = shifted(0x0B)) && !keys_find(KC_PANES, KQ_L | c))
+        keys_bind(KC_PANES, KQ_L | c, KA_P_TOSCRATCH);
+}
+
 void keys_defaults(void)
 {
     keys_n = NDEF;
     CopyMem((APTR)defbinds, keys_binds, sizeof defbinds);
+    shifted_defaults();
     /* the login keys of older settings (keyuser=, keypass=) */
     if (userkey[0] != 'U') {
         keys_unbind(KA_SENDUSER);
@@ -644,6 +685,26 @@ void keys_load(void)
     }
     if (infile && browser && !panes)
         keys_save();                    /* (0.3b19) listed with [panes] */
+    if (infile && panes) {
+        /* (0.3b38) a file from before workspaces: LA+1-9 showed tab n in
+         * the pane; now they are i3's workspaces, and resize, scratchpad
+         * and Mod+Shift come in where their keys are free */
+        BOOL ws = FALSE;
+        for (a = KA_P_WS1; a < KA_N; a++)
+            if (named[a])
+                ws = TRUE;
+        if (!ws) {
+            int n, i;
+            for (n = 0; n < NWS; n++)
+                for (i = 0; i < keys_n; i++)
+                    if (keys_binds[i].act == KA_P_SHOW1 + n && keys_binds[i].key == (KQ_L | ('1' + n)))
+                        keys_binds[i].act = KA_P_WS1 + n;
+            if (!keys_find(KC_PANES, KQ_L | 'r')) keys_bind(KC_PANES, KQ_L | 'r', KA_P_RESIZE);
+            if (!keys_find(KC_PANES, KQ_L | '-')) keys_bind(KC_PANES, KQ_L | '-', KA_P_SCRATCH);
+            shifted_defaults();
+            keys_save();
+        }
+    }
     if (!browser) {
         BOOL old = FALSE;
         if ((t = key_read(KEYFILE_OLD, &oldgone))) {

@@ -2436,9 +2436,47 @@ void planes_restore(void)
 
 /* The tab bar: a row of names above the text, while there are tabs -
  * not with panes (the user: in pane mode the tabs are on show already) */
+/* workspaces with tabs, the shown one counted */
+static int ws_inuse(void)
+{
+    int n, k = 0;
+    for (n = 0; n < NWS; n++)
+        if (n == curws || ws_used(n))
+            k++;
+    return k;
+}
+
 int tabbar_h(void)
 {
-    return ntabs > 1 && npanes < 2 && font ? font->tf_YSize + 4 : 0;
+    struct Tab *here[MAXTABS];
+    if (!font)
+        return 0;
+    return (ws_tabs(here) > 1 && npanes < 2) || ws_inuse() > 1 ? font->tf_YSize + 4 : 0;
+}
+
+/* The bar's parts: the workspaces' boxes at the left (while more than one
+ * is in use), each " n "; the shown workspace's tabs share the rest (not
+ * with panes: they are on show). */
+static int wsbox_w(void) { return 3 * (font && font->tf_XSize ? font->tf_XSize : 8) + 2; }
+
+int tabbar_hit(int x, int *ws)
+{
+    struct Tab *here[MAXTABS];
+    int nh = ws_tabs(here), x0 = win->BorderLeft, x1 = win->Width - win->BorderRight - 1, n, i;
+    *ws = -1;
+    if (ws_inuse() > 1) {
+        for (n = 0; n < NWS; n++) {
+            if (n != curws && !ws_used(n))
+                continue;
+            if (x < x0 + wsbox_w()) { *ws = n; return -1; }
+            x0 += wsbox_w();
+        }
+        x0 += 4;
+    }
+    if (nh < 2 || npanes > 1 || x < x0)
+        return -1;
+    i = (x - x0) * nh / (x1 - x0 + 1);
+    return i >= 0 && i < nh ? tab_number(here[i]) : -1;
 }
 
 void layout_and_resize(void)
@@ -2451,6 +2489,8 @@ void layout_and_resize(void)
         /* a tab in a pane takes its size; one in none the active pane's
          * (it is shown there when chosen) */
         struct Pane *p = pane_of(tabs[i]);
+        if (tabs[i]->t_ws != curws)
+            continue;                   /* another workspace's: its size kept */
         if (!p)
             p = apane;
         if (tabs[i]->t_vt)              /* pictures: the cell in pixels */
@@ -2504,22 +2544,47 @@ void draw_tabbar(void)
     RectFill(rp, x0, y0, x1, y0 + h - 1);
     SetFont(rp, font);
     SetSoftStyle(rp, 0, FSF_BOLD | FSF_ITALIC | FSF_UNDERLINED);
-    for (i = 0; i < ntabs; i++) {
+    if (ws_inuse() > 1) {               /* the workspaces: the shown one lit */
+        int n;
+        for (n = 0; n < NWS; n++) {
+            char t[4];
+            BOOL on = n == curws;
+            if (!on && !ws_used(n))
+                continue;
+            t[0] = ' '; t[1] = '1' + n; t[2] = ' '; t[3] = 0;
+            apen(on ? pane_border_rgb(TRUE) : mix(defbg, deffg, 25));
+            RectFill(rp, x0 + 1, y0 + 1, x0 + wsbox_w() - 2, y0 + h - 1);
+            apen(on ? defbg : deffg);
+            bpen(on ? pane_border_rgb(TRUE) : mix(defbg, deffg, 25));
+            SetDrMd(rp, JAM2);
+            Move(rp, x0 + 1, y0 + 2 + font->tf_Baseline);
+            Text(rp, (STRPTR)t, 3);
+            x0 += wsbox_w();
+        }
+        x0 += 4;
+        wd = x1 - x0 + 1;
+    }
+    {
+    struct Tab *here[MAXTABS];
+    int nh = npanes > 1 ? 0 : ws_tabs(here);
+    if (nh < 2)
+        nh = 0;                         /* one tab: no names to show */
+    for (i = 0; i < nh; i++) {
         char label[64], t[76];
         /* the width shared equally: a half each, a third each... */
-        int sx = x0 + i * wd / ntabs, slot = x0 + (i + 1) * wd / ntabs - sx;
+        int sx = x0 + i * wd / nh, slot = x0 + (i + 1) * wd / nh - sx;
         int n, fit;
-        BOOL on = tabs[i] == shown;
+        BOOL on = here[i] == shown;
         /* in another pane: as the shown one, its name a little dimmer */
-        ULONG bg = on || pane_of(tabs[i]) ? defbg : mix(defbg, deffg, 12);
-        tab_label(tabs[i], label);
+        ULONG bg = on || pane_of(here[i]) ? defbg : mix(defbg, deffg, 12);
+        tab_label(here[i], label);
         t[0] = 0;
         numstr_cat(t, i + 1);
         strcat(t, " ");
         strcat(t, label);
         apen(bg);
         RectFill(rp, sx + 1, y0 + 1, sx + slot - 2, y0 + h - 1);
-        apen(on ? deffg : mix(defbg, deffg, pane_of(tabs[i]) ? 80 : 55));
+        apen(on ? deffg : mix(defbg, deffg, pane_of(here[i]) ? 80 : 55));
         bpen(bg);
         SetDrMd(rp, JAM2);
         n = strlen(t);
@@ -2527,6 +2592,7 @@ void draw_tabbar(void)
         if (n > fit) n = fit;
         Move(rp, sx + 4, y0 + 2 + font->tf_Baseline);
         Text(rp, (STRPTR)t, n > 0 ? n : 0);
+    }
     }
     if (usett)
         tt_attach();                    /* the window's font for TrueType */

@@ -110,6 +110,9 @@ void panes_init(struct Tab *t)
 }
 
 static void zoom_out(void);
+static void ws_forget(struct Tab *t);
+static BOOL ws_switch(int n);
+static BOOL ws_move(int n);
 static int drag = -1;                   /* the split whose divider is pulled */
 static int dragpos = -1;                /* where its line is drawn now */
 
@@ -554,7 +557,7 @@ static void zoom_out(void)
     cpane = apane;
     for (i = 0; i < npanes; i++)
         if (!panes[i].tab) {
-            for (k = 0; k < ntabs && pane_of(tabs[k]); k++)
+            for (k = 0; k < ntabs && (pane_of(tabs[k]) || tabs[k]->t_ws != curws); k++)
                 ;
             if (k < ntabs)
                 panes[i].tab = tabs[k];
@@ -606,15 +609,16 @@ void pane_tab_gone(struct Tab *t, int at)
     for (i = 0; i < MAXPANES; i++)      /* the layout kept aside */
         if (ztab[i] == t)
             ztab[i] = NULL;
+    ws_forget(t);
     if (!p)
         return;
     p->tab = NULL;
     for (i = at < ntabs ? at : ntabs - 1; i >= 0; i--)
-        if (!pane_of(tabs[i]))
+        if (!pane_of(tabs[i]) && tabs[i]->t_ws == curws)
             break;
     if (i < 0)
         for (i = at + 1; i < ntabs; i++)
-            if (!pane_of(tabs[i]))
+            if (!pane_of(tabs[i]) && tabs[i]->t_ws == curws)
                 break;
     if (i >= 0 && i < ntabs) {
         p->tab = tabs[i];
@@ -711,9 +715,11 @@ static BOOL to_panes(void)
     char note[60];
     if (!win)
         return FALSE;
+    struct Tab *here[MAXTABS];
+    int nh = ws_tabs(here);
     zoomed = FALSE;
     area(&x0, &y0, &x1, &y1);
-    for (k = ntabs; k > 1 && !grid_for(k, x1 - x0 + 1, y1 - y0 + 1, &c, &r);
+    for (k = nh; k > 1 && !grid_for(k, x1 - x0 + 1, y1 - y0 + 1, &c, &r);
          k--)
         ;
     if (!panes_room(k))
@@ -721,9 +727,9 @@ static BOOL to_panes(void)
     /* which tabs, in what order */
     if (k & 1)
         order[n++] = tindex(act);
-    for (i = 0; i < ntabs && n < k; i++)
-        if (tabs[i] != act || !(k & 1))
-            order[n++] = i;
+    for (i = 0; i < nh && n < k; i++)
+        if (here[i] != act || !(k & 1))
+            order[n++] = tindex(here[i]);
     if (!(k & 1)) {                     /* the active one must be in */
         for (i = 0; i < n && tabs[order[i]] != act; i++)
             ;
@@ -806,6 +812,190 @@ static void to_tabs(void)
     panes_changed();
 }
 
+/* ---- workspaces (i3's) ----
+ *
+ * Every tab belongs to one (t_ws); the shown one's layout is the live
+ * tree, the others' are kept here: the tree, each leaf's tab and
+ * direction, the active one. All tabs stay in tabs[] (their Shells and
+ * hosts are served whichever workspace shows), only the tab bar, the
+ * tab keys and the layout look at t_ws. */
+int curws;
+static struct WsLayout {
+    BOOL used;
+    struct PNode nodes[MAXNODES];
+    struct Tab *tab[MAXPANES];
+    UBYTE dir[MAXPANES];
+    int npanes, active;
+} wsl[NWS];
+
+int ws_used(int n)
+{
+    int i, k = 0;
+    for (i = 0; i < ntabs; i++)
+        if (tabs[i]->t_ws == n)
+            k++;
+    return k;
+}
+
+int ws_tabs(struct Tab **out)
+{
+    int i, k = 0;
+    for (i = 0; i < ntabs; i++)
+        if (tabs[i]->t_ws == curws)
+            out[k++] = tabs[i];
+    return k;
+}
+
+/* a tab ended: no kept layout shows it any more */
+static void ws_forget(struct Tab *t)
+{
+    int w, i;
+    for (w = 0; w < NWS; w++)
+        for (i = 0; i < wsl[w].npanes; i++)
+            if (wsl[w].tab[i] == t)
+                wsl[w].tab[i] = NULL;
+}
+
+static void ws_save(void)
+{
+    struct WsLayout *w = &wsl[curws];
+    int i;
+    zoom_out();
+    memcpy(w->nodes, nodes, sizeof nodes);
+    for (i = 0; i < npanes; i++) {
+        w->tab[i] = panes[i].tab;
+        w->dir[i] = panes[i].sdir;
+    }
+    w->npanes = npanes;
+    w->active = apane - panes;
+    w->used = TRUE;
+}
+
+/* The shown workspace's layout from what was kept (a tab gone meanwhile
+ * leaves its pane to a tab of the workspace in none, or the pane goes);
+ * none kept: one pane, its first tab. FALSE: it has no tab. */
+static BOOL ws_load(void)
+{
+    struct WsLayout *w = &wsl[curws];
+    struct Tab *here[MAXTABS];
+    int nh = ws_tabs(here), i, k;
+    if (!nh)
+        return FALSE;
+    if (w->used && w->npanes > 0 && panes_room(w->npanes)) {
+        memcpy(nodes, w->nodes, sizeof nodes);
+        npanes = w->npanes;
+        for (i = 0; i < npanes; i++)
+            pane_fresh(i, w->tab[i], w->dir[i]);
+        apane = &panes[w->active < npanes ? w->active : 0];
+        for (i = 0; i < npanes; i++)
+            if (!panes[i].tab) {
+                for (k = 0; k < nh && pane_of(here[k]); k++)
+                    ;
+                if (k < nh)
+                    panes[i].tab = here[k];
+                else if (npanes > 1) {
+                    pane_remove(&panes[i]);
+                    i = -1;
+                } else
+                    panes[i].tab = here[0];
+            }
+    } else {
+        memset(nodes, 0, sizeof nodes);
+        nodes[0].used = 1;
+        nodes[0].up = nodes[0].a = nodes[0].b = -1;
+        nodes[0].at = 500;
+        npanes = 1;
+        panes_room(1);
+        pane_fresh(0, here[0], 'h');
+        apane = &panes[0];
+    }
+    cpane = apane;
+    shown = T = apane->tab;
+    return TRUE;
+}
+
+static void ws_note(const char *what, int n)
+{
+    char note[40];
+    strcpy(note, what);
+    numstr_cat(note, n + 1);
+    title_hint(note);
+}
+
+/* To workspace n: the shown one's layout kept, n's back; an empty one
+ * gets a new Shell (a workspace shows something). */
+static BOOL ws_switch(int n)
+{
+    int old = curws;
+    if (n < 0 || n >= NWS || !win)
+        return FALSE;
+    if (n == curws)
+        return TRUE;
+    ws_save();
+    curws = n;
+    if (!ws_load()) {
+        struct Tab *t = shell_tab();    /* made in curws (tab_new) */
+        if (!t || !ws_load()) {
+            curws = old;
+            ws_load();
+            panes_changed();
+            return FALSE;
+        }
+    }
+    ws_note("workspace ", n);
+    panes_changed();
+    return TRUE;
+}
+
+/* The shown tab to workspace n (i3's move container to workspace): out
+ * of this layout, a tab of n's (shown there when n is); the last one
+ * here takes the view with it. */
+static BOOL ws_move(int n)
+{
+    struct Tab *t = shown;
+    if (n < 0 || n >= NWS || n == curws || !t || !win)
+        return FALSE;
+    zoom_out();
+    if (ws_used(curws) < 2) {           /* nothing would be left here */
+        wsl[curws].used = FALSE;
+        t->t_ws = n;
+        curws = n;
+        if (!ws_load())
+            return FALSE;
+        ws_note("workspace ", n);
+        panes_changed();
+        return TRUE;
+    }
+    t->t_ws = n;
+    if (npanes > 1)
+        pane_remove(apane);
+    else {
+        struct Tab *here[MAXTABS];
+        ws_tabs(here);
+        apane->tab = here[0];
+    }
+    shown = T = apane->tab;
+    ws_note("moved to workspace ", n);
+    panes_changed();
+    return TRUE;
+}
+
+/* The shown workspace has no tab left (its last ended): the first one
+ * that has, shown. */
+void ws_rescue(void)
+{
+    int n;
+    if (ws_used(curws) || !ntabs)
+        return;
+    wsl[curws].used = FALSE;
+    for (n = 0; n < NWS && !ws_used(n); n++)
+        ;
+    if (n == NWS)
+        return;
+    curws = n;
+    ws_load();
+}
+
 /* ---- the i3 way ---- */
 
 /* Close the active pane and its tab (the Shell told its input ended, a
@@ -841,9 +1031,10 @@ static BOOL show_tab(int n)
 {
     struct Pane *q;
     struct Tab *t;
-    if (n < 1 || n > ntabs)
+    struct Tab *here[MAXTABS];
+    if (n < 1 || n > ws_tabs(here))
         return FALSE;
-    t = tabs[n - 1];
+    t = here[n - 1];
     if (t == apane->tab)
         return TRUE;
     if (!(q = pane_of(t))) {
@@ -946,6 +1137,10 @@ BOOL pane_do(int op, int arg)
         return TRUE;
     case PO_PANES:
         return to_panes();
+    case PO_WS:
+        return ws_switch(arg - 1);
+    case PO_MOVEWS:
+        return ws_move(arg - 1);
     }
     return FALSE;
 }

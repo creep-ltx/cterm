@@ -32,25 +32,24 @@ static void redial(void)
 /* One of the [window] actions: a menu item's, a tab, the history. */
 static BOOL window_key(int a)
 {
-    int i;
     if (keys_acts[a].menu)
         return menu_pick(keys_acts[a].menu);
-    if (a >= KA_TAB1 && a <= KA_TAB9) {
-        if (a - KA_TAB1 < ntabs)
-            tab_show(a - KA_TAB1);
-        return TRUE;
+    {   /* the shown workspace's tabs (pane.c) */
+        struct Tab *here[MAXTABS];
+        int nh = ws_tabs(here), k;
+        if (a >= KA_TAB1 && a <= KA_TAB9) {
+            if (a - KA_TAB1 < nh)
+                tab_show(tab_number(here[a - KA_TAB1]));
+            return TRUE;
+        }
+        for (k = 0; k < nh && here[k] != T; k++)
+            ;
+        if ((a == KA_NEXTTAB || a == KA_PREVTAB) && nh > 1 && k < nh) {
+            tab_show(tab_number(here[a == KA_NEXTTAB ? (k + 1) % nh : (k + nh - 1) % nh]));
+            return TRUE;
+        }
     }
-    for (i = 0; i < ntabs && tabs[i] != T; i++)
-        ;
     switch (a) {
-    case KA_NEXTTAB:
-        if (ntabs > 1)
-            tab_show((i + 1) % ntabs);
-        break;
-    case KA_PREVTAB:
-        if (ntabs > 1)
-            tab_show((i + ntabs - 1) % ntabs);
-        break;
     case KA_PAGEUP: scroll_view(back + rows - 1); break;
     case KA_PAGEDOWN: scroll_view(back - (rows - 1)); break;
     case KA_LINEUP: scroll_view(back + 1); break;
@@ -68,8 +67,13 @@ static BOOL panes_key(int a)
     BOOL ok;
     if (keys_acts[a].menu)
         return menu_pick(keys_acts[a].menu);
-    ok = a >= KA_P_SHOW1 && a <= KA_P_SHOW9 &&
-         pane_do(PO_SHOW, a - KA_P_SHOW1 + 1);
+    if (a >= KA_P_WS1 && a <= KA_P_WS9)
+        ok = pane_do(PO_WS, a - KA_P_WS1 + 1);
+    else if (a >= KA_P_MOVEWS1 && a <= KA_P_MOVEWS9)
+        ok = pane_do(PO_MOVEWS, a - KA_P_MOVEWS1 + 1);
+    else
+        ok = a >= KA_P_SHOW1 && a <= KA_P_SHOW9 &&
+             pane_do(PO_SHOW, a - KA_P_SHOW1 + 1);
     if (!ok)
         beep();
     return TRUE;
@@ -654,9 +658,10 @@ BOOL window_events(void)
             if (copy.Code == SELECTDOWN && tabbar_h() &&
                 copy.MouseY >= win->BorderTop &&
                 copy.MouseY < win->BorderTop + tabbar_h()) {
-                int wd = win->Width - win->BorderLeft - win->BorderRight, i;
-                i = (copy.MouseX - win->BorderLeft) * ntabs / wd;
-                if (i >= 0 && i < ntabs)
+                int ws, i = tabbar_hit(copy.MouseX, &ws);
+                if (ws >= 0)
+                    pane_do(PO_WS, ws + 1);
+                else if (i >= 0)
                     tab_show(i);
                 break;
             }
