@@ -17,7 +17,7 @@ across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
   back in its own default drawer. Idea: csh keeps the running command's whole line in a local
   variable of its process (e.g. `_CMDLINE`) and con_shell_info reads it from the process's
   pr_LocalVars; other shells keep the name.
-- CTerm has no git remote: only on this PC (CShell and AmiNFSv3 have theirs).
+- Backed up to the NAS: remote `nas` = /mnt/nas/home/Code/CTerm.git (since 2026-10-14).
 - Keyboard resize of tiled panes moves one divider (4 columns / 2 rows a press); i3's
   "resize grow/shrink" by percentage not done.
 
