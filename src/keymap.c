@@ -140,8 +140,10 @@ const struct KeyAct keys_acts[] = {
     { "older", KC_FLINE, 0 },
     { "newer", KC_FLINE, 0 },
     /* [panes]: i3's way */
-    { "open", KC_PANES, M_POPEN },
-    { "kill", KC_PANES, M_PKILL },
+    /* a new Shell and closing it: a pane, or a tab when the Panes menu
+     * says new Shells go in tabs (tabmode) */
+    { "open", KC_PANES, M_SHNEW },
+    { "kill", KC_PANES, M_SHCLOSE },
     { "focusleft", KC_PANES, M_PFLEFT },
     { "focusright", KC_PANES, M_PFRIGHT },
     { "focusup", KC_PANES, M_PFUP },

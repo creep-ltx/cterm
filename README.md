@@ -386,6 +386,12 @@ Sway: see the next section.
 
 ## Panes, the i3 way
 
+**Tabs or panes - one pair of keys:** Left Amiga+Return opens a new Shell
+and Left Amiga+Q closes it. Where it goes is the Panes menu's choice:
+**New Shells in panes** (as on i3) or **New Shells in tabs**. The CTerm
+menu's New Shell and Close Shell do the same; Right Amiga+T and W stay
+plain tab keys.
+
 If you use i3 or Sway on Linux, CTerm's panes work the same way, with
 the **Left Amiga** key where i3 has its Mod key. Every one of these
 keys can be changed (Settings, the Keys tab, or the `[panes]` part of
@@ -393,8 +399,8 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
 
 | Key | What it does |
 |---|---|
-| Left Amiga+Return | a new Amiga Shell in a new pane, next to the pane you are in; you are then in the new one |
-| Left Amiga+Q | closes the pane you are in and its tab (the Shell ends, a call hangs up). A file transfer running there: CTerm asks first. The panes beside it take the room. The last pane: the same as Close tab |
+| Left Amiga+Return | a new Amiga Shell in a new pane, next to the pane you are in; you are then in the new one. With **Panes/New Shells in tabs** ticked: a new tab instead |
+| Left Amiga+Q | closes the pane you are in and its tab (the Shell ends, a call hangs up). A file transfer running there: CTerm asks first. The panes beside it take the room. The last pane: the same as Close tab. With **New Shells in tabs**: closes the tab |
 | Left Amiga+H | from now on this pane splits side by side (the new pane on the right) |
 | Left Amiga+V | from now on this pane splits one above the other (the new pane below) |
 | Left Amiga+D | dwindle on or off: new panes split by shape (below) |
@@ -680,7 +686,7 @@ The keys CTerm comes with:
 | (none) | `serial`, `answer`, `sftp`, `logstop`, `rexx`, `hide`, `about`, `speedtest`, `yrecv`, `xrecv`, `ysend`, `xsend`, `hsend`, `transfers`, `splitside`, `splitunder`, `nextpane`, `closepane`, `font`, `ttfont`, `workbench`, `screen16`, `screen256`, `screendeep`, `scrollbar`, `utf8`, `pcbbs` | the other menu items, in the menus' order |
 | (none) | `lineup`, `linedown`, `historytop`, `historyend` | the history a line up, down; its top; back to the end |
 | **The panes, the i3 way** `[panes]` (in every tab, after `[window]`) | | |
-| Left Amiga+Return | `open` | a new Shell in a new pane |
+| Left Amiga+Return | `open` | a new Shell: in a new pane, or a new tab (Panes/New Shells in tabs) |
 | Left Amiga+Q | `kill` | close the pane and its tab |
 | Left Amiga+Left, Right, Up, Down | `focusleft`, `focusright`, `focusup`, `focusdown` | the pane that way |
 | Left Amiga+Shift+Left, Right, Up, Down | `moveleft`, `moveright`, `moveup`, `movedown` | change places with the pane that way |

@@ -363,7 +363,8 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_ZSEND, M_HIDE, M_SPLITH, M_SPLITV, M_NEXTPANE, M_CLOSEPANE,
        M_SFTP, M_POPEN, M_PKILL, M_PFLEFT, M_PFRIGHT, M_PFUP, M_PFDOWN,
        M_PMLEFT, M_PMRIGHT, M_PMUP, M_PMDOWN, M_PSPLITH, M_PSPLITV, M_PFULL,
-       M_PTABS, M_PPANES, M_PDWINDLE };
+       M_PTABS, M_PPANES, M_PDWINDLE, M_SHNEW, M_SHCLOSE, M_INPANES,
+       M_INTABS };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -713,6 +714,7 @@ enum { PO_OPEN, PO_KILL, PO_FOCUS, PO_MOVE, PO_DIR, PO_FULL, PO_SHOW,
  * longer side - side by side when it is wider than high. Kept in the
  * prefs; LA+H/V then choose the next split only. */
 extern BOOL dwindle;
+extern BOOL tabmode;                    /* new Shells (open/kill keys): tabs, not panes */
 /* The room between two panes in pixels (the prefs' gaps=): each pane
  * keeps its own thin border, the gap between two borders is the
  * background (the picture behind the text, if there is one). */

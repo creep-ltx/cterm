@@ -11,6 +11,8 @@ static void ask_switch(int mode, int depth, BOOL full, BOOL bar);
 
 static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"CTerm", 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"New Shell", 0, 0, 0, (APTR)M_SHNEW },
+    {  NM_ITEM, (STRPTR)"Close Shell", 0, 0, 0, (APTR)M_SHCLOSE },
     {  NM_ITEM, (STRPTR)"New Shell tab", 0, 0, 0, (APTR)M_NEWTAB },
     {  NM_ITEM, (STRPTR)"Close tab", 0, 0, 0, (APTR)M_CLOSETAB },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
@@ -70,6 +72,9 @@ static struct NewMenu newmenu[] = {
     {  NM_ITEM, (STRPTR)"Automatic split (dwindle)", 0,
        CHECKIT | MENUTOGGLE, 0, (APTR)M_PDWINDLE },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"New Shells in panes", 0, CHECKIT, 0, (APTR)M_INPANES },
+    {  NM_ITEM, (STRPTR)"New Shells in tabs", 0, CHECKIT, 0, (APTR)M_INTABS },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"All panes to tabs", 0, 0, 0, (APTR)M_PTABS },
     {  NM_ITEM, (STRPTR)"All tabs to panes", 0, 0, 0, (APTR)M_PPANES },
     { NM_TITLE, (STRPTR)"View", 0, 0, 0, 0 },
@@ -103,7 +108,7 @@ static struct NewMenu newmenu[] = {
 struct Window *setwin;
 /* the items whose ticks follow the shown tab or pane: menu_ticks */
 static const UBYTE tickid[] = { M_UTF8, M_PC, M_PSPLITH, M_PSPLITV, M_PFULL,
-                                M_PDWINDLE };
+                                M_PDWINDLE, M_INPANES, M_INTABS };
 #define NTICK ((int)sizeof tickid)
 static struct MenuItem *ticks[NTICK];
 
@@ -228,6 +233,8 @@ void menu_ticks(void)
     on[3] = apane->sdir == 'v';
     on[4] = pane_zoomed();
     on[5] = dwindle;
+    on[6] = !tabmode;
+    on[7] = tabmode;
     for (i = 0; i < NTICK; i++)
         if (ticks[i] && !(ticks[i]->Flags & CHECKED) != !on[i])
             same = FALSE;
@@ -620,6 +627,19 @@ BOOL menu_pick(ULONG id)
     case M_NEXTPANE: pane_next(); break;
     case M_PDWINDLE:
         pane_do(PO_DWINDLE, 0);
+        save_prefs();
+        break;
+    case M_SHNEW:                       /* the mode's: a pane or a tab */
+        if (tabmode) tab_new_shell();
+        else if (!pane_do(PO_OPEN, 0)) beep();
+        break;
+    case M_SHCLOSE:
+        if (tabmode) tab_close_current();
+        else if (!pane_do(PO_KILL, 1)) beep();
+        break;
+    case M_INPANES: case M_INTABS:
+        tabmode = id == M_INTABS;
+        title_hint(tabmode ? "new Shells: in tabs" : "new Shells: in panes");
         save_prefs();
         break;
     case M_POPEN: case M_PKILL: case M_PFLEFT: case M_PFRIGHT: case M_PFUP:

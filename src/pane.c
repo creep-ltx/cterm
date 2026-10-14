@@ -35,6 +35,7 @@
 struct Pane panes[MAXPANES];
 int npanes = 1;
 BOOL dwindle;                           /* split by shape (PO_DWINDLE) */
+BOOL tabmode;                           /* new Shells in tabs (M_SHNEW) */
 int gaps;                               /* pixels between panes (prefs) */
 struct Pane *apane = &panes[0];         /* the active pane: the shown tab's */
 struct Pane *cpane = &panes[0];         /* the pane drawn now */

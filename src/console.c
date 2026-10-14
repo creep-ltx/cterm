@@ -62,6 +62,7 @@ struct Con {
     UBYTE inq[INMAX];                   /* ready for READs */
     LONG inlen;
     BOOL eof_pending;
+    BOOL closing;                       /* the tab closes: every read ends (con_stop) */
     BOOL rawmode;
     struct DosPacket *reads[READMAX];
     int nreads;
@@ -279,7 +280,7 @@ static void push_input(struct Con *c, const UBYTE *b, LONG n)
 /* Answer waiting READs from what is ready; and a waiting WAIT_CHAR. */
 static void serve(struct Con *c)
 {
-    while (c->nreads > 0 && (c->inlen > 0 || c->eof_pending)) {
+    while (c->nreads > 0 && (c->inlen > 0 || c->eof_pending || c->closing)) {
         struct DosPacket *p = c->reads[0];
         LONG want = p->dp_Arg3, n = 0;
         if (c->inlen > 0) {
@@ -296,7 +297,7 @@ static void serve(struct Con *c)
         c->nreads--;
         ReplyPkt(p, n, 0);
     }
-    if (c->waitpkt && (c->inlen > 0 || c->eof_pending)) {
+    if (c->waitpkt && (c->inlen > 0 || c->eof_pending || c->closing)) {
         ReplyPkt(c->waitpkt, DOSTRUE, 0);
         c->waitpkt = NULL;
         if (c->ctio)
@@ -1034,7 +1035,7 @@ void con_handle(struct Con *c, ULONG sigs)
             if (c->rawmode)
                 paste_feed(c);
             if (c->rawmode && c->aheadlen) ahead_give(c);
-            if (c->inlen > 0 || c->eof_pending) {
+            if (c->inlen > 0 || c->eof_pending || c->closing) {
                 ReplyPkt(p, DOSTRUE, 0);
             } else if (p->dp_Arg1 <= 0) {
                 /* "is a key there?" without waiting: nobody is looking at
@@ -1298,10 +1299,14 @@ struct Con *con_start(const char *startup, const char *then, void *user)
 
 /* The person wants out: end the input so the Shell ends by itself. The
  * caller keeps answering packets until con_alive() is FALSE. */
+/* The tab closes: its input ends, for every reader from now on - a shell
+ * started inside the tab's Shell (csh) ends, then the Shell under it reads
+ * and ends too (one end of input only ended the first: the tab stayed). */
 void con_stop(struct Con *c)
 {
     paste_drop(c);
     c->eof_pending = TRUE;
+    c->closing = TRUE;
     send_break(c, SIGBREAKF_CTRL_C);
     serve(c);
 }

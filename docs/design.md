@@ -10,6 +10,17 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**2026-10-14, 0.3b35 (INSTALLED on the A1200, the user asked; 0.3b34 kept as CTerm-0.3b34.bak):**
+the user: "Amiga+Enter and Amiga+Q standard for both tabs and panes, it just depends on what mode is
+selected"; and a pane opened with LA+Return and closed with LA+Q stayed as a tab. (1) Panes menu:
+New Shells in panes / in tabs (`newshells=tabs` in CTerm.prefs); the [panes] actions `open`/`kill`
+(LA+Return, LA+Q) follow it (menu ids M_SHNEW/M_SHCLOSE, also CTerm menu New Shell / Close Shell);
+New Shell pane / Close pane and tab / RA+T / RA+W stay explicit. (2) The leftover tab: con_stop
+ended the input once; csh (raw at its prompt, started on top of the tab's Shell) took it - and
+ignored it - and the Shell under it then waited for ever. Now `closing`: every READ and WAIT_CHAR
+of a closing tab answers the end; csh 0.1b7 ends on a raw read of 0. Verified on the A1200: LA+Q
+in both modes leaves no Shell process and no tab.
+
 **2026-10-14, 0.3b34 (INSTALLED on the A1200 with make deploy, the user asked; 0.3b33 kept as
 Work:Utils/CTerm/CTerm-0.3b33.bak):** a bracketed paste reaches a raw reader whole - paste_feed (console.c) let no Esc through, so
 csh got `[200~text[201~` as typed text and ran it as a command. The marks now pass whole; clip.c turns an
