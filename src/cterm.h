@@ -718,7 +718,17 @@ void pane_drag_end(void);
  * direction (PD_*), tab number (1..) or, for PO_KILL, ask (a transfer)
  * - FALSE: not done (no room, no pane there: beep) */
 enum { PO_OPEN, PO_KILL, PO_FOCUS, PO_MOVE, PO_DIR, PO_FULL, PO_SHOW,
-       PO_TABS, PO_PANES, PO_DWINDLE, PO_WS, PO_MOVEWS };
+       PO_TABS, PO_PANES, PO_DWINDLE, PO_WS, PO_MOVEWS, PO_SCRATCH,
+       PO_TOSCRATCH, PO_RESIZE };
+extern struct Pane fpane;               /* the scratchpad's floating pane */
+extern BOOL fshown;
+void float_draw(void);                  /* drawn on top, after the others */
+void float_unclip(void);                /* before the window closes */
+void float_unfocus(void);               /* the layout's pane active again */
+BOOL float_over(struct Pane *p);        /* does it lie over p */
+BOOL pane_resizing(void);               /* resize mode: the keys are its */
+void pane_resize_key(UWORD k);
+void redraw_pane_now(void);             /* draw.c: the pane in use whole */
 /* Workspaces (i3's): 9 of them, each its own layout of panes and its own
  * tabs (a tab's t_ws); every tab runs whichever is shown. */
 #define NWS 9

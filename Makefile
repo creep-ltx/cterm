@@ -2,7 +2,10 @@
 # the emulator core and its tests also build natively on Linux.
 
 CC      = $(HOME)/opt/amiga/bin/m68k-amigaos-gcc
-CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -Wall -Wno-pointer-sign -Iinclude
+# -fbbb=-: Bebbo's own optimizer pass off for all of CTerm (it was for
+# keymap.c only): 0.3b39's click into a pane under the scratchpad never
+# reached pane_activate with it on - seen on the A1200, gone with it off.
+CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -fbbb=- -Wall -Wno-pointer-sign -Iinclude
 
 all: CTerm CTermSSH protocols parts test
 

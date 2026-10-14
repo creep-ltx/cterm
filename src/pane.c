@@ -26,6 +26,7 @@
  *
  */
 #include "cterm.h"
+#include <proto/layers.h>
 
 #define DIVW gaps                       /* the room between two panes */
 #define MAXNODES (2 * MAXPANES - 1)
@@ -111,6 +112,16 @@ void panes_init(struct Tab *t)
 
 static void zoom_out(void);
 static void ws_forget(struct Tab *t);
+static void float_tab_gone(struct Tab *t);
+static int drag_clamp(int pos);
+static void float_hide(void);
+static void float_layout(void);
+static void clip_set(int want);
+void float_unfocus(void);
+static void float_clip(struct Pane *p);
+BOOL float_shows(struct Tab *t);
+extern struct Pane fpane;
+extern BOOL fshown;
 static BOOL ws_switch(int n);
 static BOOL ws_move(int n);
 static int drag = -1;                   /* the split whose divider is pulled */
@@ -118,6 +129,7 @@ static int dragpos = -1;                /* where its line is drawn now */
 
 void pane_use(struct Pane *p)
 {
+    float_clip(p);
     cpane = p;
     ox = p->ox;
     oy = p->oy;
@@ -128,6 +140,8 @@ void pane_use(struct Pane *p)
 struct Pane *pane_of(struct Tab *t)
 {
     int i;
+    if (float_shows(t))
+        return &fpane;
     for (i = 0; i < npanes; i++)
         if (panes[i].tab == t)
             return &panes[i];
@@ -244,6 +258,7 @@ void panes_layout(void)
     int x0, y0, x1, y1;
     area(&x0, &y0, &x1, &y1);
     lay(0, x0, y0, x1, y1);
+    float_layout();
 }
 
 /* The widest pane's columns: the row buffers' size. */
@@ -289,6 +304,7 @@ void panes_frames(void)
     int n, i;
     if (npanes < 2 || !win)
         return;
+    float_clip(&panes[0]);              /* round the scratchpad */
     planes_save();
     if (outergaps && gaps > 0) {        /* the outer gaps (not the position bar) */
         int ax0, ay0, ax1, ay1, wx0 = win->BorderLeft, wy0 = win->BorderTop + tabbar_h();
@@ -322,6 +338,7 @@ void panes_frames(void)
     for (i = 0; i < npanes; i++)
         frame(&panes[i], pane_border_rgb(&panes[i] == apane));
     planes_restore();
+    float_clip(cpane);
 }
 
 /* ---- which pane ---- */
@@ -329,6 +346,8 @@ void panes_frames(void)
 struct Pane *pane_at(int x, int y)
 {
     int i;
+    if (fshown && x >= fpane.x0 && x <= fpane.x1 && y >= fpane.y0 && y <= fpane.y1)
+        return &fpane;
     for (i = 0; i < npanes; i++)
         if (x >= panes[i].x0 && x <= panes[i].x1 && y >= panes[i].y0 &&
             y <= panes[i].y1)
@@ -367,6 +386,8 @@ void pane_activate(struct Pane *p)
     }
     pane_use(apane);
     T = shown;
+    if (fshown && (old == &fpane || p == &fpane))
+        float_draw();                   /* its frame lit or not */
     title_update_now();
     mouse_reporting();
 }
@@ -610,7 +631,8 @@ void pane_tab_gone(struct Tab *t, int at)
         if (ztab[i] == t)
             ztab[i] = NULL;
     ws_forget(t);
-    if (!p)
+    float_tab_gone(t);
+    if (!p || p == &fpane)
         return;
     p->tab = NULL;
     for (i = at < ntabs ? at : ntabs - 1; i >= 0; i--)
@@ -860,6 +882,7 @@ static void ws_save(void)
 {
     struct WsLayout *w = &wsl[curws];
     int i;
+    float_hide();                       /* the scratchpad: shown again by its key */
     zoom_out();
     memcpy(w->nodes, nodes, sizeof nodes);
     for (i = 0; i < npanes; i++) {
@@ -996,6 +1019,306 @@ void ws_rescue(void)
     ws_load();
 }
 
+/* ---- the scratchpad (i3's): a pane that floats ----
+ *
+ * One tab (stab, in no workspace: t_ws -1) shown in fpane over the
+ * layout, or hidden and running behind. While it shows, everything else
+ * is drawn through a clip region that leaves its rectangle out (outreg),
+ * and it is drawn last without one, so nothing paints over it. Its place
+ * is kept in per mille of the panes' area: a resize keeps it in
+ * proportion. */
+struct Pane fpane;
+BOOL fshown;
+static struct Tab *stab;
+static struct Pane *ftiled;             /* the tiled pane active before it */
+static int ffx = 175, ffy = 150, ffw = 650, ffh = 600;
+static struct Region *outreg;
+static int clipped;                     /* 0 none, 1 outreg installed */
+
+static void clip_set(int want)
+{
+    if (!win || want == clipped)
+        return;
+    InstallClipRegion(win->WLayer, want ? outreg : NULL);
+    clipped = want;
+}
+
+/* Drawing for pane p (pane_use): the floating one unclipped, the rest
+ * round it. */
+static void float_clip(struct Pane *p)
+{
+    clip_set(fshown && outreg && p != &fpane);
+}
+
+/* The window (and its layer) goes: no region may stay installed. */
+void float_unclip(void)
+{
+    if (win && clipped)
+        InstallClipRegion(win->WLayer, NULL);
+    clipped = 0;
+}
+
+/* Its place and its text from the per mille, and the region round it. */
+static void float_layout(void)
+{
+    int x0, y0, x1, y1, w, h, b = bordersize > 0 ? bordersize : 1;
+    struct Pane *p = &fpane;
+    if (!fshown || !win)
+        return;
+    {   /* the whole text area, gaps or not */
+        x0 = win->BorderLeft;
+        y0 = win->BorderTop + tabbar_h();
+        x1 = win->Width - win->BorderRight - 1;
+        y1 = win->Height - win->BorderBottom - 1;
+    }
+    w = x1 - x0 + 1; h = y1 - y0 + 1;
+    p->x0 = x0 + (LONG)w * ffx / 1000;
+    p->y0 = y0 + (LONG)h * ffy / 1000;
+    p->x1 = p->x0 + (LONG)w * ffw / 1000 - 1;
+    p->y1 = p->y0 + (LONG)h * ffh / 1000 - 1;
+    if (p->x1 > x1) p->x1 = x1;
+    if (p->y1 > y1) p->y1 = y1;
+    p->ox = p->x0 + b + 1;
+    p->oy = p->y0 + b;
+    p->bx0 = p->bx1 = 0;
+    p->btotal = -1;
+    if (scrollbar) {
+        p->bx1 = p->x1 - b;
+        p->bx0 = p->bx1 - PANEBAR + 1;
+    }
+    p->cols = (p->x1 + 1 - p->ox - b - 1 - (p->bx0 ? PANEBAR + 1 : 0)) / cw;
+    p->rows = (p->y1 - p->y0 + 1 - 2 * b) / ch;
+    if (p->cols < MINC) p->cols = MINC;
+    if (p->rows < MINR) p->rows = MINR;
+    if (p->rows > PROWS) p->rows = PROWS;
+    p->fx0 = p->x0 + b;
+    p->fx1 = p->x1 - b;
+    clip_set(0);
+    if (!outreg)
+        outreg = NewRegion();
+    if (outreg) {
+        struct Rectangle r;
+        ClearRegion(outreg);
+        r.MinX = 0; r.MinY = 0; r.MaxX = win->Width - 1; r.MaxY = win->Height - 1;
+        OrRectRegion(outreg, &r);
+        r.MinX = p->x0; r.MinY = p->y0; r.MaxX = p->x1; r.MaxY = p->y1;
+        ClearRectRegion(outreg, &r);
+    }
+}
+
+BOOL float_shows(struct Tab *t) { return fshown && t && t == stab; }
+
+/* Does it lie over pane p? (p scrolls by redrawing then, not blitting) */
+BOOL float_over(struct Pane *p)
+{
+    return fshown && p != &fpane && p->x0 <= fpane.x1 && p->x1 >= fpane.x0 &&
+           p->y0 <= fpane.y1 && p->y1 >= fpane.y0;
+}
+
+/* It drawn whole, on top: its background, its frame, its text. */
+void float_draw(void)
+{
+    struct Pane *was = cpane;
+    struct Tab *keep = T;
+    int b = bordersize > 0 ? bordersize : 1, k;
+    if (!fshown || !win || !stab)
+        return;
+    pane_use(&fpane);
+    T = stab;
+    planes_save();
+    if (!backdrop_area(fpane.x0, fpane.y0, fpane.x1 - fpane.x0 + 1, fpane.y1 - fpane.y0 + 1)) {
+        apen(defbg);
+        RectFill(rp, fpane.x0, fpane.y0, fpane.x1, fpane.y1);
+    }
+    apen(pane_border_rgb(apane == &fpane));
+    for (k = 0; k < b; k++) {
+        RectFill(rp, fpane.x0 + k, fpane.y0 + k, fpane.x1 - k, fpane.y0 + k);
+        RectFill(rp, fpane.x0 + k, fpane.y1 - k, fpane.x1 - k, fpane.y1 - k);
+        RectFill(rp, fpane.x0 + k, fpane.y0 + k, fpane.x0 + k, fpane.y1 - k);
+        RectFill(rp, fpane.x1 - k, fpane.y0 + k, fpane.x1 - k, fpane.y1 - k);
+    }
+    planes_restore();
+    redraw_pane_now();
+    pane_use(was);
+    T = keep;
+}
+
+static void float_show(void)
+{
+    if (apane != &fpane)
+        ftiled = apane;
+    fshown = TRUE;
+    memset(&fpane, 0, sizeof fpane);
+    fpane.tab = stab;
+    fpane.curx = fpane.cury = -1;
+    fpane.pgen = 1;
+    fpane.sdir = 'h';
+    float_layout();
+    apane = cpane = &fpane;
+    shown = T = stab;
+}
+
+static void float_hide(void)
+{
+    if (!fshown)
+        return;
+    clip_set(0);
+    fshown = FALSE;
+    if (apane == &fpane)
+        apane = ftiled && ftiled - panes < npanes ? ftiled : &panes[0];
+    cpane = apane;
+    shown = T = apane->tab;
+}
+
+/* The tiled pane back as the active one (an i3 key that works on the
+ * layout while the scratchpad has the keys): it stays on show. */
+void float_unfocus(void)
+{
+    if (apane == &fpane) {
+        apane = ftiled && ftiled - panes < npanes ? ftiled : &panes[0];
+        cpane = apane;
+        shown = T = apane->tab;
+    }
+}
+
+/* LA+-: shown, hidden; the first time a new Shell in it. */
+static BOOL scratch_toggle(void)
+{
+    if (!stab) {
+        struct Tab *t = shell_tab();
+        if (!t)
+            return FALSE;
+        t->t_ws = -1;
+        stab = t;
+    }
+    if (fshown && apane == &fpane)
+        float_hide();
+    else if (fshown) {                  /* on show, not in use: in use */
+        ftiled = apane;
+        apane = cpane = &fpane;
+        shown = T = stab;
+    } else
+        float_show();
+    panes_changed();
+    return TRUE;
+}
+
+/* LA+Shift+-: the shown tab into the scratchpad (one there before goes
+ * back to this workspace as a tab of its own), hidden as i3 does. */
+static BOOL to_scratch(void)
+{
+    struct Tab *t = shown;
+    if (!t || t == stab || ws_used(curws) < 2)
+        return FALSE;                   /* the workspace keeps one tab */
+    if (stab)
+        stab->t_ws = curws;
+    float_hide();
+    t->t_ws = -1;
+    stab = t;
+    if (npanes > 1)
+        pane_remove(apane);
+    else {
+        struct Tab *here[MAXTABS];
+        ws_tabs(here);
+        apane->tab = here[0];
+    }
+    shown = T = apane->tab;
+    title_hint("to the scratchpad (LA+- shows it)");
+    panes_changed();
+    return TRUE;
+}
+
+/* the scratchpad's tab ended */
+static void float_tab_gone(struct Tab *t)
+{
+    if (t != stab)
+        return;
+    stab = NULL;
+    float_hide();
+}
+
+/* ---- resize mode (i3's): the arrows size the pane, Return ends ---- */
+
+static BOOL resizing;
+
+BOOL pane_resizing(void) { return resizing; }
+
+static BOOL resize_tiled(int dir)
+{
+    int n = leaf_of(apane), up = -1, axis = dir == PD_LEFT || dir == PD_RIGHT ? 'h' : 'v';
+    BOOL grow = dir == PD_RIGHT || dir == PD_DOWN;
+    struct PNode *d;
+    LONG span;
+    int pos;
+    if (npanes < 2)
+        return FALSE;
+    for (; (up = nodes[n].up) >= 0; n = up)
+        if (nodes[up].split == axis)
+            break;
+    if (up < 0)
+        return FALSE;
+    d = &nodes[up];
+    pos = d->m + ((d->a == n) == grow ? 1 : -1) * (axis == 'h' ? 4 * cw : 2 * ch);
+    drag = up;
+    pos = drag_clamp(pos);
+    drag = -1;
+    span = axis == 'h' ? d->x1 - d->x0 + 1 - DIVW : d->y1 - d->y0 + 1 - DIVW;
+    if (span <= 0 || pos == d->m)
+        return FALSE;
+    d->at = (pos - (axis == 'h' ? d->x0 : d->y0)) * 1000L / span;
+    panes_changed();
+    return TRUE;
+}
+
+/* The floating one: the arrows its size, with Shift its place. */
+static BOOL resize_float(int dir, BOOL move)
+{
+    int s = 25;
+    if (move) {
+        if (dir == PD_LEFT) ffx -= s; else if (dir == PD_RIGHT) ffx += s;
+        else if (dir == PD_UP) ffy -= s; else ffy += s;
+    } else {
+        if (dir == PD_LEFT) ffw -= s; else if (dir == PD_RIGHT) ffw += s;
+        else if (dir == PD_UP) ffh -= s; else ffh += s;
+    }
+    if (ffw < 200) ffw = 200;
+    if (ffh < 150) ffh = 150;
+    if (ffw > 1000) ffw = 1000;
+    if (ffh > 1000) ffh = 1000;
+    if (ffx < 0) ffx = 0;
+    if (ffy < 0) ffy = 0;
+    if (ffx + ffw > 1000) ffx = 1000 - ffw;
+    if (ffy + ffh > 1000) ffy = 1000 - ffh;
+    panes_changed();
+    return TRUE;
+}
+
+/* A key in resize mode: TRUE taken (every key is, while it lasts). */
+void pane_resize_key(UWORD k)
+{
+    UWORD key = k & KQ_KEY;
+    BOOL shift = (k & KQ_S) != 0;
+    int dir = key == KM_LEFT ? PD_LEFT : key == KM_RIGHT ? PD_RIGHT
+            : key == KM_UP ? PD_UP : key == KM_DOWN ? PD_DOWN : -1;
+    if (key == 13 || key == 27 || keys_find(KC_PANES, k) == KA_P_RESIZE) {
+        resizing = FALSE;
+        title_hint("resize: done");
+        return;
+    }
+    if (dir < 0)
+        return;
+    if (!(apane == &fpane ? resize_float(dir, shift) : resize_tiled(dir)))
+        beep();
+}
+
+static BOOL resize_mode(void)
+{
+    resizing = TRUE;
+    title_hint(apane == &fpane ? "resize: arrows size, Shift+arrows move, Return ends"
+                               : "resize: arrows move the pane's edge, Return ends");
+    return TRUE;
+}
+
 /* ---- the i3 way ---- */
 
 /* Close the active pane and its tab (the Shell told its input ended, a
@@ -1053,6 +1376,18 @@ BOOL pane_do(int op, int arg)
     struct Pane *q;
     if (!win)
         return FALSE;
+    if (op == PO_SCRATCH)
+        return scratch_toggle();
+    if (op == PO_TOSCRATCH)
+        return to_scratch();
+    if (op == PO_RESIZE)
+        return resize_mode();
+    if (op == PO_KILL && apane == &fpane) {
+        T = stab;                       /* the scratchpad's Shell ends */
+        tab_close_current();
+        return TRUE;
+    }
+    float_unfocus();                    /* the layout's keys: the layout's pane */
     if ((op == PO_OPEN || op == PO_FOCUS || op == PO_MOVE) && zoomed) {
         zoom_out();                     /* the layout back first */
         panes_changed();

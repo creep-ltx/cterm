@@ -817,6 +817,8 @@ void tab_show(int i)
         if (i >= ntabs)
             return;
     }
+    if (apane == &fpane && tabs[i] != fpane.tab)
+        float_unfocus();                /* a tab is shown in the layout, not in the scratchpad */
     if ((p = pane_of(tabs[i])))
         apane = p;
     else
@@ -897,7 +899,7 @@ static void tab_drop(struct Tab *t)
     if (t != &tab0)
         FreeVec(t);
     T = keep == t ? NULL : keep;
-    if (!apane->tab || apane->tab->t_ws != curws)
+    if (apane != &fpane && (!apane->tab || apane->tab->t_ws != curws))
         ws_rescue();                    /* its workspace's last: another's */
     shown = apane->tab;
     if (ntabs > 0 && win) {

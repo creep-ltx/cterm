@@ -2803,7 +2803,10 @@ void redraw_all(void)
     pane_use(apane);
     T = keep;
     panes_frames();
+    float_draw();                       /* the scratchpad, on top */
 }
+
+void redraw_pane_now(void) { redraw_pane(); }
 
 /* IDCMP_REFRESHWINDOW: only what the damage reaches is drawn again (a
  * requester or another window moved off a corner, not the whole text).
@@ -2888,6 +2891,7 @@ void repair_damage(void)
     pane_use(apane);
     T = keep;
     panes_frames();
+    float_draw();
 }
 
 /* Bring the window up to date with the emulator: one blit for a scroll,
@@ -2922,6 +2926,10 @@ void refresh_all(void)
             T = panes[i].tab;
             refresh();
         }
+    if (fshown && fpane.tab) {          /* the scratchpad */
+        T = fpane.tab;
+        refresh();
+    }
     T = keep;
 }
 
@@ -2943,6 +2951,8 @@ static void refresh_pane(void)
     syncwait = 0;
     if (!vt_take_changes(vt, &chg))
         return;
+    if (chg.scroll_n && float_over(cpane))
+        chg.all = 1;                    /* a blit would carry what is under the scratchpad */
     xp = T->t_xfer && !T->t_fkind;
     if (xp)
         chg.all = 1;                    /* a scroll would carry the panel */

@@ -67,7 +67,13 @@ static BOOL panes_key(int a)
     BOOL ok;
     if (keys_acts[a].menu)
         return menu_pick(keys_acts[a].menu);
-    if (a >= KA_P_WS1 && a <= KA_P_WS9)
+    if (a == KA_P_SCRATCH)
+        ok = pane_do(PO_SCRATCH, 0);
+    else if (a == KA_P_TOSCRATCH)
+        ok = pane_do(PO_TOSCRATCH, 0);
+    else if (a == KA_P_RESIZE)
+        ok = pane_do(PO_RESIZE, 0);
+    else if (a >= KA_P_WS1 && a <= KA_P_WS9)
         ok = pane_do(PO_WS, a - KA_P_WS1 + 1);
     else if (a >= KA_P_MOVEWS1 && a <= KA_P_MOVEWS9)
         ok = pane_do(PO_MOVEWS, a - KA_P_MOVEWS1 + 1);
@@ -139,6 +145,11 @@ BOOL key(struct IntuiMessage *m)
     if ((code == 0x7A || code == 0x7B) && wheelmsgs && !wheelkey)
         return TRUE;                    /* the wheel comes as its message */
     k = keys_code(code, q, prev);
+    if (pane_resizing()) {              /* i3's resize mode: every key its */
+        if (!(code & IECODE_UP_PREFIX))
+            pane_resize_key(k);
+        return TRUE;
+    }
     if (!(code & IECODE_UP_PREFIX) && !keys_find(KC_WINDOW, k) &&
         (a = keys_find(KC_PANES, k)))
         return panes_key(a);            /* i3's, in every tab, always */

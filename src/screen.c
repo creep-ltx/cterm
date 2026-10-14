@@ -543,6 +543,7 @@ void close_display(int keep_screen)
         if (TTEngineBase)
             TT_DoneRastPort(rp);
         cx_keys_on(FALSE);              /* its hot keys: none now */
+        float_unclip();                 /* no clip region left on its layer */
         CloseWindow(win);
         win = NULL;
     }

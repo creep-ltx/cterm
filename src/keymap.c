@@ -507,6 +507,23 @@ static UWORD shifted(UWORD code)
     return (UBYTE)b[0];
 }
 
+/* The raw key that gives - on this keymap (0x0B on a US one, 0x3A on a
+ * Swedish one), for Shift+- */
+static UWORD minus_key(void)
+{
+    struct InputEvent ie;
+    char b[4];
+    UWORD code;
+    for (code = 0; code < 0x40; code++) {
+        memset(&ie, 0, sizeof ie);
+        ie.ie_Class = IECLASS_RAWKEY;
+        ie.ie_Code = code;
+        if (MapRawKey(&ie, (STRPTR)b, sizeof b, NULL) == 1 && b[0] == '-')
+            return code;
+    }
+    return 0x0B;
+}
+
 /* Left Amiga+Shift+1-9: a tab to workspace n; +Shift+-: to the scratchpad
  * (only where the key is free). */
 static void shifted_defaults(void)
@@ -516,7 +533,7 @@ static void shifted_defaults(void)
     for (n = 0; n < NWS; n++)
         if ((c = shifted(0x01 + n)) && !keys_find(KC_PANES, KQ_L | c))
             keys_bind(KC_PANES, KQ_L | c, KA_P_MOVEWS1 + n);
-    if ((c = shifted(0x0B)) && !keys_find(KC_PANES, KQ_L | c))
+    if ((c = shifted(minus_key())) && !keys_find(KC_PANES, KQ_L | c))
         keys_bind(KC_PANES, KQ_L | c, KA_P_TOSCRATCH);
 }
 
