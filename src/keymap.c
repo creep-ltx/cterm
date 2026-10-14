@@ -19,6 +19,8 @@
 #include "cterm.h"
 #pragma GCC optimize("Os")              /* a lookup a key: small before quick */
 
+/* in every file written since 0.3b41 (show1-9 got LA+Ctrl+1-9) */
+#define KEYMARK "; (keys of CTerm 0.3b41 and later)"
 #define KEYFILE "ENVARC:CTerm/CTerm.keys"
 
 /* the actions: their names in the file, their section, their menu item */
@@ -243,6 +245,11 @@ static const struct KeyBind defbinds[] = {
     { L('7'), KA_P_WS1 + 6 }, { L('8'), KA_P_WS1 + 7 },
     { L('9'), KA_P_WS1 + 8 }, { L('d'), KA_P_DWINDLE },
     { L('r'), KA_P_RESIZE }, { L('-'), KA_P_SCRATCH },
+    { L(C('1')), KA_P_SHOW1 }, { L(C('2')), KA_P_SHOW1 + 1 },
+    { L(C('3')), KA_P_SHOW1 + 2 }, { L(C('4')), KA_P_SHOW1 + 3 },
+    { L(C('5')), KA_P_SHOW1 + 4 }, { L(C('6')), KA_P_SHOW1 + 5 },
+    { L(C('7')), KA_P_SHOW1 + 6 }, { L(C('8')), KA_P_SHOW1 + 7 },
+    { L(C('9')), KA_P_SHOW1 + 8 },
 #undef L
 #undef F
 #undef S
@@ -683,6 +690,7 @@ void keys_load(void)
 {
     char *t, bad[80];
     BOOL gone, oldgone, infile, browser = FALSE, panes = FALSE;
+    BOOL showkeys = TRUE;
     UBYTE named[KA_N];
     int a;
     keys_defaults();
@@ -692,6 +700,7 @@ void keys_load(void)
         return;                         /* there, but not readable: kept */
     if ((infile = t != NULL)) {
         key_apply(t, KC_WINDOW, named);
+        showkeys = strstr(t, KEYMARK) != NULL;
         FreeVec(t);
         for (a = KA_FB_FIRST; a <= KA_FB_LAST; a++)
             if (named[a])
@@ -721,6 +730,17 @@ void keys_load(void)
             shifted_defaults();
             keys_save();
         }
+    }
+    if (infile && panes && !showkeys) {
+        /* (0.3b41) show1-9 lost LA+1-9 to the workspaces in 0.3b38:
+         * LA+Ctrl+1-9 now, where free; once (the file then has KEYMARK,
+         * so a show key taken away later stays away) */
+        int n;
+        for (n = 0; n < NWS; n++)
+            if (!keys_first(KA_P_SHOW1 + n) &&
+                !keys_find(KC_PANES, KQ_L | KQ_C | ('1' + n)))
+                keys_bind(KC_PANES, KQ_L | KQ_C | ('1' + n), KA_P_SHOW1 + n);
+        keys_save();
     }
     if (!browser) {
         BOOL old = FALSE;
@@ -777,7 +797,8 @@ BOOL keys_save(void)
          "; (the Shell, the host), as on any terminal.\n"
          "; Each section's keys are its own: a key may be in two sections.\n"
          "; [window]'s come first, in every tab (but its history keys in\n"
-         "; the file browser), then [panes]'s.\n");
+         "; the file browser), then [panes]'s.\n"
+         KEYMARK "\n");
     for (o = 0; o < KC_N; o++) {
         c = secorder[o];
         kput(f, c == KC_WINDOW ? "\n; in every tab (menus, tabs, history)\n"

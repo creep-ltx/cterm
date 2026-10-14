@@ -409,6 +409,7 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
 | Left Amiga+F | the pane fills the window; the others go on behind it. Again: back as it was |
 | Left Amiga+1 to 9 | workspace 1 to 9 (below); an empty one opens with a new Shell |
 | Left Amiga+Shift+1 to 9 | the tab you are in moves to that workspace (the keys follow your keymap: Shift+3 is £ on some) |
+| Left Amiga+Ctrl+1 to 9 | tab 1 to 9 of this workspace comes into the pane you are in (the one there goes behind it) |
 | Left Amiga+R | resize mode: the arrows move the edge of the pane you are in; on the scratchpad the arrows size it and Shift+arrows move it; Return or Esc ends |
 | Left Amiga+- | the scratchpad (below): shown, given the keys, hidden |
 | Left Amiga+Shift+- | the tab you are in becomes the scratchpad |
@@ -725,7 +726,7 @@ The keys CTerm comes with:
 | Left Amiga+F | `full` | the pane fills the window (again: back) |
 | Left Amiga+D | `dwindle` | dwindle on or off: split by shape |
 | Left Amiga+T, P | `tabs`, `panes` | all panes to tabs, all tabs to panes |
-| Left Amiga+1 to 9 | `show1` .. `show9` | that tab in this pane |
+| Left Amiga+Ctrl+1 to 9 | `show1` .. `show9` | that tab in this pane |
 | **Calling and transfers** `[call]` | | |
 | Esc | `stop` | stops a transfer; gives up a call being made |
 | Return | `redial` | calls again, after a call ended |
