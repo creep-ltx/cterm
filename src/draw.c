@@ -1363,6 +1363,7 @@ static BOOL pp_cells(int r, int a, int b)
     int n = b - a + 1, i, w, s0 = -1, s1 = -2, a0 = a, b0 = b;
     if (!ppon || !ly || !bm || n <= 0 || n > PP_MAXCOLS)
         return FALSE;
+    PF_START(tset);
     X = ly->bounds.MinX + ox + a * 8;
     Y = ly->bounds.MinY + oy + r * ch;
     LockLayerRom(ly);
@@ -1455,8 +1456,16 @@ static BOOL pp_cells(int r, int a, int b)
         SetWriteMask(rp, pmask);
     }
     WaitBlit();                         /* a scroll may still be moving */
+    PF_ADD(pf_ppset, tset);
+    {
+    PF_START(tasm);
     pp_paint(bm->Planes, bm->Depth, pbase >= 0 ? pmask : 0xFF,
              bm->BytesPerRow, X, Y, n);
+    PF_ADD(pf_ppasm, tasm);
+    }
+#ifdef PROFILE
+    pf_ppnum++;
+#endif
     UnlockLayerRom(ly);
     if (a > a0 || b < b0) {             /* the edges' cells: Text() */
         BOOL keep = ppon;

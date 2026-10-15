@@ -131,7 +131,7 @@
 #include <proto/timer.h>
 extern struct Device *TimerBase;
 #define TPMS 709
-static ULONG ticks(void)
+static inline ULONG pf_ticks(void)
 {
     struct EClockVal e;
     if (!TimerBase)
@@ -141,7 +141,7 @@ static ULONG ticks(void)
 }
 #else
 #define TPMS 54000
-static ULONG ticks(void)
+static inline ULONG pf_ticks(void)
 {
     ULONG lo;
     APTR ssp = SuperState();
@@ -153,10 +153,11 @@ static ULONG ticks(void)
 #endif
 extern ULONG pf_vt, pf_draw, pf_pkt, pf_wait, pf_all0, pf_writes, pf_draws;
 extern ULONG pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill, pf_nrows, pf_nall, pf_nscroll;
+extern ULONG pf_ppset, pf_ppasm, pf_ppnum;   /* the painter: set-up, asm, rows */
 extern struct timeval pf_tv0;
 extern ULONG pf_calib;
-#define PF_START(v) ULONG v = ticks()
-#define PF_ADD(acc, v) (acc += ticks() - (v))
+#define PF_START(v) ULONG v = pf_ticks()
+#define PF_ADD(acc, v) (acc += pf_ticks() - (v))
 #else
 #define PF_START(v)
 #define PF_ADD(acc, v)

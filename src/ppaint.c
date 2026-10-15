@@ -110,6 +110,9 @@ void pp_paint(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
     int p;
     if (n <= 0 || n > PP_MAXCOLS)
         return;
+#ifdef NOPPAINT
+    return;                             /* to measure: the row set up only */
+#endif
     pp_phase(x & 7);
     /* the pads: blank glyphs in the edge cells' pens, so a row in one
      * colour has uniform edge groups too */
