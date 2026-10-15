@@ -81,6 +81,8 @@ typedef char fb_acts_check[KA_FB_LAST - KA_FB_FIRST + 2 == K_N ? 1 : -1];
 
 static UWORD key_kq(int k)
 {
+    if (k >= KM_SF1 && k < KM_SF1 + 10)
+        return KQ_S | (KM_F1 + k - KM_SF1);
     if (k >= KM_SUP && k <= KM_SRIGHT)
         return KQ_S | (KM_UP + k - KM_SUP);
     if (k >= KM_CUP && k <= KM_CRIGHT)
@@ -627,13 +629,13 @@ static void draw_msg(struct RConn *c)
     o_str("\x1b[K");
 }
 
-/* The bar of the function keys, as they are bound */
+/* The bar of the function keys, as they are bound - while Shift is held,
+ * Shift+F1..F10's (as mc's bar shows another row's) */
 static void draw_keys(struct RConn *c)
 {
-    int i;
-    (void)c;
+    int i, f = c->shifted ? KM_SF1 : KM_F1;
     for (i = 0; i < 10; i++) {
-        int x = i * W / 10, w = (i + 1) * W / 10 - x, a = find(1, KM_F1 + i);
+        int x = i * W / 10, w = (i + 1) * W / 10 - x, a = find(1, f + i);
         char num[4];
         num[0] = 0;
         numstr_cat(num, i + 1);
@@ -761,13 +763,6 @@ void ui_stop(struct RConn *c)
     T = c->tab;
     refresh();
     T = keep;
-}
-
-static void job_free(struct Job *j)
-{
-    if (j->names)
-        FreeVec(j->names);
-    memset(j, 0, sizeof *j);
 }
 
 void ui_free(struct RConn *c)
@@ -1091,9 +1086,13 @@ static const char cmdhelp[] =
 "  pwd, lpwd            where the host's and the Amiga's panels are\n"
 "  get name..., mget pattern...   from the host into the Amiga's drawer\n"
 "  put name..., mput pattern...   from the Amiga's drawer to the host\n"
+"                       (a drawer named goes with all in it; -r: the\n"
+"                       drawers a pattern matches too)\n"
 "  mkdir name           a new drawer on the host\n"
-"  rm name..., rmdir name         delete on the host (asks first)\n"
+"  rm name..., rmdir name         delete on the host (asks first; a\n"
+"                       drawer with all in it)\n"
 "  rename old new       rename on the host\n"
+"  passive              FTP: active (PORT) or passive again\n"
 "  bye                  hang up and close the tab\n"
 "  help                 this\n"
 "\nThe keys are CTerm's: Settings, Keys, or ENVARC:CTerm/CTerm.keys\n"
@@ -1144,65 +1143,36 @@ static void help(struct RConn *c)
 
 /* ---- the files acted on: marked, else the one under the bar ---- */
 
-static BOOL job_alloc(struct Job *j, int side, int n, LONG bytes)
+/* Entry i of side s's panel into the job (its date with it) */
+static BOOL job_ent(struct RConn *c, int s, int i)
 {
-    job_free(j);
-    j->names = AllocVec(n * (sizeof(char *) + sizeof(ULONG) + 1) + bytes
-                        + 4, MEMF_ANY | MEMF_CLEAR);
-    if (!j->names)
+    struct Panel *p = &c->pn[s];
+    const struct REnt *e = &p->ent[i];
+    struct XItem *it;
+    if (!job_add(&c->job, s ? NULL : p->path, pname(p, i),
+                 e->dir == 1 ? 0 : e->size, e->dir))
         return FALSE;
-    j->sizes = (ULONG *)(j->names + n);
-    j->exist = (UBYTE *)(j->sizes + n);
-    j->names[0] = (char *)(j->exist + n);
-    j->side = side;
-    j->cap = n;
+    it = &c->job.it[c->job.n - 1];
+    it->when = e->when;
+    it->tz = e->tz;
     return TRUE;
 }
 
-/* the next name: a drawer's path and a name (dir NULL: the name) */
-static void job_put(struct Job *j, const char *dir, const char *name,
-                    ULONG size, UBYTE flag)
-{
-    char *d = j->names[j->n];
-    d[0] = 0;
-    if (dir) {
-        strcpy(d, dir);
-        AddPart((STRPTR)d, (STRPTR)name, 400);
-    } else
-        strcpy(d, name);
-    j->sizes[j->n] = size;
-    j->exist[j->n] = flag;
-    j->n++;
-    if (j->n < j->cap)
-        j->names[j->n] = d + strlen(d) + 1;
-}
-
 /* What the keys act on, as a job: the marked entries, else the one
- * under the bar (files only: files, drawers too: all). */
-static BOOL job_of(struct RConn *c, int s, BOOL all)
+ * under the bar - drawers too (all that is in them goes with them). */
+static BOOL job_of(struct RConn *c, int s)
 {
     struct Panel *p = &c->pn[s];
-    int i, n = 0, e = under(p), skipped = 0;
-    LONG bytes = 0, pl = strlen(p->path) + 2;
+    int i, n = 0, e = under(p);
+    job_free(&c->job);
+    c->job.side = s;
+    if (!s && !p->path[0])
+        return FALSE;                   /* the volumes */
     for (i = 0; i < p->nent; i++)
         n += p->ent[i].mark;
     for (i = 0; i < p->nent; i++)
-        if (n ? p->ent[i].mark : i == e) {
-            if (!all && p->ent[i].dir == 1) {
-                skipped++;
-                continue;
-            }
-            bytes += strlen(pname(p, i)) + 1 + (s ? 0 : pl);
-        }
-    if (!job_alloc(&c->job, s, (n ? n : 1), bytes + 1))
-        return FALSE;
-    for (i = 0; i < p->nent; i++)
-        if ((n ? p->ent[i].mark : i == e) && (all || p->ent[i].dir != 1))
-            job_put(&c->job, s ? NULL : p->path, pname(p, i),
-                    p->ent[i].size, p->ent[i].dir);
-    if (skipped)
-        tsay(c, "\x1b[2m[drawers are not copied: their files, marked, "
-             "are]\x1b[0m\r\n", NULL, NULL);
+        if ((n ? p->ent[i].mark : i == e) && !job_ent(c, s, i))
+            break;
     if (!c->job.n) {
         job_free(&c->job);
         return FALSE;
@@ -1210,18 +1180,24 @@ static BOOL job_of(struct RConn *c, int s, BOOL all)
     return TRUE;
 }
 
-/* The job's files to the host: those there already replaced (rep) or
- * left out. */
-static void send_job(struct RConn *c, BOOL rep)
+/* The job's files and drawers to the host. Those there already: how 0
+ * left out, 1 replaced, 2 gone on from where they end (a drawer: what
+ * it has already left as it is, what is shorter there gone on). */
+static void send_job(struct RConn *c, int how)
 {
     struct Job *j = &c->job;
     int i, k = 0;
-    for (i = 0; i < j->n; i++)
-        if (rep || !j->exist[i])
-            j->names[k++] = j->names[i];
-    if (k) {
+    if (!how) {
+        for (i = 0; i < j->n; i++)
+            if (!j->it[i].exist)
+                j->it[k++] = j->it[i];
+        j->n = k;
+    }
+    c->upmode = how == 2;
+    if (j->n) {
         work(c, TRUE);
-        xfer_batch(c, TRUE, (const char *const *)j->names, NULL, k, NULL);
+        if (job_walk(c, j))
+            xfer_batch(c, TRUE, j, NULL);
         rem_list(c);
         work(c, FALSE);
     }
@@ -1230,7 +1206,9 @@ static void send_job(struct RConn *c, BOOL rep)
     ui_draw(c);
 }
 
-/* The job's files from the host into the Amiga's drawer. */
+/* The job's files and drawers from the host into the Amiga's drawer:
+ * a drawer copied again goes into the one there, what it has already
+ * (as long) left out. */
 static void fetch_job(struct RConn *c)
 {
     struct Job *j = &c->job;
@@ -1240,8 +1218,8 @@ static void fetch_job(struct RConn *c)
         return;
     }
     work(c, TRUE);
-    xfer_batch(c, FALSE, (const char *const *)j->names, j->sizes, j->n,
-               c->pn[0].path);
+    if (job_walk(c, j))
+        xfer_batch(c, FALSE, j, c->pn[0].path);
     work(c, FALSE);
     unmark(&c->pn[1]);
     job_free(j);
@@ -1258,37 +1236,51 @@ static void ask(struct RConn *c, int what, const char *q)
     redraw_msg(c);
 }
 
-/* An upload: asked first if names are there already. */
+/* An upload: asked first if names are there already (but the one that
+ * broke off: it goes on by itself). */
 static void up_job(struct RConn *c)
 {
     struct Job *j = &c->job;
-    int i;
+    int i, k = 0;
     char h[256], q[200];
     j->nexist = 0;
     for (i = 0; i < j->n; i++) {
-        to_utf8((char *)FilePart((STRPTR)j->names[i]), h, sizeof h);
-        j->exist[i] = pan_find(&c->pn[1], h) >= 0;
-        j->nexist += j->exist[i];
+        to_utf8(JREL(j, i), h, sizeof h);
+        j->it[i].exist = pan_find(&c->pn[1], h) >= 0;
+        if (j->it[i].exist && strcmp(h, c->upart)) {
+            j->nexist++;
+            k = i;
+        }
     }
     if (!j->nexist) {
-        send_job(c, FALSE);
+        send_job(c, 1);
         return;
     }
+    /* (short: the answers must fit 80 columns with the name) */
     q[0] = 0;
-    if (j->nexist == 1 && j->n == 1) {
-        strncat(q, (char *)FilePart((STRPTR)j->names[0]), 100);
-        strcat(q, " is on the host already: replace it? (y/n)");
+    if (j->nexist == 1) {
+        const char *n = JREL(j, k);
+        int l = strlen(n);
+        if (l > 16) {                   /* its start and end, ~ between */
+            strncat(q, n, 7);
+            strcat(q, "~");
+            strcat(q, n + l - 8);
+        } else
+            strcat(q, n);
+        strcat(q, j->it[k].dir == 1 ? "/" : "");
+        strcat(q, " is on the host: y replace, n skip, g only what is "
+                  "missing");
     } else {
         numstr_cat(q, j->nexist);
-        strcat(q, " of them are on the host already: replace them (y), "
-                  "or leave them out (n)?");
+        strcat(q, " are on the host: y replace, n skip, g only what is "
+                  "missing");
     }
     ask(c, A_REPLACE, q);
 }
 
 static void copy(struct RConn *c)
 {
-    if (!job_of(c, c->side, FALSE))
+    if (!job_of(c, c->side))
         return;
     if (c->side)
         fetch_job(c);
@@ -1300,49 +1292,61 @@ static void del_ask(struct RConn *c)
 {
     char q[200];
     struct Job *j = &c->job;
-    q[0] = 0;
-    strcat(q, "Delete ");
+    int i, d = 0;
+    for (i = 0; i < j->n; i++)
+        d += j->it[i].dir == 1;
+    strcpy(q, "Delete ");
     if (j->n == 1) {
         char n[120];
         if (j->side)
-            to_latin1(j->names[0], strlen(j->names[0]), n, 100, '?');
+            to_latin1(JNAME(j, 0), strlen(JNAME(j, 0)), n, 80, '?');
         else
-            strncpy(n, (char *)FilePart((STRPTR)j->names[0]), 100), n[100] = 0;
+            strncpy(n, (char *)FilePart((STRPTR)JNAME(j, 0)), 80), n[80] = 0;
+        if (d)
+            strcat(q, "the drawer ");
         strcat(q, n);
+        if (d)
+            strcat(q, " and all in it,");
     } else {
         numstr_cat(q, j->n);
-        strcat(q, " files and drawers");
+        strcat(q, d ? " files and drawers (all in them too)" : " files");
     }
     strcat(q, j->side ? " on the host? (y/n)" : " on the Amiga? (y/n)");
     ask(c, A_DELETE, q);
 }
 
+/* Deleted: what is in the drawers first (the walk's order, backwards) */
 static void del_job(struct RConn *c)
 {
     struct Job *j = &c->job;
     int i;
     work(c, TRUE);
-    for (i = 0; i < j->n && !given_up(c); i++) {
-        char nm[120];
-        BOOL ok;
-        if (j->side) {
-            ok = rem_do(c, j->exist[i] == 1 ? FR_RMDIR : FR_DELETE,
-                        j->names[i], NULL);
-            to_latin1(j->names[i], strlen(j->names[i]), nm, 100, '?');
-        } else {
-            ok = DeleteFile((STRPTR)j->names[i]);
-            strncpy(nm, (char *)FilePart((STRPTR)j->names[i]), 100);
-            nm[100] = 0;
-            if (!ok) {
-                char why[80];
-                Fault(IoErr(), (STRPTR)"", (STRPTR)why, sizeof why);
-                tsay(c, "\x1b[1;31m[", nm, why);
-                tsay(c, "]\x1b[0m\r\n", NULL, NULL);
+    if (!job_walk(c, j))
+        tsay(c, "\x1b[1;31m[nothing deleted: the drawers could not be "
+             "read]\x1b[0m\r\n", NULL, NULL);
+    else
+        for (i = j->n - 1; i >= 0 && !given_up(c); i--) {
+            struct XItem *it = &j->it[i];
+            char nm[120];
+            BOOL ok;
+            if (j->side) {
+                ok = rem_do(c, it->dir == 1 ? FR_RMDIR : FR_DELETE,
+                            JNAME(j, i), NULL);
+                to_latin1(JNAME(j, i), strlen(JNAME(j, i)), nm, 100, '?');
+            } else {
+                ok = DeleteFile((STRPTR)JNAME(j, i));
+                strncpy(nm, (char *)FilePart((STRPTR)JNAME(j, i)), 100);
+                nm[100] = 0;
+                if (!ok) {
+                    char why[80];
+                    Fault(IoErr(), (STRPTR)"", (STRPTR)why, sizeof why);
+                    tsay(c, "\x1b[1;31m[", nm, why);
+                    tsay(c, "]\x1b[0m\r\n", NULL, NULL);
+                }
             }
+            if (ok && !it->deep)
+                tsay(c, "\x1b[2m[", nm, " deleted]\x1b[0m\r\n");
         }
-        if (ok)
-            tsay(c, "\x1b[2m[", nm, " deleted]\x1b[0m\r\n");
-    }
     if (j->side)
         rem_list(c);
     else
@@ -1384,19 +1388,19 @@ static void name_done(struct RConn *c, const char *nm)
         if (s) {
             to_utf8(nm, h, sizeof h);
             work(c, TRUE);
-            ok = strcmp(h, c->job.names[0]) &&
-                 rem_do(c, FR_RENAME, c->job.names[0], h);
+            ok = strcmp(h, JNAME(&c->job, 0)) &&
+                 rem_do(c, FR_RENAME, JNAME(&c->job, 0), h);
             if (ok)
                 rem_list(c);
             work(c, FALSE);
         } else {
             strcpy(old, c->pn[0].path);
-            AddPart((STRPTR)old, (STRPTR)c->job.names[0], sizeof old);
+            AddPart((STRPTR)old, (STRPTR)JNAME(&c->job, 0), sizeof old);
             strcpy(nw, c->pn[0].path);
             AddPart((STRPTR)nw, (STRPTR)nm, sizeof nw);
             ok = Rename((STRPTR)old, (STRPTR)nw);
             if (!ok)
-                tsay(c, "\x1b[1;31m[", c->job.names[0],
+                tsay(c, "\x1b[1;31m[", JNAME(&c->job, 0),
                      ": could not rename it]\x1b[0m\r\n");
             loc_list(c);
         }
@@ -1438,7 +1442,7 @@ static void complete(struct RConn *c)
 {
     static const char *const cmds[] = { "ls", "lls", "cd", "lcd", "pwd",
         "lpwd", "get", "mget", "put", "mput", "mkdir", "rm", "rmdir",
-        "rename", "bye", "help", NULL };
+        "rename", "passive", "bye", "help", NULL };
     char word[256], best[256], n[256], first[16];
     int ws = c->lpos, i, nb = 0, s = 1, wl;
     BOOL quoted = FALSE, isfirst;
@@ -1603,7 +1607,9 @@ static void line_key(struct RConn *c, int k)
 static void ask_key(struct RConn *c, int k)
 {
     BOOL yes = k == 'y' || k == 'Y', no = k == 'n' || k == 'N';
-    if (!yes && !no && find(1, k) != K_STOP && find(2, k) != P_CANCEL)
+    BOOL go = (k == 'g' || k == 'G') && c->akind == A_REPLACE;
+    if (!yes && !no && !go && find(1, k) != K_STOP &&
+        find(2, k) != P_CANCEL)
         return;
     c->mode = U_PANELS;
     c->line[0] = 0;
@@ -1620,8 +1626,8 @@ static void ask_key(struct RConn *c, int k)
             job_free(&c->job);
         break;
     case A_REPLACE:
-        if (yes || no)
-            send_job(c, yes);
+        if (yes || no || go)
+            send_job(c, yes ? 1 : no ? 0 : 2);
         else
             job_free(&c->job);
         break;
@@ -1670,55 +1676,50 @@ static BOOL wild(const char *pat, char *tok, int max)
     return ParsePatternNoCase((STRPTR)p, (STRPTR)tok, max) == 1;
 }
 
-/* The names on side s the words match (patterns or names), as the job;
- * drawers too when all. FALSE: none. */
+/* The names on side s the words match (patterns or names), as the job.
+ * A name of a drawer is the drawer and all in it; a pattern matches
+ * drawers too only when all ("-r", rm). FALSE: none. */
 static BOOL job_words(struct RConn *c, int s, char **w, int n, BOOL all)
 {
     struct Panel *p = &c->pn[s];
     char tok[600], nm[256];
-    LONG bytes = 0;
-    int i, k, cnt = 0, pass;
-    LONG pl = strlen(p->path) + 2;
-    for (pass = 0; pass < 2; pass++) {
-        if (pass && !job_alloc(&c->job, s, cnt ? cnt : 1, bytes + 1))
-            return FALSE;
-        for (k = 0; k < n; k++) {
-            if (wild(w[k], tok, sizeof tok)) {
-                for (i = 0; i < p->nent; i++) {
-                    if (!all && p->ent[i].dir == 1)
-                        continue;
-                    shown_name(c, s, i, nm, sizeof nm);
-                    if (!MatchPatternNoCase((STRPTR)tok, (STRPTR)nm))
-                        continue;
-                    if (!pass) {
-                        cnt++;
-                        bytes += strlen(pname(p, i)) + 1 + (s ? 0 : pl);
-                    } else
-                        job_put(&c->job, s ? NULL : p->path, pname(p, i),
-                                p->ent[i].size, p->ent[i].dir);
+    int i, k;
+    BOOL ok = TRUE;
+    job_free(&c->job);
+    c->job.side = s;
+    for (k = 0; k < n && ok; k++) {
+        if (wild(w[k], tok, sizeof tok)) {
+            for (i = 0; i < p->nent && ok; i++) {
+                if (!all && p->ent[i].dir == 1)
+                    continue;
+                shown_name(c, s, i, nm, sizeof nm);
+                if (MatchPatternNoCase((STRPTR)tok, (STRPTR)nm))
+                    ok = job_ent(c, s, i);
+            }
+            continue;
+        }
+        /* a name: as the host has it, or an Amiga path */
+        if (s) {
+            host_name(c, w[k], nm, sizeof nm);
+            if ((i = pan_find(p, nm)) >= 0)
+                ok = job_ent(c, s, i);
+            else
+                ok = job_add(&c->job, NULL, nm, 0, 0);
+        } else if (!strchr(w[k], ':') && (i = pan_find(p, w[k])) >= 0)
+            ok = job_ent(c, s, i);
+        else {
+            BPTR l = Lock((STRPTR)w[k], ACCESS_READ);   /* Work:path */
+            BOOL d = FALSE;
+            if (l) {
+                struct FileInfoBlock *fib = AllocDosObject(DOS_FIB, NULL);
+                if (fib) {
+                    d = Examine(l, fib) && fib->fib_DirEntryType > 0;
+                    FreeDosObject(DOS_FIB, fib);
                 }
-                continue;
+                UnLock(l);
             }
-            /* a name: as the host has it, or an Amiga path */
-            if (s) {
-                host_name(c, w[k], nm, sizeof nm);
-                i = pan_find(p, nm);
-                if (!pass) {
-                    cnt++;
-                    bytes += strlen(nm) + 1;
-                } else
-                    job_put(&c->job, NULL, nm, i >= 0 ? p->ent[i].size : 0,
-                            i >= 0 ? p->ent[i].dir : 0);
-            } else {
-                i = pan_find(p, w[k]);
-                if (!pass) {
-                    cnt++;
-                    bytes += strlen(w[k]) + 1 + pl;
-                } else
-                    job_put(&c->job, strchr(w[k], ':') ? NULL : p->path,
-                            w[k], i >= 0 ? p->ent[i].size : 0,
-                            i >= 0 ? p->ent[i].dir : 0);
-            }
+            ok = job_add(&c->job, strchr(w[k], ':') ? NULL : p->path, w[k],
+                         0, d);
         }
     }
     if (!c->job.n) {
@@ -1780,9 +1781,15 @@ static void exec_line(struct RConn *c, char *l)
 {
     char *w[17], *cmd, h[256];
     int n = words(l, w, 17);
+    BOOL r = FALSE;                     /* -r: patterns take drawers too */
     if (!n)
         return;
     cmd = w[0];
+    if (n > 2 && (!strcmp(w[1], "-r") || !strcmp(w[1], "-R"))) {
+        r = TRUE;
+        memmove(w + 1, w + 2, (n - 2) * sizeof w[0]);
+        n--;
+    }
     if (!stricmp(cmd, "ls") || !stricmp(cmd, "dir"))
         list_view(c, 1, n > 1 ? w[1] : NULL);
     else if (!stricmp(cmd, "lls") || !stricmp(cmd, "ldir"))
@@ -1805,11 +1812,21 @@ static void exec_line(struct RConn *c, char *l)
     } else if (!stricmp(cmd, "lpwd"))
         ui_note(c, c->pn[0].path[0] ? c->pn[0].path : "Volumes", FALSE);
     else if ((!stricmp(cmd, "get") || !stricmp(cmd, "mget")) && n > 1) {
-        if (job_words(c, 1, w + 1, n - 1, FALSE))
+        if (job_words(c, 1, w + 1, n - 1, r))
             fetch_job(c);
     } else if ((!stricmp(cmd, "put") || !stricmp(cmd, "mput")) && n > 1) {
-        if (job_words(c, 0, w + 1, n - 1, FALSE))
+        if (job_words(c, 0, w + 1, n - 1, r))
             up_job(c);
+    } else if (!stricmp(cmd, "passive")) {
+        if (c->kind != FK_FTP)
+            ui_note(c, "SFTP has no passive or active: that is FTP's", TRUE);
+        else {
+            c->active = !c->active;
+            ui_note(c, c->active ? "Active FTP from now on (PORT: the host "
+                                   "calls the Amiga)"
+                                 : "Passive FTP from now on (the Amiga "
+                                   "calls the host)", FALSE);
+        }
     } else if ((!stricmp(cmd, "mkdir") || !stricmp(cmd, "md")) && n > 1) {
         to_utf8(w[1], h, sizeof h);
         work(c, TRUE);
@@ -1883,9 +1900,10 @@ static void act(struct RConn *c, int a)
         e = under(p);
         if (e < 0 || (!c->side && !p->path[0]))
             break;
-        if (!job_alloc(&c->job, c->side, 1, strlen(pname(p, e)) + 2))
+        job_free(&c->job);
+        c->job.side = c->side;
+        if (!job_add(&c->job, NULL, pname(p, e), 0, 0))
             break;
-        job_put(&c->job, NULL, pname(p, e), 0, 0);
         shown_name(c, c->side, e, n, sizeof n);
         line_start(c, L_RENAME, n);
         break;
@@ -1895,7 +1913,7 @@ static void act(struct RConn *c, int a)
             line_start(c, L_MKDIR, NULL);
         break;
     case K_DELETE:
-        if ((c->side || p->path[0]) && job_of(c, c->side, TRUE))
+        if ((c->side || p->path[0]) && job_of(c, c->side))
             del_ask(c);
         break;
     case K_LOG:
@@ -1925,6 +1943,19 @@ void ui_key(struct RConn *c, int k)
 {
     int a;
     BOOL ok = geom(c);
+    if (k == KM_SHIFTDN || k == KM_SHIFTUP) {
+        BOOL s = k == KM_SHIFTDN;
+        if (s != c->shifted) {
+            c->shifted = s;
+            if (c->ui && ok && c->mode != U_LOG && c->dc == W &&
+                c->dr == H) {
+                begin(c);
+                draw_keys(c);
+                end(c);
+            }
+        }
+        return;
+    }
     if (!c->ui) {                       /* calling: it may be given up */
         if (c->busy && find(1, k) == K_STOP)
             c->stop = TRUE;
@@ -1992,8 +2023,8 @@ void ui_mouse(struct RConn *c, int what, int r, int col, ULONG s, ULONG us)
             view_key(c, K_NONE, TRUE);
         return;
     }
-    if (!what && r == H - 1) {          /* the key bar */
-        int a = find(1, KM_F1 + col * 10 / W);
+    if (!what && r == H - 1) {          /* the key bar (as it shows) */
+        int a = find(1, (c->shifted ? KM_SF1 : KM_F1) + col * 10 / W);
         if (a)
             act(c, a);
         return;

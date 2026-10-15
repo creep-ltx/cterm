@@ -23,8 +23,13 @@ struct REnt {
     LONG noff;
     ULONG size;
     char date[18];                      /* "2026-10-11 07:50", or "" */
+    ULONG when;                         /* the same, the Amiga's seconds
+                                           (since 1978, its local time);
+                                           0 not known */
     UBYTE dir;                          /* 1 a drawer, 2 a link of either */
     UBYTE mark;                         /* marked (Space) */
+    UBYTE tz;                           /* when: 0 none, 1 the host's own
+                                           clock (LIST), 2 from UTC */
 };
 
 /* A panel: the Amiga's drawer (pn[0]) or the host's (pn[1]) */
@@ -46,16 +51,35 @@ enum { L_CMD, L_RENAME, L_MKDIR };
 /* a yes/no for (akind) */
 enum { A_DELETE, A_QUIT, A_REPLACE };
 
-/* Files waiting for a yes or no (a delete, an upload's replacing): the
- * names (the host's or the Amiga's paths), their sizes */
+/* A file or drawer to copy or delete. Its name: the host's (UTF-8, from
+ * the drawer the host is in: "sub/file" inside a drawer copied) or the
+ * Amiga's whole path; rel: the name it has on the other side, from the
+ * drawer copied into ("Drawer/sub/file" for an upload; = name for a
+ * download) */
+struct XItem {
+    LONG noff, roff;                    /* the name, rel: in the pool */
+    ULONG size;
+    ULONG when;                         /* the Amiga's seconds, 0 none */
+    UBYTE dir;                          /* 1 a drawer, 2 a link */
+    UBYTE tz;                           /* REnt's */
+    UBYTE exist;                        /* on the other side already (or
+                                           maybe: inside such a drawer) */
+    UBYTE deep;                         /* inside a drawer copied */
+};
+
+/* What the keys or a command act on, waiting for a yes or no (a delete,
+ * an upload's replacing), then done: the items, their names in a pool.
+ * A drawer's walk adds what is in it after it (job_walk). */
 struct Job {
     int side;                           /* the panel they are on */
     int n, cap, nexist;                 /* how many (room for); how many
-                                           replace */
-    char **names;
-    ULONG *sizes;
-    UBYTE *exist;                       /* on the host already */
+                                           there already */
+    struct XItem *it;
+    char *pool;
+    LONG plen, pcap;
 };
+#define JNAME(j, i) ((j)->pool + (j)->it[i].noff)
+#define JREL(j, i) ((j)->pool + (j)->it[i].roff)
 
 #define NHIST 8                         /* command lines remembered */
 
@@ -65,6 +89,8 @@ struct RConn {
     int kind;                           /* FK_SFTP, FK_FTP */
     char cwd[400];                      /* where it is on the host */
     struct Panel pn[2];                 /* the Amiga's side, the host's */
+    struct Panel *lp;                   /* where a listing goes (NULL: pn[1];
+                                           a drawer's walk: its own) */
     BOOL busy;                          /* a command at work: no other */
     BOOL stop;                          /* Stop: the work gives up */
     BOOL lost;                          /* the connection went */
@@ -79,9 +105,16 @@ struct RConn {
     char reply[256];                    /* the last reply's text */
     int code;                           /* ... its number */
     char peer[20];                      /* the host's address */
-    BOOL nomlsd, noepsv, chatty;        /* MLSD, EPSV refused; replies
+    BOOL nomlsd, noepsv, nomdtm, chatty; /* MLSD, EPSV, MDTM refused; replies
                                            shown in the tab */
     BOOL quiet;                         /* a refusal expected: not shown */
+    BOOL active;                        /* active FTP (PORT): passive failed,
+                                           or `passive` typed */
+    /* uploads */
+    int upmode;                         /* names there already: 0 replaced,
+                                           1 gone on from where they end */
+    char upart[256];                    /* the upload that broke off (its
+                                           name there): it goes on next time */
     /* SFTP: sftp_ops */
     void *sf, *sfh;                     /* the connection; a file open */
     ULONG polled;                       /* a transfer last let CTerm on */
@@ -109,6 +142,8 @@ struct RConn {
     int hn, hpos;
     ULONG clicks, clickm;               /* the last click: double? */
     int clickrow;
+    BOOL shifted;                       /* Shift held: the key bar shows
+                                           Shift+F1..F10 */
 };
 
 /* files.c, for ftp.c and fileui.c */
@@ -123,6 +158,10 @@ void ent_clear(struct RConn *c);        /* the host's listing */
 BOOL ent_add(struct RConn *c, const char *name, int len, ULONG size,
              const char *date, int dir);
 void ymd(LONG days, int *y, int *m, int *d);   /* days since 1970 */
+LONG days_of(int y, int m, int d);      /* ... and back */
+LONG tz_east(ULONG utc);                /* the Amiga's clock minus UTC, in
+                                           seconds, at utc (since 1970) */
+void ent_when(struct RConn *c, LONG days, LONG secs, BOOL utc);
 LONG today(void);                       /* yyyymmdd */
 void to_latin1(const char *in, int len, char *out, int max, char bad);
 void to_utf8(const char *in, char *out, int max);
@@ -136,8 +175,12 @@ BOOL rem_list(struct RConn *c);         /* the host's drawer, read again */
 BOOL rem_cd(struct RConn *c, const char *path);    /* NULL: up */
 BOOL rem_do(struct RConn *c, int what, const char *a, const char *b);
 BOOL loc_list(struct RConn *c);         /* the Amiga's drawer, read */
-int xfer_batch(struct RConn *c, BOOL up, const char *const *names,
-               const ULONG *sizes, int n, const char *dir);
+int xfer_batch(struct RConn *c, BOOL up, struct Job *j, const char *dir);
+BOOL job_add(struct Job *j, const char *dir, const char *name, ULONG size,
+             int isdir);                /* dir NULL: the name alone */
+void job_free(struct Job *j);
+BOOL job_walk(struct RConn *c, struct Job *j);     /* drawers' insides */
+BOOL loc_delete(struct RConn *c, const char *path);
 void hang_up(struct RConn *c);
 void work(struct RConn *c, BOOL on);    /* busy: a command at work */
 void down_dir(struct RConn *c, char *dir);
@@ -156,11 +199,13 @@ void ui_free(struct RConn *c);
 BOOL ftp_open(struct RConn *c);         /* connected, logged in, binary */
 void ftp_close(struct RConn *c);
 BOOL ftp_cd(struct RConn *c, const char *path);    /* NULL: up */
-BOOL ftp_list(struct RConn *c);
+BOOL ftp_list(struct RConn *c, const char *path);   /* NULL: the cwd */
+ULONG ftp_mdtm(struct RConn *c, const char *name);  /* UTC; 0 none */
 BOOL ftp_do(struct RConn *c, int what, const char *a, const char *b);
 LONG ftp_size(struct RConn *c, const char *name);  /* -1: not known */
-/* a file's data: RETR (how 0, from *from on; *from 0 when the host
- * cannot go on from there) or STOR (1); the data socket, -1 failed */
+/* a file's data: RETR (how 0) or STOR (1), from *from on (REST; STOR
+ * falls back on APPE; *from 0 when the host cannot go on from there);
+ * the data socket, -1 failed */
 LONG ftp_xopen(struct RConn *c, const char *name, int how, ULONG *from);
 BOOL ftp_xend(struct RConn *c, BOOL stopped);
 #define FR_RMDIR 100                    /* ftp_do: a drawer goes */

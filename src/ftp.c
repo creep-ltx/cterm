@@ -264,7 +264,7 @@ BOOL ftp_cd(struct RConn *c, const char *path)
 /* A passive data connection, before the command that uses it: the
  * socket, -1 none. Non-blocking (files.h), and read only when
  * WaitSelect says so. */
-static LONG data_open(struct RConn *c)
+static LONG pasv_open(struct RConn *c)
 {
     LONG port = 0;
     const char *p;
@@ -282,8 +282,12 @@ static LONG data_open(struct RConn *c)
     }
     if (!port) {
         int h[6], i = 0;
-        if (cmd(c, "PASV", NULL) != 227)
+        c->quiet = TRUE;                /* refused: active FTP instead */
+        i = cmd(c, "PASV", NULL);
+        c->quiet = FALSE;
+        if (i != 227)
             return -1;
+        i = 0;
         /* h1,h2,h3,h4,p1,p2 - in brackets or not */
         for (p = c->reply + 4; *p && (*p < '0' || *p > '9'); p++)
             ;
@@ -305,6 +309,86 @@ static LONG data_open(struct RConn *c)
         sock_nonblock(d);
         return d;
     }
+}
+
+/* Active FTP: a socket listening on the Amiga's address as the control
+ * line has it (getsockname: the address the host is reached from - on a
+ * home network the Amiga's own; through a router's NAT the host could
+ * not call it back, which is why passive comes first), told to the host
+ * by PORT. The socket, -1 none. */
+static LONG port_open(struct RConn *c)
+{
+    struct sockaddr_in a;
+    socklen_t len = sizeof a;
+    LONG s;
+    UBYTE *ip, *pt;
+    char arg[32];
+    int i;
+    if (getsockname(c->cfd, (struct sockaddr *)&a, &len) ||
+        (s = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+        return -1;
+    a.sin_port = 0;                     /* any port */
+    len = sizeof a;
+    if (bind(s, (struct sockaddr *)&a, sizeof a) || listen(s, 1) ||
+        getsockname(s, (struct sockaddr *)&a, &len)) {
+        CloseSocket(s);
+        return -1;
+    }
+    ip = (UBYTE *)&a.sin_addr.s_addr;   /* in the network's order, as */
+    pt = (UBYTE *)&a.sin_port;          /* PORT writes them */
+    arg[0] = 0;
+    for (i = 0; i < 6; i++) {
+        if (i)
+            strcat(arg, ",");
+        numstr_cat(arg, i < 4 ? ip[i] : pt[i - 4]);
+    }
+    if (cmd(c, "PORT", arg) != 200) {
+        CloseSocket(s);
+        return -1;
+    }
+    sock_nonblock(s);
+    return s;
+}
+
+/* The data's socket, before the command that uses it: passive (the
+ * Amiga calls the host), else active - from the first time passive
+ * fails on, or after `passive` was typed. *lis: it is active's socket
+ * listening, which data_go turns into the host's call. -1 none. */
+static LONG data_open(struct RConn *c, BOOL *lis)
+{
+    *lis = FALSE;
+    if (!c->active) {
+        LONG d = pasv_open(c);
+        if (d >= 0 || c->cfd < 0 || given_up(c))
+            return d;
+        tsay(c, "\x1b[2m[passive FTP failed: active FTP from now on - the "
+             "command passive switches back]\x1b[0m\r\n", NULL, NULL);
+        c->active = TRUE;
+    }
+    *lis = TRUE;
+    return port_open(c);
+}
+
+/* After the command's 1xx: the host's call taken (active FTP: it calls
+ * the socket listening); a passive socket as it is. -1: no call came. */
+static LONG data_go(struct RConn *c, LONG d, BOOL lis)
+{
+    struct sockaddr_in a;
+    socklen_t len = sizeof a;
+    LONG s = -1;
+    if (!lis)
+        return d;
+    if (await(c, d, SF_IN, 30))
+        s = accept(d, (struct sockaddr *)&a, &len);
+    CloseSocket(d);
+    if (s < 0) {
+        if (!given_up(c) && !c->timedout)
+            tsay(c, "\x1b[1;31m[the host did not call back (active FTP)]"
+                 "\x1b[0m\r\n", NULL, NULL);
+        return -1;
+    }
+    sock_nonblock(s);
+    return s;
 }
 
 /* ---- listings ---- */
@@ -376,8 +460,7 @@ static void mlsd_line(struct RConn *c, const char *l)
     const char *f = l;
     ULONG size = 0;
     int dir = 0;
-    char date[18];
-    date[0] = 0;
+    LONG days = 0, secs = 0;
     if (!name)
         return;
     while (f < name) {
@@ -394,14 +477,16 @@ static void mlsd_line(struct RConn *c, const char *l)
                 dir = 2;
         } else if (!strnicmp((char *)f, "size=", 5))
             size = strtoul(f + 5, NULL, 10);
-        else if (!strnicmp((char *)f, "modify=", 7) && e - f >= 19) {
-            const char *v = f + 7;      /* YYYYMMDDHHMMSS */
-            datestr(date, num(v, 4), num(v + 4, 2), num(v + 6, 2),
-                    num(v + 8, 2), num(v + 10, 2));
+        else if (!strnicmp((char *)f, "modify=", 7) && e - f >= 21) {
+            const char *v = f + 7;      /* YYYYMMDDHHMMSS, UTC */
+            days = days_of(num(v, 4), num(v + 4, 2), num(v + 6, 2));
+            secs = num(v + 8, 2) * 3600 + num(v + 10, 2) * 60 +
+                   num(v + 12, 2);
         }
         f = e + 1;
     }
-    ent_add(c, name + 2, strlen(name + 2), size, date, dir);
+    if (ent_add(c, name + 2, strlen(name + 2), size, "", dir) && days)
+        ent_when(c, days, secs, TRUE);  /* shown in the Amiga's time */
 }
 
 /* LIST: Unix "drwxr-xr-x 2 user group 4096 Oct 11 07:50 name" (or the
@@ -421,8 +506,10 @@ static void list_line(struct RConn *c, const char *l)
         datestr(date, y < 100 ? (y < 70 ? 2000 + y : 1900 + y) : y, mo, d,
                 h, mi);
         dir = !strncmp(w[2], "<DIR>", 5);
-        ent_add(c, w[3], strlen(w[3]), dir ? 0 : strtoul(w[2], NULL, 10),
-                date, dir);
+        if (ent_add(c, w[3], strlen(w[3]), dir ? 0 : strtoul(w[2], NULL, 10),
+                    date, dir))
+            ent_when(c, days_of(y < 100 ? (y < 70 ? 2000 + y : 1900 + y) : y,
+                                mo, d), h * 3600L + mi * 60, FALSE);
         return;
     }
     if (n < 6 || !strchr("-dlbcps", w[0][0]) || strlen(w[0]) < 10)
@@ -462,22 +549,27 @@ static void list_line(struct RConn *c, const char *l)
         if (!len || (len == 1 && name[0] == '.') ||
             (len == 2 && name[0] == '.' && name[1] == '.'))
             return;
-        ent_add(c, name, len, strtoul(w[i - 1], NULL, 10), date, dir);
+        /* the host's own clock: shown as it is (no zone is given) */
+        if (ent_add(c, name, len, strtoul(w[i - 1], NULL, 10), date, dir))
+            ent_when(c, days_of(y, mo, d), h < 0 ? 0 : h * 3600L + mi * 60,
+                     FALSE);
     }
 }
 
-BOOL ftp_list(struct RConn *c)
+/* A drawer's listing (path NULL: the one it is in; else a drawer under
+ * it, "sub/drawer", given to MLSD or LIST) */
+BOOL ftp_list(struct RConn *c, const char *path)
 {
     char line[600];
     int ll = 0;
     for (;;) {
-        LONG d = data_open(c);
+        BOOL lis, mlsd = !c->nomlsd, ok = TRUE;
+        LONG d = data_open(c, &lis);
         int r;
-        BOOL mlsd = !c->nomlsd, ok = TRUE;
         if (d < 0)
             return FALSE;
         c->quiet = mlsd;                /* no MLSD: LIST instead */
-        r = cmd(c, mlsd ? "MLSD" : "LIST", NULL);
+        r = cmd(c, mlsd ? "MLSD" : "LIST", path);
         c->quiet = FALSE;
         if (r != 150 && r != 125) {
             CloseSocket(d);
@@ -485,6 +577,10 @@ BOOL ftp_list(struct RConn *c)
                 c->nomlsd = TRUE;       /* LIST, from now on */
                 continue;
             }
+            return FALSE;
+        }
+        if ((d = data_go(c, d, lis)) < 0) {
+            reply_t(c, 10);             /* its 425, if it says one */
             return FALSE;
         }
         ent_clear(c);
@@ -545,24 +641,56 @@ LONG ftp_size(struct RConn *c, const char *name)
     return r == 213 ? atol(c->reply + 4) : -1;
 }
 
+/* MDTM: a file's time, UTC seconds since 1970 (0: not known) */
+ULONG ftp_mdtm(struct RConn *c, const char *name)
+{
+    const char *v = c->reply + 4;
+    if (c->nomdtm)
+        return 0;
+    c->quiet = TRUE;
+    if (cmd(c, "MDTM", name) != 213 || strlen(v) < 14) {
+        if (c->code >= 500 && c->code != 550)
+            c->nomdtm = TRUE;           /* the host has none */
+        c->quiet = FALSE;
+        return 0;
+    }
+    c->quiet = FALSE;
+    return (ULONG)days_of(num(v, 4), num(v + 4, 2), num(v + 6, 2)) * 86400 +
+           num(v + 8, 2) * 3600 + num(v + 10, 2) * 60 + num(v + 12, 2);
+}
+
 LONG ftp_xopen(struct RConn *c, const char *name, int how, ULONG *from)
 {
     LONG d;
     int r;
-    if (how == 0 && *from) {
+    BOOL lis, app = FALSE;
+    if ((d = data_open(c, &lis)) < 0)
+        return -1;
+    if (*from) {                        /* REST right before RETR or STOR */
         char n[12];
         n[0] = 0;
         numstr_cat(n, (LONG)*from);
-        if (!(r = cmd(c, "REST", n)))
+        c->quiet = how;                 /* an upload: APPE instead */
+        r = cmd(c, "REST", n);
+        c->quiet = FALSE;
+        if (!r) {
+            CloseSocket(d);
             return -1;                  /* the line went: not a refusal */
-        if (r != 350)
-            *from = 0;                  /* from the start, then */
+        }
+        if (r != 350) {
+            if (how)
+                app = TRUE;             /* added to the end of it */
+            else
+                *from = 0;              /* from the start, then */
+        }
     }
-    if ((d = data_open(c)) < 0)
-        return -1;
-    r = cmd(c, how ? "STOR" : "RETR", name);
+    r = cmd(c, how ? app ? "APPE" : "STOR" : "RETR", name);
     if (r != 150 && r != 125) {
         CloseSocket(d);
+        return -1;
+    }
+    if ((d = data_go(c, d, lis)) < 0) {
+        reply_t(c, 10);
         return -1;
     }
     return c->dfd = d;

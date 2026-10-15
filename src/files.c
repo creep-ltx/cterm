@@ -25,6 +25,8 @@
  */
 #include "cterm.h"
 #include "files.h"
+#include <libraries/locale.h>
+#include <proto/locale.h>
 #pragma GCC optimize("Os")              /* called rarely: small before quick */
 
 #define BUFSZ  32768                    /* a transfer's bytes at a time */
@@ -34,6 +36,8 @@
 static struct RConn *conns;             /* every place connected */
 static int tidy;                        /* ending what was begun: a Stop
                                            does not stop it */
+static BOOL hush;                       /* a refusal that may come (a drawer
+                                           made that may be there): unsaid */
 static struct RConn *asking;            /* its password, for f_ask */
 static BOOL asked;
 static struct RConn *saying;            /* the place a call's words are for */
@@ -200,6 +204,152 @@ static void date_text(LONG days, int mi, char *date)
     numstr_cat(date, mi / 60);
     strcat(date, mi % 60 < 10 ? ":0" : ":");
     numstr_cat(date, mi % 60);
+}
+
+/* Days since 1970 from a date (H. Hinnant's days_from_civil). */
+LONG days_of(int y, int m, int d)
+{
+    LONG era, yoe, doy;
+    y -= m <= 2;
+    era = (y >= 0 ? y : y - 399) / 400;
+    yoe = y - era * 400;
+    doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    return era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+}
+
+/* ---- the Amiga's time zone ----
+ * Hosts give UTC (MLSD, MDTM, SFTP); the Amiga's clock is local. Its
+ * zone: ENV:TZ when it is set, as POSIX writes it ("CET-1CEST,M3.5.0,
+ * M10.5.0/3": the standard zone's hours west, the summer zone and the
+ * days it starts and ends), else Locale's GMT offset (Prefs/Locale's
+ * map; no summer time in it). */
+static BOOL tz_read;
+static LONG tz_std, tz_dst;             /* seconds east of UTC */
+static BOOL tz_has;                     /* summer time rules */
+static UBYTE tz_m[2], tz_w[2], tz_d[2]; /* Mm.w.d: its start, its end */
+static LONG tz_t[2];                    /* ... at this local time */
+
+static const char *tz_num(const char *p, LONG *v)
+{
+    *v = 0;
+    if (*p < '0' || *p > '9')
+        return NULL;
+    while (*p >= '0' && *p <= '9')
+        *v = *v * 10 + *p++ - '0';
+    return p;
+}
+
+/* [+-]hh[:mm[:ss]] in seconds */
+static const char *tz_time(const char *p, LONG *s)
+{
+    LONG h, m = 0, x = 0, sg = 1;
+    if (*p == '+' || *p == '-')
+        sg = *p++ == '-' ? -1 : 1;
+    if (!(p = tz_num(p, &h)))
+        return NULL;
+    if (*p == ':' && (p = tz_num(p + 1, &m)) && *p == ':')
+        p = tz_num(p + 1, &x);
+    if (!p)
+        return NULL;
+    *s = sg * (h * 3600 + m * 60 + x);
+    return p;
+}
+
+static const char *tz_name(const char *p)
+{
+    if (*p == '<') {
+        while (*p && *p != '>')
+            p++;
+        return *p ? p + 1 : p;
+    }
+    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))
+        p++;
+    return p;
+}
+
+/* ",Mm.w.d[/time]" */
+static const char *tz_rule(const char *p, int i)
+{
+    LONG v;
+    if (*p++ != ',' || *p++ != 'M' || !(p = tz_num(p, &v)) || v < 1 ||
+        v > 12)
+        return NULL;
+    tz_m[i] = v;
+    if (*p++ != '.' || !(p = tz_num(p, &v)) || v < 1 || v > 5)
+        return NULL;
+    tz_w[i] = v;
+    if (*p++ != '.' || !(p = tz_num(p, &v)) || v > 6)
+        return NULL;
+    tz_d[i] = v;
+    tz_t[i] = 7200;
+    if (*p == '/' && !(p = tz_time(p + 1, &tz_t[i])))
+        return NULL;
+    return p;
+}
+
+static void tz_init(void)
+{
+    char v[80];
+    const char *p;
+    LONG s;
+    tz_read = TRUE;
+    tz_has = FALSE;
+    tz_std = tz_dst = 0;
+    if (GetVar((STRPTR)"TZ", (STRPTR)v, sizeof v, 0) > 0 &&
+        (p = tz_name(v)) != v && (p = tz_time(p, &s))) {
+        tz_std = tz_dst = -s;           /* POSIX counts west */
+        if (*p) {
+            const char *q = tz_name(p);
+            if (q == p)
+                return;
+            tz_dst = tz_std + 3600;
+            if (*q && *q != ',' && (q = tz_time(q, &s)))
+                tz_dst = -s;
+            if (q && (q = tz_rule(q, 0)) && tz_rule(q, 1))
+                tz_has = TRUE;
+        }
+        return;
+    }
+    {
+        struct Library *LocaleBase = OpenLibrary((STRPTR)"locale.library", 38);
+        struct Locale *l;
+        if (LocaleBase) {
+            if ((l = OpenLocale(NULL))) {
+                tz_std = tz_dst = -l->loc_GMTOffset * 60;   /* minutes west */
+                CloseLocale(l);
+            }
+            CloseLibrary(LocaleBase);
+        }
+    }
+}
+
+/* Mm.w.d of year y: its day (days since 1970) */
+static LONG tz_day(int y, int i)
+{
+    LONG first = days_of(y, tz_m[i], 1);
+    LONG next = tz_m[i] == 12 ? days_of(y + 1, 1, 1)
+                              : days_of(y, tz_m[i] + 1, 1);
+    LONG d = first + (tz_d[i] - (first + 4) % 7 + 7) % 7 + (tz_w[i] - 1) * 7;
+    while (d >= next)
+        d -= 7;                         /* week 5: the last */
+    return d;
+}
+
+LONG tz_east(ULONG utc)
+{
+    int y, m, d;
+    LONG on, off;
+    if (!tz_read)
+        tz_init();
+    if (!tz_has)
+        return tz_std;
+    ymd(utc / 86400, &y, &m, &d);
+    on = tz_day(y, 0) * 86400 + tz_t[0] - tz_std;   /* both in UTC */
+    off = tz_day(y, 1) * 86400 + tz_t[1] - tz_dst;
+    if (on < off ? (LONG)utc >= on && (LONG)utc < off
+                 : (LONG)utc >= on || (LONG)utc < off)
+        return tz_dst;
+    return tz_std;
 }
 
 /* The host's UTF-8 as Latin-1, the Amiga's: what Latin-1 has not
@@ -379,6 +529,8 @@ static BOOL pan_add(struct Panel *p, const char *name, int len, ULONG size,
     e->date[sizeof e->date - 1] = 0;
     e->dir = dir;
     e->mark = 0;
+    e->when = 0;
+    e->tz = 0;
     return TRUE;
 }
 
@@ -399,15 +551,39 @@ const char *pname(struct Panel *p, int i)
     return p->pool + p->ent[i].noff;
 }
 
+static struct Panel *lpan(struct RConn *c)
+{
+    return c->lp ? c->lp : &c->pn[1];
+}
+
 void ent_clear(struct RConn *c)
 {
-    pan_clear(&c->pn[1]);
+    pan_clear(lpan(c));
 }
 
 BOOL ent_add(struct RConn *c, const char *name, int len, ULONG size,
              const char *date, int dir)
 {
-    return pan_add(&c->pn[1], name, len, size, date, dir);
+    return pan_add(lpan(c), name, len, size, date, dir);
+}
+
+/* The entry just added: its date, from days since 1970 and seconds of
+ * the day - UTC (utc), else the host's own clock, shown as it is. */
+void ent_when(struct RConn *c, LONG days, LONG secs, BOOL utc)
+{
+    struct Panel *p = lpan(c);
+    struct REnt *e;
+    ULONG t;
+    if (!p->nent || days < 2922)
+        return;                         /* before 1978: the Amiga has none */
+    e = &p->ent[p->nent - 1];
+    t = (ULONG)days * 86400 + secs;
+    if (utc)
+        t += tz_east(t);
+    if (utc || !e->date[0])             /* the host's own text: kept */
+        date_text(t / 86400, t % 86400 / 60, e->date);
+    e->when = t - 2922UL * 86400;
+    e->tz = utc ? 2 : 1;
 }
 
 /* Drawers first, then by name (any case): a shell sort. */
@@ -523,9 +699,13 @@ BOOL loc_list(struct RConn *c)
                 int dir = t == ST_SOFTLINK ? 2 : t > 0;    /* 2: a link */
                 date_text(fib->fib_Date.ds_Days + 2922,
                           fib->fib_Date.ds_Minute, date);
-                pan_add(p, (char *)fib->fib_FileName,
-                        strlen((char *)fib->fib_FileName),
-                        dir ? 0 : fib->fib_Size, date, dir);
+                if (pan_add(p, (char *)fib->fib_FileName,
+                            strlen((char *)fib->fib_FileName),
+                            dir ? 0 : fib->fib_Size, date, dir))
+                    p->ent[p->nent - 1].when =
+                        fib->fib_Date.ds_Days * 86400 +
+                        fib->fib_Date.ds_Minute * 60 +
+                        fib->fib_Date.ds_Tick / 50;
             }
         FreeDosObject(DOS_FIB, fib);
     }
@@ -572,7 +752,8 @@ static BOOL sf_fail(struct RConn *c, LONG rc, const char *what)
     strcat(m, ": ");
     strcat(m, rc > 0 && rc <= 20 && why[rc][0] ? why[rc]
                                                : "the host said no");
-    tsay(c, "\x1b[1;31m[", m, "]\x1b[0m\r\n");
+    if (!hush)
+        tsay(c, "\x1b[1;31m[", m, "]\x1b[0m\r\n");
     return FALSE;
 }
 
@@ -600,19 +781,25 @@ static BOOL sf_cd(struct RConn *c, const char *path)
     return TRUE;
 }
 
-static BOOL sf_list(struct RConn *c)
+/* A drawer's listing into lpan: path NULL the drawer it is in, else
+ * one under it ("sub/drawer") */
+static BOOL sf_list(struct RConn *c, const char *path)
 {
-    struct Panel *p = &c->pn[1];
+    struct Panel *p = lpan(c);
     void *dh;
     LONG rc, r2;
-    char name[512], date[18];
+    char name[512], dir[400];
     SfAttr a;
     int i, links = 0;
-    while ((rc = OPS->sf_opendir(c->sf, c->cwd, &dh)) == SF_AGAIN &&
+    if (path)
+        rpath(c, path, dir, sizeof dir);
+    else
+        strcpy(dir, c->cwd);
+    while ((rc = OPS->sf_opendir(c->sf, dir, &dh)) == SF_AGAIN &&
            sf_wait(c))
         ;
     if (rc)
-        return sf_fail(c, rc, c->cwd);
+        return sf_fail(c, rc, dir);
     pan_clear(p);
     for (;;) {
         while ((rc = OPS->sf_readdir(dh, name, sizeof name, &a)) ==
@@ -622,20 +809,20 @@ static BOOL sf_list(struct RConn *c)
             break;
         if (!strcmp(name, ".") || !strcmp(name, ".."))
             continue;
-        date[0] = 0;
-        if (a.mtime)
-            date_text(a.mtime / 86400, a.mtime % 86400 / 60, date);
-        pan_add(p, name, rc, a.dir ? 0 : a.size, date,
+        pan_add(p, name, rc, a.dir ? 0 : a.size, "",
                 a.dir ? 1 : a.link ? 2 : 0);
+        if (a.mtime)
+            ent_when(c, a.mtime / 86400, a.mtime % 86400, TRUE);
     }
     tidy++;
     while ((r2 = OPS->sf_closedir(dh)) == SF_AGAIN && sf_wait(c))
         ;
     tidy--;
     if (rc < 0)
-        return sf_fail(c, rc, c->cwd);
-    /* links followed, to tell drawers from files (the first 32) */
-    for (i = 0; i < p->nent && links < 32; i++)
+        return sf_fail(c, rc, dir);
+    /* links followed, to tell drawers from files (the first 32); not in
+     * a drawer's walk: a link to a drawer above would never end */
+    for (i = 0; i < p->nent && links < 32 && !path; i++)
         if (p->ent[i].dir == 2) {
             links++;
             rpath(c, pname(p, i), name, sizeof name);
@@ -754,12 +941,13 @@ static BOOL run_op(struct RConn *c, OpFn fn, const char *a, const char *b)
     return FALSE;
 }
 
+/* a listing into lpan: a, a drawer under the one it is in (NULL: that) */
 static BOOL op_list(struct RConn *c, const char *a, const char *b)
 {
-    BOOL ok = c->kind == FK_FTP ? ftp_list(c) : sf_list(c);
-    (void)a; (void)b;
+    BOOL ok = c->kind == FK_FTP ? ftp_list(c, a) : sf_list(c, a);
+    (void)b;
     if (ok)
-        pan_sort(&c->pn[1]);
+        pan_sort(lpan(c));
     return ok;
 }
 
@@ -807,9 +995,13 @@ static BOOL op_do(struct RConn *c, const char *a, const char *b)
     char pa[400], pb[400];
     LONG rc;
     if (c->kind == FK_FTP) {
-        if (ftp_do(c, op_what, a, b))
+        BOOL ok;
+        c->quiet = hush;
+        ok = ftp_do(c, op_what, a, b);
+        c->quiet = FALSE;
+        if (ok)
             return TRUE;
-        if (!c->lost && c->code < 400)
+        if (!c->lost && c->code < 400 && !hush)
             tsay_name(c, "\x1b[1;31m[", a, ": the host said no]\x1b[0m\r\n");
         return FALSE;
     }
@@ -837,8 +1029,7 @@ BOOL rem_do(struct RConn *c, int what, const char *a, const char *b)
 
 /* ---- a file's bytes, either way ---- */
 
-static ULONG xfrom, xfrom0;             /* x_open: where a download goes
-                                         * on from */
+static ULONG xfrom, xfrom0;             /* x_open: where it goes on from */
 static int xhow;
 
 static BOOL op_xopen(struct RConn *c, const char *name, const char *b)
@@ -850,8 +1041,9 @@ static BOOL op_xopen(struct RConn *c, const char *name, const char *b)
     if (c->kind == FK_FTP)
         return ftp_xopen(c, name, xhow, &xfrom) >= 0;
     rpath(c, name, p, sizeof p);
-    while ((rc = OPS->sf_fopen(c->sf, p, xhow, &c->sfh)) == SF_AGAIN &&
-           sf_wait(c))
+    /* an upload going on: opened to add to it (2), not cut short */
+    while ((rc = OPS->sf_fopen(c->sf, p, xhow && xfrom ? 2 : xhow,
+                               &c->sfh)) == SF_AGAIN && sf_wait(c))
         ;
     if (rc)
         return sf_fail(c, rc, name);
@@ -860,7 +1052,8 @@ static BOOL op_xopen(struct RConn *c, const char *name, const char *b)
     return TRUE;
 }
 
-/* how: 0 a download (from *from on: 0 when it cannot), 1 an upload */
+/* how: 0 a download, 1 an upload; from *from on (0: from the start; set
+ * to 0 when the host cannot go on) */
 static BOOL x_open(struct RConn *c, const char *name, int how, ULONG *from)
 {
     BOOL ok;
@@ -955,6 +1148,187 @@ static BOOL x_close(struct RConn *c, BOOL stopped)
     return ok;
 }
 
+/* ---- what a job holds: files and drawers, and what is in them ---- */
+
+void job_free(struct Job *j)
+{
+    if (j->it)
+        FreeVec(j->it);
+    if (j->pool)
+        FreeVec(j->pool);
+    memset(j, 0, sizeof *j);
+}
+
+/* a + "/" + b (b NULL: a; dir: AddPart's way) into the pool: its offset,
+ * -1 no room */
+static LONG job_str(struct Job *j, const char *a, const char *b, BOOL dir)
+{
+    LONG need = strlen(a) + (b ? strlen(b) + 2 : 1), off = j->plen;
+    if (need > 500)
+        return -1;
+    if (j->plen + need > j->pcap) {
+        LONG cap = j->pcap ? j->pcap * 2 : 4096;
+        char *n;
+        while (cap < j->plen + need)
+            cap *= 2;
+        if (!(n = AllocVec(cap, MEMF_ANY)))
+            return -1;
+        if (j->pool) {
+            CopyMem(j->pool, n, j->plen);
+            FreeVec(j->pool);
+        }
+        j->pool = n;
+        j->pcap = cap;
+    }
+    strcpy(j->pool + off, a);
+    if (b) {
+        if (dir)
+            AddPart((STRPTR)(j->pool + off), (STRPTR)b, need);
+        else {
+            if (*a)
+                strcat(j->pool + off, "/");
+            strcat(j->pool + off, b);
+        }
+    }
+    j->plen += strlen(j->pool + off) + 1;
+    return off;
+}
+
+static struct XItem *job_new(struct Job *j)
+{
+    struct XItem *it;
+    if (j->n == j->cap) {
+        int cap = j->cap ? j->cap * 2 : 16;
+        struct XItem *n = AllocVec(cap * sizeof *n, MEMF_ANY);
+        if (!n)
+            return NULL;
+        if (j->it) {
+            CopyMem(j->it, n, j->n * sizeof *n);
+            FreeVec(j->it);
+        }
+        j->it = n;
+        j->cap = cap;
+    }
+    it = &j->it[j->n];
+    memset(it, 0, sizeof *it);
+    return it;
+}
+
+/* The next: a drawer's path and a name (dir NULL: the name), its size;
+ * on the Amiga's side its name over there is the last part, on the
+ * host's side the name itself. */
+BOOL job_add(struct Job *j, const char *dir, const char *name, ULONG size,
+             int isdir)
+{
+    struct XItem *it = job_new(j);
+    LONG o;
+    if (!it || (o = job_str(j, dir ? dir : name, dir ? name : NULL, TRUE)) < 0)
+        return FALSE;
+    it->noff = it->roff = o;
+    if (!j->side)
+        it->roff = o + ((char *)FilePart((STRPTR)(j->pool + o)) -
+                        (j->pool + o));
+    it->size = size;
+    it->dir = isdir;
+    j->n++;
+    return TRUE;
+}
+
+/* An entry of a drawer walked, after its drawer (item i) */
+static BOOL job_child(struct Job *j, int i, const struct REnt *e,
+                      const char *name)
+{
+    struct XItem *it = job_new(j), *d;
+    LONG o, r;
+    if (!it)
+        return FALSE;
+    d = &j->it[i];                      /* (job_new may have moved it) */
+    if ((o = job_str(j, JNAME(j, i), name, !j->side)) < 0)
+        return FALSE;
+    r = o;
+    if (!j->side && (r = job_str(j, JREL(j, i), name, FALSE)) < 0)
+        return FALSE;
+    d = &j->it[i];
+    it->noff = o;
+    it->roff = r;
+    it->size = e->dir == 1 ? 0 : e->size;
+    it->when = e->when;
+    it->tz = e->tz;
+    it->dir = e->dir;
+    it->exist = d->exist;               /* in a drawer there: maybe there */
+    it->deep = 1;
+    j->n++;
+    return TRUE;
+}
+
+/* What is in the job's drawers, and in theirs, after them (a drawer
+ * comes before what is in it; deleting goes from the end). The host's
+ * drawers are listed as the panels list them (MLSD or LIST of the path,
+ * SFTP's opendir); links are not followed. FALSE: given up, or a
+ * listing failed (said). */
+BOOL job_walk(struct RConn *c, struct Job *j)
+{
+    struct Panel tmp;
+    int i, k, depth;
+    BOOL ok = TRUE;
+    memset(&tmp, 0, sizeof tmp);
+    for (i = 0; i < j->n && ok; i++) {
+        const char *s;
+        if (j->it[i].dir != 1)
+            continue;
+        if (given_up(c)) {
+            ok = FALSE;
+            break;
+        }
+        for (depth = 0, s = JREL(j, i); *s; s++)
+            depth += *s == '/';
+        if (depth > 30 || j->n > 20000) {
+            tsay(c, "\x1b[1;31m[too deep, or too many files: the rest is "
+                 "left out]\x1b[0m\r\n", NULL, NULL);
+            break;
+        }
+        if (j->side) {
+            char m[80];
+            c->lp = &tmp;
+            to_latin1(JNAME(j, i), strlen(JNAME(j, i)), m, 60, '?');
+            ui_note(c, m, FALSE);
+            ok = run_op(c, op_list, JNAME(j, i), NULL);
+            c->lp = NULL;
+        } else {
+            BPTR l = Lock((STRPTR)JNAME(j, i), ACCESS_READ);
+            struct FileInfoBlock *fib = AllocDosObject(DOS_FIB, NULL);
+            pan_clear(&tmp);
+            ok = l && fib && Examine(l, fib) && fib->fib_DirEntryType > 0;
+            if (ok)
+                while (ExNext(l, fib)) {
+                    LONG t = fib->fib_DirEntryType;
+                    if (pan_add(&tmp, (char *)fib->fib_FileName,
+                                strlen((char *)fib->fib_FileName),
+                                t > 0 ? 0 : fib->fib_Size, "",
+                                t == ST_SOFTLINK ? 2 : t > 0))
+                        tmp.ent[tmp.nent - 1].when =
+                            fib->fib_Date.ds_Days * 86400 +
+                            fib->fib_Date.ds_Minute * 60 +
+                            fib->fib_Date.ds_Tick / 50;
+                }
+            if (fib)
+                FreeDosObject(DOS_FIB, fib);
+            if (l)
+                UnLock(l);
+            if (!ok)
+                tsay(c, "\x1b[1;31m[cannot read ", JNAME(j, i),
+                     "]\x1b[0m\r\n");
+        }
+        for (k = 0; ok && k < tmp.nent; k++)
+            if (!job_child(j, i, &tmp.ent[k], pname(&tmp, k))) {
+                tsay(c, "\x1b[1;31m[out of memory]\x1b[0m\r\n", NULL, NULL);
+                ok = FALSE;
+            }
+    }
+    pan_free(&tmp);
+    return ok;
+}
+
 /* ---- transfers ---- */
 
 /* How it goes: the tab's name and the Transfers window (a few times a
@@ -973,24 +1347,78 @@ static void progress(struct RConn *c)
         ui_progress(c);
 }
 
-/* One file from the host into dir: 1 done, -1 failed, -2 stopped. */
-static int get_one(struct RConn *c, const char *rname, ULONG size,
+/* A host's path (sub/drawer/name) under dir, each part made safe */
+static void local_path(const char *dir, const char *rel, char *out, int max)
+{
+    char part[260], nm[112];
+    strncpy(out, dir, max - 1);
+    out[max - 1] = 0;
+    while (*rel) {
+        int k = 0;
+        while (*rel && *rel != '/' && k < (int)sizeof part - 1)
+            part[k++] = *rel++;
+        part[k] = 0;
+        while (*rel == '/')
+            rel++;
+        local_name(part, nm);
+        AddPart((STRPTR)out, (STRPTR)nm, max);
+    }
+}
+
+/* A file's date set, the Amiga's seconds */
+static void set_date(const char *path, ULONG when)
+{
+    struct DateStamp ds;
+    ds.ds_Days = when / 86400;
+    ds.ds_Minute = when % 86400 / 60;
+    ds.ds_Tick = when % 60 * TICKS_PER_SECOND;
+    SetFileDate((STRPTR)path, &ds);
+}
+
+/* One file (or drawer) from the host into dir (a file inside a drawer
+ * copied: into its drawer there): 1 done, 2 there already, 0 left out,
+ * 3 a drawer made, -1 failed, -2 stopped. */
+static int get_one(struct RConn *c, struct XItem *it, const char *rname,
                    const char *dir, UBYTE *buf)
 {
     struct Xfer *x = c->x;
-    char nm[112], cand[112], path[400], part[408];
-    ULONG have = 0, got;
+    char nm[112], cand[112], path[400], part[408], ldir[400];
+    ULONG have = 0, got, size = it->size, when = it->when;
     LONG k, ps;
     BPTR f;
     BOOL ok = FALSE, stopped;
     int n = 0;
+    if (it->deep) {                     /* its drawers' names, made safe */
+        local_path(dir, rname, ldir, sizeof ldir);
+        *PathPart((STRPTR)ldir) = 0;
+        dir = ldir;
+    }
     local_name(rname, nm);
+    if (it->dir == 1) {                 /* a drawer: made, or there */
+        BPTR l;
+        strcpy(path, dir);
+        AddPart((STRPTR)path, (STRPTR)nm, sizeof path);
+        if ((ps = fsize(path)) == -2)
+            return 3;
+        if (ps == -1 && (l = CreateDir((STRPTR)path))) {
+            UnLock(l);
+            return 3;
+        }
+        tsay(c, "\x1b[1;31m[cannot make the drawer ", path, "]\x1b[0m\r\n");
+        return -1;
+    }
     strcpy(cand, nm);
     for (;;) {                          /* never over a file that is there */
         strcpy(path, dir);
         AddPart((STRPTR)path, (STRPTR)cand, sizeof path);
-        if (fsize(path) == -1)
+        if ((ps = fsize(path)) == -1)
             break;
+        /* a drawer copied again: what it has already is left out */
+        if (it->deep && !n && size && (ULONG)ps == size) {
+            tsay(c, "\x1b[2m[", cand, ": there already]\x1b[0m\r\n");
+            x->bdone += size;
+            return 2;
+        }
         if (++n > 99) {
             tsay(c, "\x1b[1;31m[no free name for ", nm, "]\x1b[0m\r\n");
             return -1;
@@ -1011,6 +1439,13 @@ static int get_one(struct RConn *c, const char *rname, ULONG size,
     x->size = size;
     x->done = 0;
     ui_progress(c);
+    /* the time it has there: UTC from MDTM, unless the listing gave it
+     * (MLSD, SFTP); LIST's own clock only when the host has no MDTM */
+    if (c->kind == FK_FTP && it->tz != 2 && r_ready(c)) {
+        ULONG u = ftp_mdtm(c, rname);
+        if (u > 2922UL * 86400)
+            when = u + tz_east(u) - 2922UL * 86400;
+    }
     if (!x_open(c, rname, 0, &have))
         return given_up(c) ? -2 : -1;
     f = Open((STRPTR)part, have ? MODE_OLDFILE : MODE_NEWFILE);
@@ -1027,8 +1462,8 @@ static int get_one(struct RConn *c, const char *rname, ULONG size,
         char m[160];
         strcpy(m, FilePart((STRPTR)part));
         strcat(m, ", ");
-        numstr_cat(m, have / 1024);
-        strcat(m, " KB there]\x1b[0m\r\n");
+        size_text(have, m + strlen(m));
+        strcat(m, " there]\x1b[0m\r\n");
         tsay(c, "\x1b[2m[going on from ", m, NULL);
     }
     got = x->done = have;
@@ -1080,8 +1515,11 @@ static int get_one(struct RConn *c, const char *rname, ULONG size,
         if (!Rename((STRPTR)part, (STRPTR)path))
             tsay(c, "\x1b[1;31m[it is in ", part,
                  ": the name was taken]\x1b[0m\r\n");
-        else
+        else {
+            if (when)
+                set_date(path, when);   /* the date it has on the host */
             tsay(c, "\x1b[2m[", cand, " received]\x1b[0m\r\n");
+        }
         x->files++;
         return 1;
     }
@@ -1095,21 +1533,88 @@ static int get_one(struct RConn *c, const char *rname, ULONG size,
     return stopped ? -2 : -1;
 }
 
-/* One file to the host, into the drawer it is in (a file of the name
- * there is replaced): 1 done, 0 skipped, -1 failed, -2 stopped. */
-static int put_one(struct RConn *c, const char *lpath, UBYTE *buf)
+/* A file's size on the host now (SIZE, SFTP's stat; called again when
+ * the line was lost): -1 not there or not known */
+static LONG op_sz;
+static BOOL op_size(struct RConn *c, const char *rname, const char *b)
+{
+    (void)b;
+    op_sz = -1;
+    if (c->kind == FK_FTP) {
+        op_sz = ftp_size(c, rname);
+        return op_sz >= 0;
+    }
+    {
+        char p[400];
+        SfAttr a;
+        LONG rc;
+        rpath(c, rname, p, sizeof p);
+        while ((rc = OPS->sf_stat(c->sf, p, &a)) == SF_AGAIN && sf_wait(c))
+            ;
+        if (rc == SF_AGAIN || SF_LOST(rc))
+            return sf_fail(c, rc, rname);
+        if (!rc && !a.dir)
+            op_sz = a.size;
+        return op_sz >= 0;
+    }
+}
+
+static LONG r_size_now(struct RConn *c, const char *rname)
+{
+    run_op(c, op_size, rname, NULL);
+    return op_sz;
+}
+
+/* One file (or drawer) to the host, under the name rel (in the drawer
+ * it is in): a file of the name there is replaced, or (upmode 1, or
+ * the upload that broke off before) gone on from where it ends - left
+ * out when it is as long. 1 done, 2 there already, 0 left out, 3 a
+ * drawer made, -1 failed, -2 stopped. */
+static int put_one(struct RConn *c, struct XItem *it, const char *lpath,
+                   const char *rel, UBYTE *buf)
 {
     struct Xfer *x = c->x;
     char rname[256];
     const char *fp = (const char *)FilePart((STRPTR)lpath);
-    LONG size = fsize(lpath), k, sent = 0;
+    LONG size = fsize(lpath), k;
+    ULONG from = 0, sent;
     BPTR f;
-    BOOL ok = FALSE;
+    BOOL ok = FALSE, again;
+    to_utf8(rel, rname, sizeof rname);
+    if (it->dir == 1) {
+        if (size != -2) {
+            tsay(c, "\x1b[2m[", lpath, ": not a drawer, not sent]\x1b[0m\r\n");
+            return 0;
+        }
+        hush = it->exist;               /* may be there: no word on it */
+        ok = rem_do(c, FR_MKDIR, rname, NULL);
+        hush = FALSE;
+        if (!ok && !it->exist) {
+            tsay(c, "\x1b[1;31m[", rel, ": no drawer made]\x1b[0m\r\n");
+            return given_up(c) ? -2 : -1;
+        }
+        return 3;
+    }
     if (size < 0) {
         tsay(c, "\x1b[2m[", lpath, ": not a file, not sent]\x1b[0m\r\n");
         return 0;
     }
-    to_utf8(fp, rname, sizeof rname);
+    again = !strcmp(rname, c->upart);
+    if (again || (it->exist && c->upmode == 1)) {
+        LONG there = r_size_now(c, rname);
+        if (there == size && !again) {
+            tsay(c, "\x1b[2m[", rel, ": there already]\x1b[0m\r\n");
+            x->bdone += size;
+            return 2;
+        }
+        if (there > size && !again) {
+            tsay(c, "\x1b[2m[", rel, ": longer on the host, left as it "
+                 "is]\x1b[0m\r\n");
+            return 0;
+        }
+        if (there > 0 && there < size)
+            from = there;
+    }
     if (!(f = Open((STRPTR)lpath, MODE_OLDFILE))) {
         tsay(c, "\x1b[1;31m[cannot read ", lpath, "]\x1b[0m\r\n");
         return -1;
@@ -1119,13 +1624,26 @@ static int put_one(struct RConn *c, const char *lpath, UBYTE *buf)
     x->size = size;
     x->done = 0;
     ui_progress(c);
-    if (!x_open(c, rname, 1, NULL)) {
+    if (!x_open(c, rname, 1, &from)) {
         Close(f);
         return given_up(c) ? -2 : -1;
     }
+    if (from && Seek(f, from, OFFSET_BEGINNING) < 0)
+        from = size + 1;                /* cannot: it fails below */
+    if (from) {
+        char m[160];
+        strncpy(m, fp, 100);
+        m[100] = 0;
+        strcat(m, ", ");
+        size_text(from, m + strlen(m));
+        strcat(m, " there]\x1b[0m\r\n");
+        tsay(c, "\x1b[2m[going on from ", m, NULL);
+    }
+    sent = x->done = from;
+    x->bdone += from;
     for (;;) {
         LONG off = 0;
-        k = Read(f, buf, BUFSZ);
+        k = from > (ULONG)size ? -1 : Read(f, buf, BUFSZ);
         if (k <= 0) {
             ok = k == 0;
             break;
@@ -1149,29 +1667,32 @@ out:
     Close(f);
     if (given_up(c)) {
         x_close(c, TRUE);
-        tsay(c, "\x1b[2m[", fp, ": stopped, a part of it may be on the "
-             "host]\x1b[0m\r\n");
+        strcpy(c->upart, rname);        /* the next upload of it goes on */
+        tsay(c, "\x1b[2m[", fp, ": stopped - sending it again goes on "
+             "from where it ends]\x1b[0m\r\n");
         return -2;
     }
     if (!x_close(c, !ok) || !ok) {
+        strcpy(c->upart, rname);
         tsay(c, "\x1b[1;31m[", fp, " failed]\x1b[0m\r\n");
         return -1;
     }
+    if (again)
+        c->upart[0] = 0;
     tsay(c, "\x1b[2m[", fp, " sent]\x1b[0m\r\n");
     x->files++;
     return 1;
 }
 
-/* Files to (up: the Amiga's paths) or from the host (names in its
- * drawer, into dir), one after another, shown as a transfer. The files
- * done; -1: none could start. */
-int xfer_batch(struct RConn *c, BOOL up, const char *const *names,
-               const ULONG *sizes, int n, const char *dir)
+/* The job's files and drawers to (up: the Amiga's paths) or from the
+ * host (names from the drawer it is in, into dir), one after another,
+ * shown as a transfer. The files done; -1: none could start. */
+int xfer_batch(struct RConn *c, BOOL up, struct Job *j, const char *dir)
 {
     struct Xfer x;
     UBYTE *buf;
-    int i, done = 0, r = 0;
-    char m[80];
+    int i, done = 0, r = 0, failed = 0;
+    char m[100];
     if (xfer_busy()) {
         tsay(c, "\x1b[1;31m[one transfer at a time: wait for the other "
              "one]\x1b[0m\r\n", NULL, NULL);
@@ -1186,9 +1707,12 @@ int xfer_batch(struct RConn *c, BOOL up, const char *const *names,
         to_latin1(c->cwd, strlen(c->cwd), x.where, sizeof x.where, '?');
     else
         strncpy(x.where, dir, sizeof x.where - 1);
-    x.nfiles = n;
-    for (i = 0; i < n; i++) {
-        LONG z = up ? fsize(names[i]) : (LONG)sizes[i];
+    for (i = 0; i < j->n; i++) {
+        LONG z;
+        if (j->it[i].dir == 1)
+            continue;
+        x.nfiles++;
+        z = up ? fsize(JNAME(j, i)) : (LONG)j->it[i].size;
         if (z > 0)
             x.bsize += z;
     }
@@ -1196,12 +1720,16 @@ int xfer_batch(struct RConn *c, BOOL up, const char *const *names,
     c->moved = 0;
     c->polled = ticks50();
     xfer_show(c->tab, &x, 1);
-    for (i = 0; i < n && r != -2; i++) {
+    for (i = 0; i < j->n && r != -2; i++) {
         x.fbase = x.bdone;
-        r = up ? put_one(c, names[i], buf)
-               : get_one(c, names[i], sizes[i], dir, buf);
-        if (r > 0)
+        r = up ? put_one(c, &j->it[i], JNAME(j, i), JREL(j, i), buf)
+               : get_one(c, &j->it[i], JNAME(j, i), dir, buf);
+        if (r == 1 || r == 2)
             done++;
+        if (r == 2)
+            x.files++;                  /* there already: as if done */
+        else if (r == -1)
+            failed++;
         if (given_up(c))
             r = -2;
     }
@@ -1212,19 +1740,33 @@ int xfer_batch(struct RConn *c, BOOL up, const char *const *names,
     numstr_cat(m, done);
     strcat(m, done == 1 ? " file, " : " files, ");
     numstr_cat(m, c->moved / 1024);
-    strcat(m, " KB]\x1b[0m\r\n");
+    strcat(m, " KB");
+    if (failed) {
+        strcat(m, ", ");
+        numstr_cat(m, failed);
+        strcat(m, " failed");
+    }
+    strcat(m, "]\x1b[0m\r\n");
     tsay(c, m, NULL, NULL);
     return done;
 }
 
-static ULONG r_size(struct RConn *c, const char *rname)
+/* A name of the host's (not in its panel, maybe): what it is, how big,
+ * its time - from the panel, else asked (SIZE, SFTP's stat). */
+static void r_info(struct RConn *c, const char *rname, struct XItem *it)
 {
     int i = pan_find(&c->pn[1], rname);
-    if (i >= 0)
-        return c->pn[1].ent[i].size;
+    if (i >= 0) {
+        const struct REnt *e = &c->pn[1].ent[i];
+        it->size = e->dir == 1 ? 0 : e->size;
+        it->dir = e->dir == 1;
+        it->when = e->when;
+        it->tz = e->tz;
+        return;
+    }
     if (c->kind == FK_FTP) {
         LONG k = ftp_size(c, rname);
-        return k > 0 ? (ULONG)k : 0;
+        it->size = k > 0 ? (ULONG)k : 0;
     } else {
         char p[400];
         SfAttr a;
@@ -1232,7 +1774,14 @@ static ULONG r_size(struct RConn *c, const char *rname)
         rpath(c, rname, p, sizeof p);
         while ((rc = OPS->sf_stat(c->sf, p, &a)) == SF_AGAIN && sf_wait(c))
             ;
-        return rc ? 0 : a.size;
+        if (!rc) {
+            it->size = a.dir ? 0 : a.size;
+            it->dir = a.dir;
+            if (a.mtime > 2922UL * 86400) {
+                it->when = a.mtime + tz_east(a.mtime) - 2922UL * 86400;
+                it->tz = 2;
+            }
+        }
     }
 }
 
@@ -1502,22 +2051,17 @@ static void f_rexx_(void)
         }
         break;
     case FR_GET: {
-        const char **nm = AllocVec(rx_n * (sizeof(char *) + sizeof(ULONG)
-                                           + 256), MEMF_ANY);
-        ULONG *sz;
-        char *store;
-        if (!nm)
+        struct Job j;
+        int nf = 0;
+        memset(&j, 0, sizeof j);
+        j.side = 1;
+        if (!r_ready(c))
             break;
-        sz = (ULONG *)(nm + rx_n);
-        store = (char *)(sz + rx_n);
-        if (!r_ready(c)) {
-            FreeVec(nm);
-            break;
-        }
         for (i = 0; i < rx_n; i++) {
-            host_name(c, rx_names[i], store + i * 256, 256);
-            nm[i] = store + i * 256;
-            sz[i] = r_size(c, nm[i]);
+            host_name(c, rx_names[i], h, sizeof h);
+            if (!job_add(&j, NULL, h, 0, 0))
+                break;
+            r_info(c, h, &j.it[j.n - 1]);   /* a drawer: all of it */
         }
         /* TO, else the Amiga panel's drawer, else the download drawer */
         if (rx_to) {
@@ -1527,19 +2071,40 @@ static void f_rexx_(void)
             strcpy(dir, c->pn[0].path);
         else
             down_dir(c, dir);
-        got = xfer_batch(c, FALSE, nm, sz, rx_n, dir);
-        rx_rc = got == rx_n ? 0 : got > 0 ? 5 : 10;
-        FreeVec(nm);
+        got = -1;
+        if (i == rx_n && job_walk(c, &j)) {
+            for (i = 0; i < j.n; i++)
+                nf += j.it[i].dir != 1;
+            got = xfer_batch(c, FALSE, &j, dir);
+        }
+        rx_rc = got >= 0 && got == nf ? 0 : got > 0 ? 5 : 10;
+        job_free(&j);
         loc_list(c);
         break;
     }
-    case FR_PUT:
-        if (r_ready(c)) {
-            got = xfer_batch(c, TRUE, rx_names, NULL, rx_n, NULL);
-            rx_rc = got == rx_n ? 0 : got > 0 ? 5 : 10;
-            rem_list(c);
+    case FR_PUT: {
+        struct Job j;
+        int nf = 0;
+        memset(&j, 0, sizeof j);
+        c->upmode = 0;                  /* names there: replaced */
+        for (i = 0; i < rx_n; i++) {
+            LONG z = fsize(rx_names[i]);
+            if (!job_add(&j, NULL, rx_names[i], z > 0 ? z : 0, z == -2))
+                break;
+            to_utf8(JREL(&j, j.n - 1), h, sizeof h);
+            j.it[j.n - 1].exist = pan_find(p, h) >= 0;
         }
+        got = -1;
+        if (i == rx_n && r_ready(c) && job_walk(c, &j)) {
+            for (i = 0; i < j.n; i++)
+                nf += j.it[i].dir != 1;
+            got = xfer_batch(c, TRUE, &j, NULL);
+        }
+        rx_rc = got >= 0 && got == nf ? 0 : got > 0 ? 5 : 10;
+        job_free(&j);
+        rem_list(c);
         break;
+    }
     case FR_MKDIR:
         to_utf8(rx_names[0], h, sizeof h);
         if (rem_do(c, FR_MKDIR, h, NULL))

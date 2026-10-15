@@ -160,6 +160,12 @@ BOOL key(struct IntuiMessage *m)
     if (!(code & IECODE_UP_PREFIX) && !keys_find(KC_WINDOW, k) &&
         (a = keys_find(KC_PANES, k)))
         return panes_key(a);            /* i3's, in every tab, always */
+    if (T->t_fui && ((code & ~IECODE_UP_PREFIX) == 0x60 ||
+                     (code & ~IECODE_UP_PREFIX) == 0x61)) {
+        /* Shift down or up: the panels' key bar shows Shift's keys */
+        files_key(code & IECODE_UP_PREFIX ? KM_SHIFTUP : KM_SHIFTDN);
+        return TRUE;
+    }
     if (T->t_rf && !(code & IECODE_UP_PREFIX)) {
         /* a file browser's tab: CTerm's window keys but the history's
          * (the panels page themselves), then the browser's ([files]),
@@ -356,7 +362,7 @@ static void browser_key(UWORD code, UWORD q, APTR prev)
     if (code >= 0x4C && code <= 0x4F)
         k = (shift ? KM_SUP : ctrl ? KM_CUP : KM_UP) + arrows[code - 0x4C];
     else if (code >= 0x50 && code <= 0x59)
-        k = KM_F1 + code - 0x50;
+        k = (shift ? KM_SF1 : KM_F1) + code - 0x50;
     else
         switch (code) {
         case 0x4B: k = KM_F11; break;

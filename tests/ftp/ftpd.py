@@ -2,17 +2,18 @@
 """ftpd.py - a small FTP server for CTerm's tests (Python stdlib only).
 
 Serves one directory to 127.0.0.1: USER/PASS (one user, or anonymous),
-PWD, CWD, CDUP, TYPE, PASV, EPSV, LIST, MLSD, NLST, RETR (with REST),
-STOR, APPE, MKD, RMD, DELE, RNFR/RNTO, SIZE, MDTM, FEAT, SYST, NOOP,
-ABOR, QUIT.
+PWD, CWD, CDUP, TYPE, PASV, EPSV, PORT, EPRT, LIST, MLSD, NLST, RETR and
+STOR (with REST), APPE, MKD, RMD, DELE, RNFR/RNTO, SIZE, MDTM, FEAT,
+SYST, NOOP, ABOR, QUIT.
 
   ftpd.py --root DIR [--port 2121] [--user U --password P] [--rate KB]
-          [--nomlsd] [--noepsv] [--log FILE]
+          [--nomlsd] [--noepsv] [--nopasv] [--norest] [--log FILE]
 
---rate slows RETR down (KB a second) so a test can stop a download in
-the middle; --nomlsd and --noepsv answer 500 to those, to test LIST
-parsing and PASV. Never give it a directory you care about: clients
-may delete in it.
+--rate slows RETR and STOR down (KB a second) so a test can stop a
+transfer in the middle; --nomlsd and --noepsv answer 500 to those, to
+test LIST parsing and PASV; --nopasv refuses PASV and EPSV (active FTP
+only: PORT); --norest refuses REST (an upload goes on with APPE).
+Never give it a directory you care about: clients may delete in it.
 """
 import argparse
 import os
@@ -79,6 +80,16 @@ class Session(socketserver.StreamRequestHandler):
         return v, r
 
     def data_conn(self):
+        if self.active:
+            addr, self.active = self.active, None
+            try:
+                d = socket.create_connection(addr, timeout=20)
+            except OSError as e:
+                log("! PORT connect", addr, repr(e))
+                self.reply("425 Cannot open the data connection")
+                return None
+            log("connected to", addr)
+            return d
         if not self.pasv:
             self.reply("425 Use PASV or EPSV first")
             return None
@@ -99,6 +110,7 @@ class Session(socketserver.StreamRequestHandler):
         self.user = None
         self.logged = False
         self.pasv = None
+        self.active = None
         self.rest = 0
         self.rnfr = None
         self.reply("220 CTerm test FTP server ready")
@@ -144,7 +156,7 @@ class Session(socketserver.StreamRequestHandler):
         if cmd == "FEAT":
             self.reply("211-Features:")
             for f in (["MLSD"] if not ARGS.nomlsd else []) + ["SIZE", "MDTM", "REST STREAM", "UTF8"] + \
-                     (["EPSV"] if not ARGS.noepsv else []):
+                     (["EPSV"] if not ARGS.noepsv and not ARGS.nopasv else []):
                 self.reply(" " + f)
             self.reply("211 End")
             return True
@@ -165,7 +177,26 @@ class Session(socketserver.StreamRequestHandler):
                 self.reply("550 No such directory")
         elif cmd == "TYPE":
             self.reply("200 Type set")
+        elif cmd == "PORT":
+            try:
+                h = [int(x) for x in arg.split(",")]
+                assert len(h) == 6
+            except (ValueError, AssertionError):
+                self.reply("501 Bad PORT")
+                return True
+            self.active = ("%d.%d.%d.%d" % tuple(h[:4]), h[4] * 256 + h[5])
+            self.reply("200 PORT command successful")
+        elif cmd == "EPRT":
+            f = arg.split(arg[:1]) if arg else []
+            if len(f) < 4 or f[1] != "1":
+                self.reply("522 Use (1)")
+                return True
+            self.active = (f[2], int(f[3]))
+            self.reply("200 EPRT command successful")
         elif cmd in ("PASV", "EPSV"):
+            if ARGS.nopasv:
+                self.reply("502 Passive mode not allowed here")
+                return True
             if (cmd == "EPSV" and ARGS.noepsv):
                 self.reply("500 EPSV not understood")
                 return True
@@ -203,6 +234,9 @@ class Session(socketserver.StreamRequestHandler):
             d.close()
             self.reply("226 Listing sent")
         elif cmd == "REST":
+            if ARGS.norest:
+                self.reply("502 REST not implemented")
+                return True
             self.rest = int(arg)
             self.reply("350 Restarting at %d" % self.rest)
         elif cmd == "RETR":
@@ -246,17 +280,31 @@ class Session(socketserver.StreamRequestHandler):
             d = self.data_conn()
             if not d:
                 return True
+            start, self.rest = self.rest, 0
             self.reply("150 Ok to send data")
             got = 0
-            with open(r[1], "ab" if cmd == "APPE" else "wb") as f:
+            mode = "ab" if cmd == "APPE" else "r+b" if start and os.path.isfile(r[1]) else "wb"
+            t0 = time.time()
+            with open(r[1], mode) as f:
+                if mode == "r+b":
+                    f.seek(start)
+                    f.truncate()
                 while True:
-                    b = d.recv(65536)
+                    try:
+                        b = d.recv(65536)
+                    except OSError:
+                        break
                     if not b:
                         break
                     f.write(b)
+                    f.flush()
                     got += len(b)
+                    if ARGS.rate:
+                        ahead = got / (ARGS.rate * 1024) - (time.time() - t0)
+                        if ahead > 0:
+                            time.sleep(ahead)
             d.close()
-            log(cmd, arg, "got", got)
+            log(cmd, arg, "from", start if mode == "r+b" else "end" if cmd == "APPE" else 0, "got", got)
             self.reply("226 Transfer complete")
         elif cmd in ("MKD", "XMKD"):
             r = self.real(arg)
@@ -328,6 +376,8 @@ def main():
     ap.add_argument("--rate", type=float, default=0)
     ap.add_argument("--nomlsd", action="store_true")
     ap.add_argument("--noepsv", action="store_true")
+    ap.add_argument("--nopasv", action="store_true")
+    ap.add_argument("--norest", action="store_true")
     ap.add_argument("--log")
     ARGS = ap.parse_args()
     if ARGS.log:
