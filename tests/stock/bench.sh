@@ -55,9 +55,14 @@ run1() {
   esac
   local i
   for i in $(seq 1 300); do grep -q TOTAL "$H/T/cb-$name.txt" 2>/dev/null && break; sleep 3; done
-  # the window gone (EndCLI ends CTerm's last tab) before the next run
+  # the window gone (EndCLI ends CTerm's last tab) before the next run;
+  # one left over is ended with a Ctrl-C (left running, each took memory:
+  # ten of them made every run 25% slower)
   for i in $(seq 1 30); do
     wasabi windows 2>/dev/null | grep -q -E 'CTerm|CCON' || break; sleep 1
+  done
+  for a in $(wasabi ps 2>/dev/null | awk '/SYS:T\/CTerm/ {print $1}'); do
+    wasabi kill "$a" >/dev/null 2>&1; sleep 2
   done
   sleep 2
   sed -n '/window/p;/test /,$p' "$H/T/cb-$name.txt"

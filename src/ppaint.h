@@ -45,13 +45,16 @@ extern LONG pp_bsz;
 /* One row: the caller fills pp_gp[0..n-1] (PP_BLOCK of each cell's
  * glyph) and pp_pw[0..n-1] (fx<<8 | fb), then calls pp_paint. planes[p]
  * is plane p at the screen's line 0, byte 0; x, y the screen pixel of
- * the first cell's top left; only planes in mask are written. */
+ * the first cell's top left; only planes in mask are written. lead
+ * (0..8, x - lead in x's long): that many pixels left of the row too, in
+ * the pens leadpw (fb: a background) - the window's margin, without a
+ * RectFill of its own (~0.3 ms a row on a 14 MHz 68020). */
 extern ULONG **pp_gp;
 extern UWORD *pp_pw;
-void pp_paint(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
-              LONG x, LONG y, int n);
+int pp_paint(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
+             LONG x, LONG y, int n, int lead, UWORD leadpw);   /* 1: lead done */
 /* The same in plain C, pixel by pixel: the test's reference. */
 void pp_paint_c(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
-                LONG x, LONG y, int n);
+                LONG x, LONG y, int n, int lead, UWORD leadpw);
 
 #endif
