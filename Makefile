@@ -152,6 +152,8 @@ deploy: CTerm CTermSSH CTermTour protocols parts
 	wasabi mkdir Work:Utils/CTerm/Fonts 2>/dev/null || true
 	wasabi put fonts/PxPlus_IBM_VGA_8x16.ttf Work:Utils/CTerm/Fonts/PxPlus_IBM_VGA_8x16.ttf
 	wasabi put fonts/LICENSE.txt Work:Utils/CTerm/Fonts/LICENSE.txt
+	wasabi put fonts/NotoEmoji-CTerm.ttf Work:Utils/CTerm/Fonts/NotoEmoji-CTerm.ttf
+	wasabi put fonts/NotoEmoji-OFL.txt Work:Utils/CTerm/Fonts/NotoEmoji-OFL.txt
 
 # The core on the PC, against pyte (needs: python3 -m venv .venv &&
 # .venv/bin/pip install pyte).

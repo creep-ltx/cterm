@@ -410,12 +410,30 @@ BOOL saved_pc;                   /* the setting; pcmode may be PC's */
 /* the settings' text: made for a load or save, not kept */
 #define PREFS_MAX 3600
 static void load_prefs_(char *buf);
+static BOOL hadfall;                    /* the prefs named a fallback font
+                                           (or none: an empty line) */
+
+/* The emoji font that comes beside CTerm, its fallback font unless the
+ * person chose another or none. */
+#define SHIPFALL "PROGDIR:Fonts/NotoEmoji-CTerm.ttf"
+
 static void load_prefs(void)
 {
     char *b = AllocVec(PREFS_MAX, MEMF_ANY);
     if (b) {
         load_prefs_(b);
         FreeVec(b);
+    }
+    if (!hadfall) {
+        struct Process *me = (struct Process *)FindTask(NULL);
+        APTR wp = me->pr_WindowPtr;
+        BPTR l;
+        me->pr_WindowPtr = (APTR)-1;    /* no "insert volume" */
+        if ((l = Lock((STRPTR)SHIPFALL, ACCESS_READ))) {
+            UnLock(l);
+            strcpy(fallfile, SHIPFALL);
+        }
+        me->pr_WindowPtr = wp;
     }
 }
 
@@ -445,6 +463,7 @@ static void load_prefs_(char *buf)
             }
             else if (!stricmp(p, "ttsize")) ttsize = atoi(val);
             else if (!stricmp(p, "fallbackfont")) {
+                hadfall = TRUE;
                 strncpy(fallfile, val, sizeof fallfile - 1);
                 fallfile[sizeof fallfile - 1] = 0;
             }
@@ -583,7 +602,9 @@ static void save_prefs_(char *buf)
     strcat(buf, fontover ? keepfont.ttfile : ttfile);
     strcat(buf, "\nttsize=");
     numstr_cat(buf, fontover ? keepfont.ttsize : ttsize);
-    if (fallfile[0]) { strcat(buf, "\nfallbackfont="); strcat(buf, fallfile); }
+    /* always written, empty for none: an absent line means "the font
+     * beside CTerm, if it is there" */
+    strcat(buf, "\nfallbackfont="); strcat(buf, fallfile);
     if (!pcfont) strcat(buf, "\npcfont=0");
     if (!altmeta) strcat(buf, "\naltmeta=0");
     if (!pics) strcat(buf, "\npictures=0");

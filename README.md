@@ -23,7 +23,7 @@ typed, sent or uploaded.
 | `CTermSSH` | ssh and SFTP | ssh and SFTP calls do not start |
 | `Protocols/` | Zmodem, XYmodem, Hydra; Serial (serial lines and modems) | that transfer, or serial lines, say they are missing |
 | `Parts/` | Settings, PhoneBook, ARexx, Call, Transfers, SpeedTest, Files (the SFTP and FTP file browser), Pictures (pictures in the terminal) | that window or feature says it is missing (Pictures: PNG files, kitty's packed pictures and pictures on screens of 256 colours or fewer do not show) |
-| `Fonts/` | the PC's VGA font | PC BBSes use the Amiga font |
+| `Fonts/` | the PC's VGA font; the emoji font (`NotoEmoji-CTerm.ttf`) | PC BBSes use the Amiga font; emoji show as empty boxes |
 | `Rexx/` | example ARexx scripts | |
 
 Everything in `Protocols/` and `Parts/` is loaded only when it is used
@@ -942,14 +942,16 @@ like the system's settings programs):
 **The fallback font** is a second TrueType font for the letters the
 TrueType font lacks: emoji and symbols. Without one they show as an
 empty box. TrueType on the Amiga draws in one colour, so it must be a
-one-colour emoji font: **Noto Emoji** (free, from Google Fonts; not
-"Noto Color Emoji"). TrueType on the Amiga (ttengine.library) cannot
-reach most emoji in a font as it comes (all above U+FFFF), so make
-CTerm's copy of it once, on any computer with Python:
+one-colour emoji font. **CTerm comes with one**: `Fonts/NotoEmoji-CTerm.ttf`
+beside it (Google's Noto Emoji, free under the SIL Open Font License,
+made ready for the Amiga), used on its own unless you choose another
+font or None; delete the file and the fallback is off. TrueType on the
+Amiga (ttengine.library) cannot reach most emoji in a font as it comes
+(all above U+FFFF), which is why the font is a made copy; to make one
+from a newer Noto Emoji, on any computer with Python:
 `pip install fonttools`, then
-`python3 tools/emojifont.py "NotoEmoji[wght].ttf" NotoEmoji-CTerm.ttf`,
-and choose `NotoEmoji-CTerm.ttf` (copied to `SYS:Fonts/TrueType/`). A
-symbol font as it comes (Symbola, DejaVu Sans) works too, for what it
+`python3 tools/emojifont.py "NotoEmoji[wght].ttf" NotoEmoji-CTerm.ttf`.
+A symbol font as it comes (Symbola, DejaVu Sans) works too, for what it
 has below U+FFFF. Emoji the terminal counts as two cells wide are drawn
 two cells wide; those it counts as one are drawn smaller, to fit one.
 The fallback font is `fallbackfont=` in `ENV:CTerm.prefs`; None in the
