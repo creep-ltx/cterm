@@ -13,7 +13,11 @@ across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 **Parallel sessions (2026-10-15):** CTerm, csh and CUtils may each have a session at once; each
 stays in its own repo (a change another needs: a note in its design.md, or a message). FS-UAE on
 port 1240 (tests/files/uae.sh) is shared: own RAM: names, never stop/restart it without asking
-the others. The A1200: message the others before installing, rebooting or restarting wasabid.
+the others. Since 2026-10-15 every tests/*/uae.sh runs on the shared clean test Amigas
+(~/UAE/TestMachines, `amiga-test`, README there) through tests/rig.sh: Workbench 3.2.1 + MUI 5,
+A1200 + 8 MB fast (CONF=030: 68030/50, 32 MB more), volume AmigaOS3.2:, copies in
+~/.cache/amiga-test/<rig>; ports files 1240, panes 1246, serial 1248, pictures 1250; csh
+seeded into C: when CShell's is built. `reset` gives a rig a fresh copy. The A1200: message the others before installing, rebooting or restarting wasabid.
 csh will keep the running command's line in the local variable `_CMDLINE` (its session's job,
 see CShell/docs/design.md); when it is in, con_shell_info can read it for saved layouts.
 
