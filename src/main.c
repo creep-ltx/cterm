@@ -417,6 +417,19 @@ static BOOL hadfall;                    /* the prefs named a fallback font
  * person chose another or none. */
 #define SHIPFALL "PROGDIR:Fonts/NotoEmoji-CTerm.ttf"
 
+static BOOL ship_there(void)
+{
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR wp = me->pr_WindowPtr;
+    BPTR l;
+    me->pr_WindowPtr = (APTR)-1;        /* no "insert volume" */
+    l = Lock((STRPTR)SHIPFALL, ACCESS_READ);
+    me->pr_WindowPtr = wp;
+    if (l)
+        UnLock(l);
+    return l != 0;
+}
+
 static void load_prefs(void)
 {
     char *b = AllocVec(PREFS_MAX, MEMF_ANY);
@@ -424,17 +437,8 @@ static void load_prefs(void)
         load_prefs_(b);
         FreeVec(b);
     }
-    if (!hadfall) {
-        struct Process *me = (struct Process *)FindTask(NULL);
-        APTR wp = me->pr_WindowPtr;
-        BPTR l;
-        me->pr_WindowPtr = (APTR)-1;    /* no "insert volume" */
-        if ((l = Lock((STRPTR)SHIPFALL, ACCESS_READ))) {
-            UnLock(l);
-            strcpy(fallfile, SHIPFALL);
-        }
-        me->pr_WindowPtr = wp;
-    }
+    if (!hadfall && ship_there())
+        strcpy(fallfile, SHIPFALL);
 }
 
 static void load_prefs_(char *buf)
@@ -602,9 +606,13 @@ static void save_prefs_(char *buf)
     strcat(buf, fontover ? keepfont.ttfile : ttfile);
     strcat(buf, "\nttsize=");
     numstr_cat(buf, fontover ? keepfont.ttsize : ttsize);
-    /* always written, empty for none: an absent line means "the font
-     * beside CTerm, if it is there" */
-    strcat(buf, "\nfallbackfont="); strcat(buf, fallfile);
+    /* none (empty) is written only when it was chosen: an absent line
+     * means "the font beside CTerm, when it is there" - so a start
+     * without the file does not turn it off for good. Empty with the
+     * file there means Settings' None (load_prefs had taken it). */
+    if (fallfile[0] || hadfall || ship_there()) {
+        strcat(buf, "\nfallbackfont="); strcat(buf, fallfile);
+    }
     if (!pcfont) strcat(buf, "\npcfont=0");
     if (!altmeta) strcat(buf, "\naltmeta=0");
     if (!pics) strcat(buf, "\npictures=0");
