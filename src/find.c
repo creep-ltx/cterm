@@ -13,14 +13,23 @@ static int all_lines(void)
     return vt_history(vt) + rows;
 }
 
+/* Line L's cells (NULL: none), *w of them in use */
+static const VtCell *line_cells(int L, int *w)
+{
+    int h = vt_history(vt);
+    *w = 0;
+    if (L < 0 || L >= all_lines())
+        return NULL;
+    return L < h ? vt_line(vt, 0, h - L, w) : vt_line(vt, L - h, 0, w);
+}
+
 /* Line L as Latin-1, one byte a cell (so a column is an index): a wide
  * letter's right half, a picture and what Latin-1 lacks are bytes no
  * one types. Returns the cells. */
 static int line_text(int L, UBYTE *out, int max)
 {
-    int h = vt_history(vt), w, c;
-    const VtCell *l = L < h ? vt_line(vt, 0, h - L, &w)
-                            : vt_line(vt, L - h, 0, &w);
+    int w, c;
+    const VtCell *l = line_cells(L, &w);
     if (!l)
         return 0;
     if (w > max)
@@ -51,7 +60,7 @@ static struct Tab *ftab;                /* the tab it searches */
 static UBYTE ftext[48], flast[48];    /* the text; the last one searched */
 static int flen;
 static int fline = -1, fcol;            /* the match shown, or -1 */
-static UBYTE fbuf[512];
+static UBYTE fbuf[2048];          /* a line, or a wrapped one's rows */
 
 BOOL find_active(void)
 {
@@ -258,17 +267,59 @@ static BOOL url_next(const UBYTE *t, int n, int from, int *s, int *len)
     return FALSE;
 }
 
+/* Did line L run on into the next (wrapped at the right edge)? */
+static BOOL wraps(int L)
+{
+    int w;
+    const VtCell *l = line_cells(L, &w);
+    return l && VT_ROW_WRAP(l);
+}
+
+#define JOINMAX 8                       /* rows of one line looked at */
+
 /* The address on line L that has a cell between columns c0 and c1:
- * into *s, *len (in fbuf, which then holds the line). */
+ * into *s, *len (in fbuf, which then holds the line). A line that
+ * wrapped is looked at whole, the rows before and after it joined (an
+ * address cut by the right edge is found from either row). */
 static BOOL url_at(int L, int c0, int c1, int *s, int *len)
 {
-    int n = line_text(L, fbuf, sizeof fbuf), from = 0;
+    int a = L, b = L, n = 0, off = -1, from = 0, i;
+    while (a > 0 && L - a < JOINMAX && wraps(a - 1))
+        a--;
+    while (b - a < 2 * JOINMAX && wraps(b) && b + 1 < all_lines())
+        b++;
+    for (i = a; i <= b && n < (int)sizeof fbuf; i++) {
+        if (i == L)
+            off = n;
+        n += line_text(i, fbuf + n, sizeof fbuf - n);
+    }
+    if (off < 0)                        /* (the buffer ran out first) */
+        return FALSE;
+    c0 += off;
+    c1 += off;
     while (url_next(fbuf, n, from, s, len)) {
         if (*s <= c1 && *s + *len - 1 >= c0)
             return TRUE;
         from = *s + *len;
     }
     return FALSE;
+}
+
+/* A hyperlink a program put on line L (OSC 8) in columns c0..c1: the
+ * first cell's address, NULL: none */
+static const char *osc_link(int L, int c0, int c1)
+{
+    int w, c;
+    const VtCell *l = line_cells(L, &w);
+    const VtPen *pens = vt_pens(vt);
+    if (!l)
+        return NULL;
+    if (c1 >= w)
+        c1 = w - 1;
+    for (c = c0 < 0 ? 0 : c0; c <= c1; c++)
+        if (pens[l[c].pen].link)
+            return vt_link(vt, pens[l[c].pen].link);
+    return NULL;
 }
 
 /* Settings: a program run with a web address (CTerm.prefs browser=):
@@ -319,8 +370,8 @@ static BOOL run_browser(const char *url)
  * goes onto the clipboard, which says so. */
 static void link_open(const UBYTE *t, int len)
 {
-    char url[300];
-    UBYTE cb[20 + sizeof url + 2];
+    static char url[600];
+    static UBYTE cb[20 + sizeof url + 2];
     if (len > (int)sizeof url - 8)
         len = sizeof url - 8;
     if (!strnicmp((const char *)t, "www.", 4))
@@ -355,15 +406,21 @@ static void link_open(const UBYTE *t, int len)
  * if any - TRUE when there was one. */
 BOOL link_click(int r, int c)
 {
-    int s, len;
-    if (!url_at(vt_history(vt) - back + r, c, c, &s, &len))
+    int s, len, L = vt_history(vt) - back + r;
+    const char *u = osc_link(L, c, c);   /* a program's own link first */
+    if (u) {
+        link_open((const UBYTE *)u, strlen(u));
+        return TRUE;
+    }
+    if (!url_at(L, c, c, &s, &len))
         return FALSE;
     link_open(fbuf + s, len);
     return TRUE;
 }
 
 /* Edit/Open link: the first address the marked text touches, else the
- * first on the cursor's line. */
+ * first on the cursor's line (a program's hyperlink before an address
+ * in the text). */
 void link_menu(void)
 {
     int r0, c0, r1, c1, r, s, len, x, y, vis;
@@ -376,6 +433,14 @@ void link_menu(void)
         c1 = cols - 1;
         if (r0 >= rows) {
             beep();
+            return;
+        }
+    }
+    for (r = r0; r <= r1; r++) {        /* a program's own links first */
+        const char *u = osc_link(vt_history(vt) - back + r, r == r0 ? c0 : 0,
+                                 r == r1 ? c1 : cols - 1);
+        if (u) {
+            link_open((const UBYTE *)u, strlen(u));
             return;
         }
     }

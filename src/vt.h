@@ -26,10 +26,13 @@ enum {
 
 #define VT_PENS 1           /* cells carry pen numbers (vt_pens) */
 
-/* How a cell looks: its colours and style. */
+/* How a cell looks: its colours and style, and the hyperlink (OSC 8) it
+ * is part of: 0 none, else vt_link's number. A linked look is drawn
+ * underlined (its attr has VT_UNDERLINE). */
 typedef struct {
     uint32_t fg, bg;
     uint16_t attr;
+    uint16_t link;
 } VtPen;
 
 /* A cell: its character and the number of its look in the pen table
@@ -117,6 +120,13 @@ const char *vt_title(Vt *vt, int *changed);
 char *vt_take_clip(Vt *vt, int *len);
 int vt_take_bell(Vt *vt);
 
+/* ---- hyperlinks (OSC 8 ; params ; URI ST ... OSC 8 ; ; ST) ----
+ * The address of link n (a pen's link), NULL: none. The addresses are
+ * kept per Vt, up to a cap; one no cell uses any more is dropped when
+ * room is needed. */
+const char *vt_link(const Vt *vt, int n);
+int vt_link_count(const Vt *vt);
+
 /* ---- pictures (sixel, iTerm2's inline files) ----
  * A picture is cut into tiles of a cell each; a cell showing one holds
  * VT_PIC_CP(id, row, col) instead of a letter, so pictures scroll, go
@@ -131,6 +141,9 @@ int vt_take_bell(Vt *vt);
 #define VT_PIC_TX(cp)   ((cp) & 511)
 /* A row (vt_line's) may hold picture cells: else none is there. */
 #define VT_ROW_PICS(l)  ((l)[-2].pen)
+/* A row (vt_line's) ran on into the next one: the text wrapped at the
+ * right edge there, it did not end with a new line. */
+#define VT_ROW_WRAP(l)  ((l)[-1].pen)
 
 typedef struct {
     int id;

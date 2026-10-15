@@ -110,6 +110,12 @@ struct Vt {
     char *clip;                         /* OSC 52: text for the clipboard */
     int cliplen;
 
+    /* hyperlinks (OSC 8): links[n] is link n's address (a pen's link),
+     * NULL a free slot; 0 is never used (no link) */
+    char **links;
+    int nlinks, linkcap;                /* slots in use (the highest + 1) */
+    long linkbytes;                     /* the addresses' bytes */
+
     /* pictures (vt.h): sixel and iTerm2's files */
     int pic_on;
     long pic_cap, pic_bytes;            /* the most they may hold; held now
@@ -138,7 +144,8 @@ static void file_end(Vt *v, int keep);
 
 static unsigned pen_hash(const VtPen *p)
 {
-    uint32_t h = p->fg * 2654435761u ^ p->bg * 0x9E3779B1u ^ p->attr;
+    uint32_t h = p->fg * 2654435761u ^ p->bg * 0x9E3779B1u ^ p->attr ^
+                 (uint32_t)p->link << 16;
     return (h ^ (h >> 15)) * 0x85EBCA6Bu >> 8;
 }
 
@@ -148,13 +155,14 @@ static unsigned pen_hash(const VtPen *p)
 static uint16_t intern(Vt *v, const VtPen *p)
 {
     unsigned m, h;
-    if (!p->fg && !p->bg && !p->attr)
+    if (!p->fg && !p->bg && !p->attr && !p->link)
         return 0;
     for (;;) {
         m = 2 * v->pcap - 1;
         for (h = pen_hash(p) & m; v->phash[h]; h = (h + 1) & m) {
             const VtPen *q = &v->pens[v->phash[h] - 1];
-            if (q->fg == p->fg && q->bg == p->bg && q->attr == p->attr)
+            if (q->fg == p->fg && q->bg == p->bg && q->attr == p->attr &&
+                q->link == p->link)
                 return (uint16_t)(v->phash[h] - 1);
         }
         if (v->npens < v->pcap) {
@@ -172,7 +180,10 @@ static uint16_t intern(Vt *v, const VtPen *p)
 static uint16_t cur_pen(Vt *v)
 {
     if (v->pen_stale) {
-        v->pen = intern(v, &v->look);
+        VtPen p = v->look;
+        if (p.link)
+            p.attr |= VT_UNDERLINE;     /* a link is seen as one */
+        v->pen = intern(v, &p);
         v->pen_stale = 0;
     }
     return v->pen;
@@ -191,6 +202,7 @@ static VtCell blank_of(Vt *v)
             b.fg = VT_DEFAULT;
             b.bg = v->look.bg;
             b.attr = 0;
+            b.link = 0;
             v->bpen = intern(v, &b);
             v->bpen_bg = v->look.bg;
         }
@@ -887,13 +899,14 @@ void vt_amiga_raw(Vt *v, int on)
 
 /* ---- resetting --------------------------------------------------------- */
 
+/* (A hyperlink goes on through SGR 0: only OSC 8 ends it.) */
 static void reset_pen(Vt *v)
 {
     v->look.fg = VT_DEFAULT;
     v->look.bg = VT_DEFAULT;
     v->look.attr = 0;
     v->pen = 0;
-    v->pen_stale = 0;
+    v->pen_stale = v->look.link != 0;
 }
 
 static void reset_tabs(Vt *v)
@@ -912,6 +925,7 @@ static void full_reset(Vt *v)
     }
     v->sdm = v->sright = v->picnl = 0;
     v->pen_nomem = 0;
+    v->look.link = 0;
     reset_pen(v);
     /* a raw Amiga program's ESC c: its own screen only (auto_alt) */
     if (v->rawwatch)
@@ -2069,6 +2083,129 @@ static void osc_clip(Vt *v, const char *p)
     v->cliplen = n;
 }
 
+/* ---- hyperlinks: OSC 8 ; params ; URI ST, the text, OSC 8 ; ; ST ----
+ * The cells written between carry the link in their pen (VtPen.link);
+ * the addresses are kept here, each once. Full (LINK_MAX addresses or
+ * LINK_BYTES of them): the ones no cell's pen, the look or a saved
+ * cursor uses any more are dropped first; still full: the text comes
+ * without its link. */
+#ifndef LINK_MAX
+#define LINK_MAX   512                  /* tests set them low */
+#endif
+#ifndef LINK_BYTES
+#define LINK_BYTES 32768L
+#endif
+#define LINK_LONG  2048                 /* a longer address is not kept */
+
+static void pen_walk(Vt *v, uint16_t *map, int remap);
+
+static COLD int link_gc(Vt *v)
+{
+    uint16_t *map;
+    uint8_t *keep;
+    int i, freed = 0;
+    if (!v->nlinks)
+        return 0;
+    map = calloc(v->pcap, sizeof *map);
+    keep = calloc(v->nlinks, 1);
+    if (!map || !keep) {
+        free(map);
+        free(keep);
+        return 0;
+    }
+    pen_walk(v, map, 0);
+    for (i = 0; i < v->npens; i++)
+        if (map[i] && v->pens[i].link < v->nlinks)
+            keep[v->pens[i].link] = 1;
+    if (v->look.link < v->nlinks)
+        keep[v->look.link] = 1;
+    for (i = 0; i < 2; i++)
+        if (v->saved[i].look.link < v->nlinks)
+            keep[v->saved[i].look.link] = 1;
+    for (i = 1; i < v->nlinks; i++)
+        if (v->links[i] && !keep[i]) {
+            v->linkbytes -= (long)strlen(v->links[i]) + 1;
+            free(v->links[i]);
+            v->links[i] = NULL;
+            freed = 1;
+        }
+    while (v->nlinks > 1 && !v->links[v->nlinks - 1])
+        v->nlinks--;
+    free(map);
+    free(keep);
+    return freed;
+}
+
+/* A number for the address: the one it has, or a new one (0: no room) */
+static COLD int link_id(Vt *v, const char *uri)
+{
+    int i, n = (int)strlen(uri), tried = 0;
+    char *c;
+    for (i = 1; i < v->nlinks; i++)
+        if (v->links[i] && !strcmp(v->links[i], uri))
+            return i;
+    if (n > LINK_LONG)
+        return 0;
+    for (;;) {
+        for (i = 1; i < v->nlinks && v->links[i]; i++)
+            ;
+        if (v->linkbytes + n + 1 <= LINK_BYTES && i < LINK_MAX)
+            break;
+        if (tried++ || !link_gc(v))
+            return 0;
+    }
+    if (i >= v->linkcap) {
+        int cap = v->linkcap ? v->linkcap * 2 : 16;
+        char **nl;
+        if (cap > LINK_MAX)
+            cap = LINK_MAX;
+        nl = realloc(v->links, cap * sizeof *nl);
+        if (!nl)
+            return 0;
+        memset(nl + v->linkcap, 0, (cap - v->linkcap) * sizeof *nl);
+        v->links = nl;
+        v->linkcap = cap;
+    }
+    if (!(c = malloc(n + 1)))
+        return 0;
+    memcpy(c, uri, n + 1);
+    v->links[i] = c;
+    v->linkbytes += n + 1;
+    if (i >= v->nlinks)
+        v->nlinks = i + 1;
+    return i;
+}
+
+/* p: "params;URI" - the params (id=...) are not needed: the same
+ * address is the same link */
+static COLD void osc_link(Vt *v, const char *p)
+{
+    int id = 0;
+    const char *u = strchr(p, ';');
+    if (!u)
+        return;
+    u++;
+    if (*u)
+        id = link_id(v, u);
+    if (id != v->look.link) {
+        v->look.link = (uint16_t)id;
+        v->pen_stale = 1;
+    }
+}
+
+const char *vt_link(const Vt *v, int n)
+{
+    return n > 0 && n < v->nlinks ? v->links[n] : NULL;
+}
+
+int vt_link_count(const Vt *v)
+{
+    int i, k = 0;
+    for (i = 1; i < v->nlinks; i++)
+        k += v->links[i] != NULL;
+    return k;
+}
+
 static void osc_done(Vt *v)
 {
     int n = 0, i = 0;
@@ -2084,6 +2221,8 @@ static void osc_done(Vt *v)
         v->title_changed = 1;
     } else if (v->osc[i] == ';' && n == 52)
         osc_clip(v, v->osc + i + 1);
+    else if (v->osc[i] == ';' && n == 8)
+        osc_link(v, v->osc + i + 1);
 }
 
 /* ---- control characters ------------------------------------------- */
@@ -2817,6 +2956,9 @@ void vt_free(Vt *v)
     for (i = 0; i < v->hist_cap && v->hist; i++)
         row_free(v->hist[i]);
     free(v->clip);
+    for (i = 1; i < v->nlinks; i++)
+        free(v->links[i]);
+    free(v->links);
     free(v->hist);
     free(v->hist_w);
     free_screen(v->lines[0], v->rows);
