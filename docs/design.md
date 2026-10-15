@@ -10,6 +10,27 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**0.3b44 (2026-10-15, FS-UAE only; NOT yet on the A1200): the extras, built by three helpers
+in worktrees and merged** - details, traps and what is verified in docs/extras-links.md,
+docs/extras-pics.md, docs/extras-ftp.md:
+- links: OSC 8 (underlined, opened first), addresses wrapped over rows, `ftps://` too; drag and
+  drop (AppWindow, Workbench window only: Shell types names, host tab queues a Zmodem upload,
+  browser uploads); fallback TrueType font for emoji (ttengine draws nothing above U+FFFF:
+  tools/emojifont.py remaps Noto Emoji into the PUA); ARexx PANE DWINDLE / GAPS.
+- pictures: kitty's graphics (vt.c; zlib in Parts/Pictures' inflate.c), sixel aspect (old 2:1
+  sixels are now twice as tall, as on xterm), iTerm2 MultipartFile, pictures rescaled on a new
+  letter size.
+- FTP: local times (ENV:TZ or Locale), passive then active fallback (`passive` command), upload
+  resume (REST/APPE; `g` answer), whole drawers both ways and delete with a question, FTPS
+  (FK_FTPS, AmiSSL 5, certificates as ssh host keys in ENVARC:CTerm/ftps_hosts; CTerm only, not
+  CTermSSH), Shift+F1-F10 in the key bar (Shift+F6 rename). Shift+F-keys no longer act as F-keys.
+- PART_VERSION 16: install CTerm, Parts/ and Protocols/ together.
+- Open bug, not reproduced: Settings -> Text tab -> Cancel -> ARexx QUIT froze the emulated Amiga
+  three times for the pictures helper (also with 13735e8, before the extras); six tries after the
+  merge (Workbench window and own 256-colour screen, TrueType + fallback font) did not freeze.
+- Untried: Ctrl+click itself, real kitty/icat/chafa, RTG with the fallback font, vsftpd/ProFTPD,
+  active FTP on the A1200's stack. Next: speed on a stock A1200.
+
 **Parallel sessions (2026-10-15):** CTerm, csh and CUtils may each have a session at once; each
 stays in its own repo (a change another needs: a note in its design.md, or a message). FS-UAE on
 port 1240 (tests/files/uae.sh) is shared: own RAM: names, never stop/restart it without asking
