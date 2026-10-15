@@ -2,22 +2,31 @@
 """ftpd.py - a small FTP server for CTerm's tests (Python stdlib only).
 
 Serves one directory to 127.0.0.1: USER/PASS (one user, or anonymous),
-PWD, CWD, CDUP, TYPE, PASV, EPSV, LIST, MLSD, NLST, RETR (with REST),
-STOR, APPE, MKD, RMD, DELE, RNFR/RNTO, SIZE, MDTM, FEAT, SYST, NOOP,
-ABOR, QUIT.
+PWD, CWD, CDUP, TYPE, PASV, EPSV, PORT, EPRT, LIST, MLSD, NLST, RETR and
+STOR (with REST), APPE, MKD, RMD, DELE, RNFR/RNTO, SIZE, MDTM, FEAT,
+SYST, NOOP, ABOR, QUIT.
 
   ftpd.py --root DIR [--port 2121] [--user U --password P] [--rate KB]
-          [--nomlsd] [--noepsv] [--log FILE]
+          [--nomlsd] [--noepsv] [--nopasv] [--norest] [--tls PEM]
+          [--log FILE]
 
---rate slows RETR down (KB a second) so a test can stop a download in
-the middle; --nomlsd and --noepsv answer 500 to those, to test LIST
-parsing and PASV. Never give it a directory you care about: clients
-may delete in it.
+--rate slows RETR and STOR down (KB a second) so a test can stop a
+transfer in the middle; --nomlsd and --noepsv answer 500 to those, to
+test LIST parsing and PASV; --nopasv refuses PASV and EPSV (active FTP
+only: PORT); --norest refuses REST (an upload goes on with APPE).
+--tls PEM (a certificate and its key in one file) adds FTPS, explicit:
+AUTH TLS, PBSZ, PROT P/C; the data's TLS starts after the 150, as
+vsftpd and ProFTPD do. A self-made certificate for it:
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+    -nodes -days 3650 -subj /CN=localhost -keyout k.pem -out c.pem
+  cat c.pem k.pem > ftpd.pem
+Never give it a directory you care about: clients may delete in it.
 """
 import argparse
 import os
 import socket
 import socketserver
+import ssl
 import stat
 import sys
 import threading
@@ -25,6 +34,7 @@ import time
 
 ARGS = None
 LOG = None
+CTX = None                              # FTPS: the server's TLS context
 LOCK = threading.Lock()
 
 
@@ -79,6 +89,16 @@ class Session(socketserver.StreamRequestHandler):
         return v, r
 
     def data_conn(self):
+        if self.active:
+            addr, self.active = self.active, None
+            try:
+                d = socket.create_connection(addr, timeout=20)
+            except OSError as e:
+                log("! PORT connect", addr, repr(e))
+                self.reply("425 Cannot open the data connection")
+                return None
+            log("connected to", addr)
+            return d
         if not self.pasv:
             self.reply("425 Use PASV or EPSV first")
             return None
@@ -93,14 +113,42 @@ class Session(socketserver.StreamRequestHandler):
             self.pasv = None
         return d
 
+    def secure(self, d):
+        """The data connection in TLS when PROT P (after the 150)."""
+        if not self.prot:
+            return d
+        d.settimeout(20)
+        try:
+            d = CTX.wrap_socket(d, server_side=True)
+            log("data TLS", d.version(), d.cipher()[0],
+                "session reused" if d.session_reused else "new session")
+            return d
+        except (ssl.SSLError, OSError) as e:
+            log("! data TLS", repr(e))
+            d.close()
+            self.reply("522 Data connection TLS failed")
+            return None
+
+    def end(self, d):
+        """The data connection closed (TLS: close_notify first)."""
+        if isinstance(d, ssl.SSLSocket):
+            d.settimeout(3)
+            try:
+                d = d.unwrap()
+            except (ssl.SSLError, OSError):
+                pass
+        d.close()
+
     def handle(self):
         self.root = os.path.realpath(ARGS.root)
         self.cwd = "/"
         self.user = None
         self.logged = False
         self.pasv = None
+        self.active = None
         self.rest = 0
         self.rnfr = None
+        self.prot = False                   # PROT P: the data in TLS too
         self.reply("220 CTerm test FTP server ready")
         while True:
             raw = self.rfile.readline()
@@ -144,12 +192,34 @@ class Session(socketserver.StreamRequestHandler):
         if cmd == "FEAT":
             self.reply("211-Features:")
             for f in (["MLSD"] if not ARGS.nomlsd else []) + ["SIZE", "MDTM", "REST STREAM", "UTF8"] + \
-                     (["EPSV"] if not ARGS.noepsv else []):
+                     (["EPSV"] if not ARGS.noepsv and not ARGS.nopasv else []):
                 self.reply(" " + f)
             self.reply("211 End")
             return True
         if cmd == "NOOP":
             self.reply("200 OK")
+            return True
+        if cmd == "AUTH":
+            if not CTX or arg.upper() not in ("TLS", "SSL"):
+                self.reply("502 No TLS here")
+                return True
+            self.reply("234 AUTH TLS OK, go on")
+            self.wfile.flush()
+            try:
+                self.request = CTX.wrap_socket(self.request, server_side=True)
+            except (ssl.SSLError, OSError) as e:
+                log("! TLS", repr(e))
+                return False
+            log("TLS", self.request.version(), self.request.cipher()[0])
+            self.rfile = self.request.makefile("rb")
+            self.wfile = self.request.makefile("wb")
+            return True
+        if cmd == "PBSZ":
+            self.reply("200 PBSZ=0")
+            return True
+        if cmd == "PROT":
+            self.prot = arg.upper() == "P"
+            self.reply("200 Protection level set")
             return True
         if not self.logged:
             self.reply("530 Log in first")
@@ -165,7 +235,26 @@ class Session(socketserver.StreamRequestHandler):
                 self.reply("550 No such directory")
         elif cmd == "TYPE":
             self.reply("200 Type set")
+        elif cmd == "PORT":
+            try:
+                h = [int(x) for x in arg.split(",")]
+                assert len(h) == 6
+            except (ValueError, AssertionError):
+                self.reply("501 Bad PORT")
+                return True
+            self.active = ("%d.%d.%d.%d" % tuple(h[:4]), h[4] * 256 + h[5])
+            self.reply("200 PORT command successful")
+        elif cmd == "EPRT":
+            f = arg.split(arg[:1]) if arg else []
+            if len(f) < 4 or f[1] != "1":
+                self.reply("522 Use (1)")
+                return True
+            self.active = (f[2], int(f[3]))
+            self.reply("200 EPRT command successful")
         elif cmd in ("PASV", "EPSV"):
+            if ARGS.nopasv:
+                self.reply("502 Passive mode not allowed here")
+                return True
             if (cmd == "EPSV" and ARGS.noepsv):
                 self.reply("500 EPSV not understood")
                 return True
@@ -192,6 +281,9 @@ class Session(socketserver.StreamRequestHandler):
             if not d:
                 return True
             self.reply("150 Here comes the listing")
+            d = self.secure(d)
+            if not d:
+                return True
             out = []
             for name in sorted(os.listdir(r[1])):
                 st = os.lstat(os.path.join(r[1], name))
@@ -200,9 +292,12 @@ class Session(socketserver.StreamRequestHandler):
             if cmd == "LIST":
                 out.insert(0, "total %d" % len(out))
             d.sendall(("\r\n".join(out) + ("\r\n" if out else "")).encode("utf-8", "surrogateescape"))
-            d.close()
+            self.end(d)
             self.reply("226 Listing sent")
         elif cmd == "REST":
+            if ARGS.norest:
+                self.reply("502 REST not implemented")
+                return True
             self.rest = int(arg)
             self.reply("350 Restarting at %d" % self.rest)
         elif cmd == "RETR":
@@ -216,6 +311,9 @@ class Session(socketserver.StreamRequestHandler):
                 return True
             start, self.rest = self.rest, 0
             self.reply("150 Opening BINARY connection for %s (%d bytes)" % (arg, os.path.getsize(r[1])))
+            d = self.secure(d)
+            if not d:
+                return True
             ok = True
             with open(r[1], "rb") as f:
                 f.seek(start)
@@ -235,7 +333,7 @@ class Session(socketserver.StreamRequestHandler):
                         ahead = sent / (ARGS.rate * 1024) - (time.time() - t0)
                         if ahead > 0:
                             time.sleep(ahead)
-            d.close()
+            self.end(d)
             log("RETR", arg, "from", start, "sent", sent, "ok" if ok else "aborted")
             self.reply("226 Transfer complete" if ok else "426 Connection closed; transfer aborted")
         elif cmd in ("STOR", "APPE"):
@@ -246,17 +344,34 @@ class Session(socketserver.StreamRequestHandler):
             d = self.data_conn()
             if not d:
                 return True
+            start, self.rest = self.rest, 0
             self.reply("150 Ok to send data")
+            d = self.secure(d)
+            if not d:
+                return True
             got = 0
-            with open(r[1], "ab" if cmd == "APPE" else "wb") as f:
+            mode = "ab" if cmd == "APPE" else "r+b" if start and os.path.isfile(r[1]) else "wb"
+            t0 = time.time()
+            with open(r[1], mode) as f:
+                if mode == "r+b":
+                    f.seek(start)
+                    f.truncate()
                 while True:
-                    b = d.recv(65536)
+                    try:
+                        b = d.recv(65536)
+                    except OSError:
+                        break
                     if not b:
                         break
                     f.write(b)
+                    f.flush()
                     got += len(b)
-            d.close()
-            log(cmd, arg, "got", got)
+                    if ARGS.rate:
+                        ahead = got / (ARGS.rate * 1024) - (time.time() - t0)
+                        if ahead > 0:
+                            time.sleep(ahead)
+            self.end(d)
+            log(cmd, arg, "from", start if mode == "r+b" else "end" if cmd == "APPE" else 0, "got", got)
             self.reply("226 Transfer complete")
         elif cmd in ("MKD", "XMKD"):
             r = self.real(arg)
@@ -319,7 +434,7 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 def main():
-    global ARGS, LOG
+    global ARGS, LOG, CTX
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
     ap.add_argument("--port", type=int, default=2121)
@@ -328,10 +443,19 @@ def main():
     ap.add_argument("--rate", type=float, default=0)
     ap.add_argument("--nomlsd", action="store_true")
     ap.add_argument("--noepsv", action="store_true")
+    ap.add_argument("--nopasv", action="store_true")
+    ap.add_argument("--norest", action="store_true")
+    ap.add_argument("--tls")
     ap.add_argument("--log")
     ARGS = ap.parse_args()
     if ARGS.log:
         LOG = open(ARGS.log, "a")
+    if ARGS.tls:
+        CTX = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        CTX.load_cert_chain(ARGS.tls)
+        # the client's order of ciphers counts (CTerm asks for ChaCha20
+        # first: quicker than AES on a 68k)
+        CTX.options &= ~ssl.OP_CIPHER_SERVER_PREFERENCE
     srv = Server(("127.0.0.1", ARGS.port), Session)
     print("ftpd.py: serving %s on 127.0.0.1:%d" % (ARGS.root, ARGS.port), flush=True)
     srv.serve_forever()

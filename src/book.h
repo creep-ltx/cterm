@@ -14,7 +14,8 @@
 
 enum { BL_CTERM, BL_AMIGA, BL_TT, BL_PC };     /* letters: CTerm's own... */
 enum { BC_UTF8, BC_LATIN1, BC_PC };            /* characters */
-enum { FK_NONE, FK_SFTP, FK_FTP };             /* a file browser's place */
+enum { FK_NONE, FK_SFTP, FK_FTP, FK_FTPS };    /* a file browser's place
+                                                  (FTPS: FTP with AUTH TLS) */
 
 typedef struct {
     char name[48];

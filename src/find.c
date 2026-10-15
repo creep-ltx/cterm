@@ -218,7 +218,7 @@ void find_key(UWORD k)
  * address may hold go, the closing punctuation of a sentence left off. */
 
 static const char *const schemes[] = {
-    "http://", "https://", "ftp://", "sftp://", "ssh://", "telnet://",
+    "http://", "https://", "ftp://", "ftps://", "sftp://", "ssh://", "telnet://",
     "gopher://", "gemini://", "www.", NULL
 };
 
@@ -380,7 +380,8 @@ static void link_open(const UBYTE *t, int len)
         url[0] = 0;
     strncat(url, (const char *)t, len);
     if (!strnicmp(url, "telnet://", 9) || !strnicmp(url, "ssh://", 6) ||
-        !strnicmp(url, "ftp://", 6) || !strnicmp(url, "sftp://", 7)) {
+        !strnicmp(url, "ftp://", 6) || !strnicmp(url, "ftps://", 7) ||
+        !strnicmp(url, "sftp://", 7)) {
         struct Tab *made;
         title_hint("opening the link in a new tab");
         call_rexx(url, &made);

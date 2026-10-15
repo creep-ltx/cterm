@@ -128,8 +128,11 @@ Parts/Pictures: src/partstart.c src/pics.c src/inflate.c $(PARTHDR)
 	$(call partlink,src/pics.c)
 Parts/Files: PARTFLAGS += -fbbb=-
 Parts/Settings: PARTFLAGS += -fbbb=-
-Parts/Files: src/partstart.c src/files.c src/fileui.c src/ftp.c src/files.h src/ssh.h $(PARTHDR)
-	$(call partlink,src/files.c src/fileui.c src/ftp.c)
+# FTPS (src/ftps.c): AmiSSL 5's headers only - the library is opened when
+# an FTPS place calls (its bases are the part's own, in its BSS)
+Parts/Files: PARTFLAGS += -I$(TP)/AmiSSL/Developer/include
+Parts/Files: src/partstart.c src/files.c src/fileui.c src/ftp.c src/ftps.c src/files.h src/ftps.h src/ssh.h $(PARTHDR)
+	$(call partlink,src/files.c src/fileui.c src/ftp.c src/ftps.c)
 
 deploy: CTerm CTermSSH CTermTour protocols parts
 	wasabi mkdir Work:Utils/CTerm 2>/dev/null || true

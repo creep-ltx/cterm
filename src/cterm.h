@@ -284,6 +284,10 @@ struct Pane {
 #define KM_HOME 330
 #define KM_END 331
 #define KM_INS 332
+#define KM_SF1 340                      /* Shift + F1 .. F10 (the file
+                                           browser's) */
+#define KM_SHIFTDN 350                  /* Shift pressed, let go: the */
+#define KM_SHIFTUP 351                  /* browser's key bar shifted */
 
 /* CTerm's own keys (keymap.c, ENVARC:CTerm/CTerm.keys): a key is the
  * keymap's character (Shift in it) or a named key (KM_*, 13, 27, 9, 8,

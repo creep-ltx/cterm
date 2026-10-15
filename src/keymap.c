@@ -224,7 +224,8 @@ static const struct KeyBind defbinds[] = {
     { 13, F(9) }, { 8, F(10) }, { ' ', F(11) }, { KM_INS, F(11) },
     { '*', F(12) }, { KM_F1, F(13) }, { KM_HELP, F(13) },
     { KM_F1 + 1, F(14) }, { C('r'), F(14) }, { KM_F1 + 4, F(15) },
-    { KM_F1 + 5, F(16) }, { KM_F1 + 6, F(17) }, { KM_F1 + 7, F(18) },
+    { KM_F1 + 5, F(16) }, { S(KM_F1 + 5), F(16) }, { KM_F1 + 6, F(17) },
+    { KM_F1 + 7, F(18) },
     { 127, F(18) }, { KM_F1 + 8, F(19) }, { KM_F1 + 9, F(20) },
     { 27, F(21) }, { ':', F(22) }, { C('l'), F(23) },
     /* [filesline]: a line typed in the browser */

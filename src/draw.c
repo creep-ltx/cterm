@@ -2554,7 +2554,8 @@ void tab_label(struct Tab *t, char *out)
     else if (t->t_bookname[0])
         strcpy(out, t->t_bookname);
     else if (t->t_dialhost[0]) {
-        strcpy(out, t->t_fkind == FK_SFTP ? "sftp " : t->t_fkind ? "ftp "
+        strcpy(out, t->t_fkind == FK_SFTP ? "sftp " : t->t_fkind == FK_FTPS
+                    ? "ftps " : t->t_fkind ? "ftp "
                     : t->t_sshmode ? "ssh " : "");
         strncat(out, t->t_dialhost, 40);
     } else
