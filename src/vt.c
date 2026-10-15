@@ -147,11 +147,16 @@ static int pic_nl(Vt *v);
 static void sixel_end(Vt *v, int keep);
 static void file_end(Vt *v, int keep);
 
+/* One multiply (Fibonacci hashing, the product's upper bits): every
+ * colour change looks its pen up, and on the 68020 each 32-bit multiply
+ * is ~44 cycles - the old hash had three. Shifts and xors alone were
+ * tried: palette pairs then fell into a few dense runs, and linear
+ * probing walked hundreds of slots (a simulation of 4000 looks). */
 static unsigned pen_hash(const VtPen *p)
 {
-    uint32_t h = p->fg * 2654435761u ^ p->bg * 0x9E3779B1u ^ p->attr ^
-                 (uint32_t)p->link << 16;
-    return (h ^ (h >> 15)) * 0x85EBCA6Bu >> 8;
+    uint32_t x = p->fg ^ (p->fg >> 11) ^ (p->bg << 9) ^ (p->bg >> 13) ^
+                 ((uint32_t)p->attr << 20) ^ ((uint32_t)p->link << 26);
+    return x * 0x9E3779B1u >> 15;
 }
 
 /* A look's number: found, or added (the table grows; when it is full, the
@@ -552,14 +557,34 @@ static void scroll_up(Vt *v, int top, int bot, int n, int nohist)
     if (h == v->rows && n < h) {
         /* the whole screen: the top rows go to the history, their
          * buffers come back blank as the bottom rows - the ring turns */
+        int k = v->base[v->alt];
         for (i = 0; i < n; i++) {
-            VtCell **p = &v->cur[ri(v, i)];
-            if (hist)
+            VtCell **p = &v->cur[k], *r;
+            if (++k >= h)
+                k = 0;
+            /* the history full (the usual case): its oldest row comes
+             * back as the new one, already blank - the common case of
+             * swap_into_history, without the call (a new line's cost on
+             * a 14 MHz Amiga) */
+            if (hist && v->hist_len == v->hist_cap && v->hist_cap > 0 &&
+                (r = v->hist[v->hist_head]) && (int)RCAP(r) >= v->cols) {
+                int slot = v->hist_head;
+                if (++v->hist_head >= v->hist_cap)
+                    v->hist_head = 0;
+                v->hist[slot] = *p;
+                v->hist_w[slot] = RLEN(*p);
+                RLEN(r) = 0;
+                RWRAP(r) = 0;
+                RPIC(r) = 0;
+                *p = r;
+                if (!b.pen)
+                    continue;           /* blank as it is */
+            } else if (hist)
                 swap_into_history(v, p);
             blank_range(*p, 0, v->cols, b);
             RWRAP(*p) = 0;
         }
-        v->base[v->alt] = ri(v, n);
+        v->base[v->alt] = k;
     } else {
         if (hist && top == 0)
             for (i = 0; i < n; i++)
@@ -3226,6 +3251,52 @@ static void byte(Vt *v, int c)
     }
 }
 
+/* The fast lane's inner loop: letters 0x20-0x7E from p, at most n (> 0),
+ * into the cells at *dp in pen pn; returns the first byte not taken. On
+ * the 68020 in assembly: 8 instructions a letter where gcc made 13 (on a
+ * stock A1200 this loop was two thirds of a plain line's parsing). */
+#if defined(__mc68000__) && !defined(VT_C_ONLY)
+static inline const uint8_t *ascii_run(VtCell **dp, const uint8_t *p, int n,
+                                       uint16_t pn)
+{
+    VtCell *d = *dp;
+    uint32_t c, sp = 0x20, del = 0x7F;
+    __asm__ volatile(
+        "  moveq #0,%[c]\n"
+        "  subq.l #1,%[n]\n"
+        "1: move.b (%[p])+,%[c]\n"
+        "  cmp.b %[sp],%[c]\n"          /* below a space, or 0x80-0xFF */
+        "  jlt 2f\n"
+        "  cmp.b %[del],%[c]\n"
+        "  jeq 2f\n"
+        "  move.l %[c],(%[d])+\n"
+        "  move.w %[pn],(%[d])+\n"
+        "  dbra %[n],1b\n"
+        "  jra 3f\n"
+        "2: subq.l #1,%[p]\n"           /* back onto the byte not taken */
+        "3:\n"
+        : [p] "+a"(p), [d] "+a"(d), [n] "+d"(n), [c] "=&d"(c)
+        : [sp] "d"(sp), [del] "d"(del), [pn] "d"(pn)
+        : "cc", "memory");
+    *dp = d;
+    return p;
+}
+#else
+static inline const uint8_t *ascii_run(VtCell **dp, const uint8_t *p, int n,
+                                       uint16_t pn)
+{
+    VtCell *d = *dp;
+    while (n > 0 && (uint8_t)(*p - 0x20) < 0x5F) {
+        d->cp = *p++;
+        d->pen = pn;
+        d++;
+        n--;
+    }
+    *dp = d;
+    return p;
+}
+#endif
+
 void vt_write(Vt *v, const uint8_t *buf, int len)
 {
     int i;
@@ -3242,11 +3313,12 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
             /* whole runs at a time: on a 14 MHz Amiga every instruction
              * per letter shows */
             const int cols = v->cols;
+            const uint8_t *p = buf + i, *e = buf + len;
             for (;;) {
                 VtCell *r, *d;
                 uint16_t pn;
-                const uint8_t *p = buf + i, *e = buf + len;
-                int lim, x, l;
+                const uint8_t *p0;
+                int n, x, l;
                 if (v->pending && v->autowrap) {
                     RWRAP(row(v, v->y)) = 1;
                     v->x = 0;
@@ -3262,12 +3334,15 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
                     r[x - 1] = blank_of(v);
                 /* taken after the wrap and the blanks: either may intern
                  * a look, and a full table is renumbered (pen_gc) */
-                pn = cur_pen(v);
+                pn = v->pen_stale ? cur_pen(v) : v->pen;
                 d = r + x;
-                lim = cols - x;
+                n = cols - x;
+                if (n > e - p)
+                    n = (int)(e - p);
+                p0 = p;
                 /* one pass: check a byte, store its cell */
                 if (v->cp437)
-                    while (lim > 0 && p < e) {
+                    while (n > 0) {
                         uint8_t b = *p;
                         if (b >= 0x80)
                             d->cp = cp437[b - 0x80];
@@ -3278,35 +3353,57 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
                         p++;
                         d->pen = pn;
                         d++;
-                        lim--;
+                        n--;
                     }
-                else
-                    while (lim > 0 && p < e && (uint8_t)(*p - 0x20) < 0x5F) {
-                        d->cp = *p++;
-                        d->pen = pn;
-                        d++;
-                        lim--;
+                else if (n > 0)
+                    p = ascii_run(&d, p, n, pn);
+                /* a byte, a cell: the new column without dividing by
+                 * the cell's 6 bytes (a multiply on the 68020) */
+                {
+                    int x1 = x + (int)(p - p0), y = v->y;
+                    int a = x > 0 ? x - 1 : 0, b = x1 < cols ? x1 : cols - 1;
+                    if (x1 > l)
+                        RLEN(r) = x1;
+                    else if (x1 < l && r[x1].cp == VT_WIDE_TAIL)
+                        r[x1] = blank_of(v);
+                    /* dirty_span(v, y, x - 1, x1): the row is on screen */
+                    if (!v->dirty[y]) {
+                        v->dirty[y] = 1;
+                        v->dx0[y] = a;
+                        v->dx1[y] = b;
+                    } else {
+                        if (a < v->dx0[y]) v->dx0[y] = a;
+                        if (b > v->dx1[y]) v->dx1[y] = b;
                     }
-                x = (int)(d - r);
-                if (x > l)
-                    RLEN(r) = x;
-                else if (x < l && r[x].cp == VT_WIDE_TAIL)
-                    r[x] = blank_of(v);
-                dirty_span(v, v->y, v->x - 1, x);
-                if (x >= cols) {
-                    v->x = cols - 1;
-                    v->pending = 1;
-                } else
-                    v->x = x;
-                i = (int)(p - buf);
-                if (i >= len || ((uint8_t)(buf[i] - 0x20) >= 0x5F &&
-                                 !(buf[i] >= 0x80 && v->cp437)))
+                    if (x1 >= cols) {
+                        v->x = cols - 1;
+                        v->pending = 1;
+                    } else
+                        v->x = x1;
+                }
+                if (p >= e || ((uint8_t)(*p - 0x20) >= 0x5F &&
+                               !(*p >= 0x80 && v->cp437)))
                     break;
             }
-            i--;                        /* the for loop steps past it */
+            i = (int)(p - buf) - 1;     /* the for loop steps past it */
             v->any_dirty = 1;
             v->last_cp = buf[i] >= 0x80 ? cp437[buf[i] - 0x80] : buf[i];
             continue;
+        }
+        /* a return or a single new line (the end of most lines): straight
+         * there, not through byte(), ground_char() and control() */
+        if (c < 0x20 && v->state == S_GROUND && !v->uneed) {
+            if (c == 13) {
+                v->x = 0;
+                v->pending = 0;
+                continue;
+            }
+            if (c == 10 && !v->picnl && (i + 1 >= len || buf[i + 1] != 10)) {
+                linefeed(v);
+                if (v->lnm)
+                    v->x = 0;
+                continue;
+            }
         }
         if (v->state >= S_SIXEL && (v->state == S_SIXEL || v->state == S_FILE)) {
             i += pic_run(v, buf + i, len - i) - 1;
@@ -3318,8 +3415,10 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
         if (v->state == S_GROUND && !v->uneed &&
             ((c == 0x1B && i + 1 < len && buf[i + 1] == '[') ||
              (c == 0x9B && (!v->utf8 || v->amigamode) && !v->cp437))) {
+            /* straight into v->param: when it is not whole here the
+             * state machine starts the CSI again and sets them anew */
             int j = i + (c == 0x1B ? 2 : 1), np = 0, ok = 0;
-            int par[MAXPARAM];
+            int *par = v->param;
             par[0] = -1;
             while (j < len) {
                 int d = buf[j];
@@ -3338,12 +3437,16 @@ void vt_write(Vt *v, const uint8_t *buf, int len)
                 j++;
             }
             if (ok) {
-                memcpy(v->param, par, (np ? np : 1) * sizeof par[0]);
                 v->nparam = np;
                 v->have_digit = 0;
                 v->priv = v->priv2 = v->inter = 0;
                 v->state = S_GROUND;
-                csi(v, buf[j]);
+                /* a colour change (no private marker, no intermediate:
+                 * csi() has nothing of its own for these): straight on */
+                if (buf[j] == 'm')
+                    sgr(v);
+                else
+                    csi(v, buf[j]);
                 i = j;
                 continue;
             }
