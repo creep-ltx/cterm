@@ -19,6 +19,7 @@ void con_stop(struct Con *c);
 ULONG con_sigmask(struct Con *c);       /* its port, its end, the timer */
 void con_handle(struct Con *c, ULONG sigs);   /* answer what has come */
 BOOL con_alive(struct Con *c);          /* the Shell is still running */
+BOOL con_done(struct Con *c);           /* the tab may go (con_retire) */
 BOOL con_raw(struct Con *c);            /* raw: Ed, More may hold win */
 void con_window_moved(struct Window *old, struct Window *now);
 void con_window_back(struct Window *now, struct Con **cs, int n);
@@ -37,6 +38,7 @@ void con_free(struct Con *c);           /* after con_alive() is FALSE */
 void con_retire(struct Con *c);         /* its tab closes: all but the port */
 void con_spent_poll(void);              /* closed tabs' ports: refuse */
 void con_spent_free(void);              /* at the end */
+void con_spent_wait(void);              /* at the end: until no handle is left */
 
 /* The timer, shared: the frame (draw what is owed) and each console's
  * WaitForChar timeout signal its port. */

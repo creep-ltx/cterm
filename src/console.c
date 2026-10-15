@@ -958,6 +958,14 @@ BOOL con_alive(struct Con *c)
     return c->child_running || c->opens > 0;
 }
 
+/* The tab may go: its Shell has ended, and nothing holds the console -
+ * or the tab is being closed (con_stop), when a program Run from it may
+ * keep its handles: they are answered on the retired port (con_retire). */
+BOOL con_done(struct Con *c)
+{
+    return !c->child_running && (c->opens == 0 || c->closing);
+}
+
 ULONG con_sigmask(struct Con *c)
 {
     ULONG m = con_timer_sig();
@@ -1157,13 +1165,20 @@ static void sig_put(BYTE *sb, int *n)
     }
 }
 
+/* A console's port, and once its tab is gone how many handles still
+ * point at it (a program Run from the tab): CTerm may end only at 0. */
+struct SPort {
+    struct MsgPort mp;
+    LONG opens;
+};
+
 static struct MsgPort *port_new(void)
 {
     struct MsgPort *p;
     BYTE sb = sig_get(&sigport, &nport);
     if (sb < 0)
         return NULL;
-    if (!(p = AllocVec(sizeof *p, MEMF_PUBLIC | MEMF_CLEAR))) {
+    if (!(p = AllocVec(sizeof(struct SPort), MEMF_PUBLIC | MEMF_CLEAR))) {
         sig_put(&sigport, &nport);
         return NULL;
     }
@@ -1177,7 +1192,7 @@ static struct MsgPort *port_new(void)
 }
 
 /* Ports of closed tabs, linked through their nodes (never on a list of
- * the system's): no signal, polled, every packet refused */
+ * the system's): no signal, polled, every packet refused but a Close */
 static struct MsgPort *spent;
 
 static void refuse(struct MsgPort *port)
@@ -1185,8 +1200,39 @@ static void refuse(struct MsgPort *port)
     struct Message *m;
     while ((m = GetMsg(port))) {
         struct DosPacket *p = (struct DosPacket *)m->mn_Node.ln_Name;
-        ReplyPkt(p, DOSFALSE, ERROR_OBJECT_NOT_FOUND);
+        if (p->dp_Type == ACTION_END) {
+            struct SPort *sp = (struct SPort *)port;
+            if (sp->opens > 0)
+                sp->opens--;
+            ReplyPkt(p, DOSTRUE, 0);
+        } else {
+            /* the tab is gone: a program still using it is hung up on
+             * (Ctrl-C, as a closed terminal's SIGHUP), its I/O fails */
+            struct MsgPort *from = p->dp_Port;
+            if (from && from->mp_SigTask)
+                Signal((struct Task *)from->mp_SigTask, SIGBREAKF_CTRL_C);
+            ReplyPkt(p, DOSFALSE, ERROR_OBJECT_NOT_FOUND);
+        }
     }
+}
+
+/* CTerm is ending, its window gone: a program Run from a closed tab may
+ * still hold the tab's port, so CTerm stays (unseen) answering it until
+ * the last handle is closed; then the ports go. */
+void con_spent_wait(void)
+{
+    for (;;) {
+        struct MsgPort *p;
+        BOOL any = FALSE;
+        con_spent_poll();
+        for (p = spent; p; p = (struct MsgPort *)p->mp_Node.ln_Succ)
+            if (((struct SPort *)p)->opens > 0)
+                any = TRUE;
+        if (!any)
+            break;
+        Delay(1);
+    }
+    con_spent_free();
 }
 
 void con_spent_poll(void)
@@ -1228,6 +1274,7 @@ void con_retire(struct Con *c)
         Disable();                      /* no PutMsg between the two */
         port->mp_Flags = PA_IGNORE;
         Enable();
+        ((struct SPort *)port)->opens = c->opens;
         sig_put(&sigport, &nport);
         refuse(port);
         port->mp_Node.ln_Succ = (struct Node *)spent;

@@ -11,8 +11,16 @@ VT100/xterm emulation. Decided 2026-10-09.
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
 **Open after 0.3b40 (2026-10-14):**
-- Bug (found by the Fude session on the A1200, 2026-10-14, not yet looked at): ARexx `QUIT`
-  does not close CTerm while a Shell tab is open (`endcli` in the tab does).
+- **Fixed in 0.3b42 (2026-10-15, FS-UAE; not yet on the A1200):** ARexx `QUIT` (also the close
+  gadget, Ctrl-C, TAB CLOSE) waited for a program Run from a tab (`Run Wait 60`, `Run List SYS:
+  ALL`): it held the tab's console (con_alive = opens > 0). Now con_done(): a tab being closed
+  goes once its Shell has ended, whatever still holds the console; the port is retired with its
+  open count (struct SPort), Close is answered, any other packet refused and its sender sent a
+  Ctrl-C (a closed terminal's hang-up: List stops). On quit the window goes at once, then
+  con_spent_wait() keeps CTerm (unseen) answering until the last handle is closed - freeing the
+  port earlier would crash the program. EndCLI alone still keeps the tab till the Run program
+  ends. Test: tests/rexx/t-closerun.rexx (ROM Shell and csh). (t-shell.rexx's `Eval 6*7` fails
+  in a csh tab: csh takes `*` as a file pattern - the test's, not CTerm's.)
 - (done in 0.3b41, INSTALLED and tested on the A1200 2026-10-14 (CTerm-0.3b40.bak, CTerm.keys-0.3b40.bak kept): `show1`-`show9` default to LA+Ctrl+1-9, the user's choice; a keys file
   without the KEYMARK comment gets them once where free, then is written with the mark.)
 - A saved layout keeps a program's NAME only (cli_CommandName), not its arguments: Ahiru comes

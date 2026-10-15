@@ -1139,7 +1139,7 @@ static void run(void)
         /* tabs whose Shell has ended go */
         for (i = 0; i < ntabs; i++)
             if (tabs[i]->ended && !(tabs[i]->con &&
-                                    con_alive(tabs[i]->con))) {
+                                    !con_done(tabs[i]->con))) {
                 tab_drop(tabs[i]);
                 i = -1;                 /* the list moved: again */
             }
@@ -1335,7 +1335,7 @@ BOOL loop_round(LONG xfd, LONG ms)
             if (k > 0)
                 con_reply(T->con, (UBYTE *)r, k);
             host_clip();            /* the Shell's programs may copy too */
-            if (!con_alive(T->con))
+            if (con_done(T->con))
                 T->ended = TRUE;    /* the Shell ended */
         }
         if (T->t_st.ser && !T->t_xfer && serial_due()) {
@@ -1820,13 +1820,13 @@ static int cterm_main(int argc, char **argv)
     {
         int i;
         for (i = 0; i < ntabs; i++)
-            if (tabs[i]->con && con_alive(tabs[i]->con))
+            if (tabs[i]->con && !con_done(tabs[i]->con))
                 con_stop(tabs[i]->con);
         for (;;) {
             ULONG sg = shells_sigmask();
             BOOL any = FALSE;
             for (i = 0; i < ntabs; i++)
-                if (tabs[i]->con && con_alive(tabs[i]->con))
+                if (tabs[i]->con && !con_done(tabs[i]->con))
                     any = TRUE;
             if (!any)
                 break;
@@ -1834,7 +1834,6 @@ static int cterm_main(int argc, char **argv)
         }
         while (ntabs > 0)
             tab_drop(tabs[0]);
-        con_spent_free();
     }
     close_settings();
     xwin_shut();                        /* before its classes and screen go */
@@ -1864,6 +1863,8 @@ static int cterm_main(int argc, char **argv)
     if (SocketBase) CloseLibrary(SocketBase);
     net_lookups_wait();                 /* a name lookup given up on runs
                                          * CTerm's code until it ends */
+    con_spent_wait();                   /* a program Run from a tab: its
+                                         * handles answered till closed */
 #ifdef PROFILE
     {
         BPTR f = Open((STRPTR)"SYS:T/cterm.prof", MODE_NEWFILE);
