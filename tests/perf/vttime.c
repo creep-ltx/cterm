@@ -32,7 +32,7 @@ static void take(Vt *vt)
 }
 
 static const char *tests[] = { "plain", "block", "sgr", "perchar", "cursor",
-                               "frame", "nl", "eol", "byte", "wrap", "calib", "mem", "chars", "lfs", "take", NULL };
+                               "frame", "nl", "eol", "byte", "wrap", "calib", "mem", "load", "movem", "alu", "chars", "lfs", "take", NULL };
 static ULONG cbuf[64];
 
 /* one test, n items: E clock ticks */
@@ -55,6 +55,24 @@ static ULONG run(Vt *vt, const char *t, int n)
             int z = 1000;
             ULONG *q = cbuf;
             asm volatile("1: move.l %0,(%1)\n\tsubq.l #1,%0\n\tbne.s 1b" : "+d"(z) : "a"(q) : "memory");
+            continue;
+        } else if (!strcmp(t, "load")) {
+            /* 1000 long reads from fast RAM: move.l (a0),d1, subq, bne */
+            int z = 1000;
+            ULONG *q = cbuf, r;
+            asm volatile("1: move.l (%2),%1\n\tsubq.l #1,%0\n\tbne.s 1b" : "+d"(z), "=&d"(r) : "a"(q) : "memory");
+            continue;
+        } else if (!strcmp(t, "movem")) {
+            /* 1000 movem.l of three longs, subq, bne */
+            int z = 1000;
+            ULONG *q = cbuf;
+            asm volatile("1: movem.l (%1),%%d2/%%d3/%%d4\n\tsubq.l #1,%0\n\tbne.s 1b" : "+d"(z) : "a"(q) : "d2", "d3", "d4", "memory");
+            continue;
+        } else if (!strcmp(t, "alu")) {
+            /* 1000 rounds of four register ops (and, eor, lsl, or), subq, bne */
+            int z = 1000;
+            ULONG r1 = 1, r2 = 2;
+            asm volatile("1: and.l %1,%2\n\teor.l %2,%1\n\tlsl.l #8,%2\n\tor.l %1,%2\n\tsubq.l #1,%0\n\tbne.s 1b" : "+d"(z), "+d"(r1), "+d"(r2));
             continue;
         } else if (!strcmp(t, "chars")) {
             /* the letters alone: 51 lines of 78 and a CR, no scroll */

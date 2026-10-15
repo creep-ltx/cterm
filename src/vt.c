@@ -628,9 +628,34 @@ static void scroll_down(Vt *v, int top, int bot, int n)
 
 static void linefeed(Vt *v)
 {
+    VtCell *r;
     v->pending = 0;
-    if (v->y == v->bot)
-        scroll_up(v, v->top, v->bot, 1, 0);
+    if (v->y == v->bot) {
+        /* the usual new line at the bottom: the whole screen, the history
+         * full, the new row blank - scroll_up's first case in a few
+         * stores (it was ~100 instructions a line, twice a wrapped one) */
+        if (v->top == 0 && v->bot == v->rows - 1 && v->rows > 1 &&
+            !v->alt && !v->look.bg && v->hist_len == v->hist_cap &&
+            v->hist_cap > 0 && (r = v->hist[v->hist_head]) &&
+            (int)RCAP(r) >= v->cols) {
+            int slot = v->hist_head, k = v->base[0];
+            VtCell **p = &v->cur[k];
+            if (++v->hist_head >= v->hist_cap)
+                v->hist_head = 0;
+            v->hist[slot] = *p;
+            v->hist_w[slot] = RLEN(*p);
+            RLEN(r) = 0;
+            RWRAP(r) = 0;
+            RPIC(r) = 0;
+            *p = r;
+            v->base[0] = ++k >= v->rows ? 0 : k;
+            if (v->all_dirty)
+                v->any_dirty = 1;
+            else
+                note_scroll(v, 0, v->bot, 1);
+        } else
+            scroll_up(v, v->top, v->bot, 1, 0);
+    }
     else if (v->y < v->rows - 1)
         v->y++;
 }
@@ -3254,13 +3279,70 @@ static void byte(Vt *v, int c)
 /* The fast lane's inner loop: letters 0x20-0x7E from p, at most n (> 0),
  * into the cells at *dp in pen pn; returns the first byte not taken. On
  * the 68020 in assembly: 8 instructions a letter where gcc made 13 (on a
- * stock A1200 this loop was two thirds of a plain line's parsing). */
-#if defined(__mc68000__) && !defined(VT_C_ONLY)
+ * stock A1200 this loop was two thirds of a plain line's parsing), and
+ * from 8 letters on four are checked at once (-7% a line). The 68020
+ * reads a long from any address: built for it only (CTerm needs one). */
+#if defined(__mc68020__) && !defined(VT_C_ONLY)
 static inline const uint8_t *ascii_run(VtCell **dp, const uint8_t *p, int n,
                                        uint16_t pn)
 {
     VtCell *d = *dp;
     uint32_t c, sp = 0x20, del = 0x7F;
+#ifndef VT_NO_SWAR
+    if (n >= 8) {
+        /* four letters at a time: all 0x20-0x7E when no byte has its
+         * top bit, none is 0x7F (+1 sets it) and all are >= 0x20 (+0x60
+         * sets it in every byte) */
+        uint32_t w, t, k = (uint32_t)n >> 2;
+        const uint32_t one = 0x01010101, top = 0x80808080, sixty = 0x60606060;
+        __asm__ volatile(
+            "  moveq #0,%[c]\n"
+            "  subq.l #1,%[k]\n"
+            "1: move.l (%[p]),%[w]\n"
+            "  move.l %[w],%[t]\n"
+            "  add.l %[one],%[t]\n"
+            "  or.l %[w],%[t]\n"
+            "  and.l %[top],%[t]\n"
+            "  jne 2f\n"
+            "  move.l %[w],%[t]\n"
+            "  add.l %[sixty],%[t]\n"
+            "  and.l %[top],%[t]\n"
+            "  cmp.l %[top],%[t]\n"
+            "  jne 2f\n"
+            "  addq.l #4,%[p]\n"
+            "  rol.l #8,%[w]\n"
+            "  move.b %[w],%[c]\n"
+            "  move.l %[c],(%[d])+\n"
+            "  move.w %[pn],(%[d])+\n"
+            "  rol.l #8,%[w]\n"
+            "  move.b %[w],%[c]\n"
+            "  move.l %[c],(%[d])+\n"
+            "  move.w %[pn],(%[d])+\n"
+            "  rol.l #8,%[w]\n"
+            "  move.b %[w],%[c]\n"
+            "  move.l %[c],(%[d])+\n"
+            "  move.w %[pn],(%[d])+\n"
+            "  rol.l #8,%[w]\n"
+            "  move.b %[w],%[c]\n"
+            "  move.l %[c],(%[d])+\n"
+            "  move.w %[pn],(%[d])+\n"
+            "  dbra %[k],1b\n"
+            "  moveq #0,%[k]\n"
+            "  jra 3f\n"
+            "2: addq.l #1,%[k]\n"           /* the groups not taken */
+            "3:\n"
+            : [p] "+a"(p), [d] "+a"(d), [k] "+d"(k), [c] "=&d"(c),
+              [w] "=&d"(w), [t] "=&d"(t)
+            : [one] "d"(one), [top] "d"(top), [sixty] "d"(sixty),
+              [pn] "d"(pn)
+            : "cc", "memory");
+        n = (n & 3) + 4 * (int)k;
+        if (n <= 0) {
+            *dp = d;
+            return p;
+        }
+    }
+#endif
     __asm__ volatile(
         "  moveq #0,%[c]\n"
         "  subq.l #1,%[n]\n"
