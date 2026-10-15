@@ -444,6 +444,10 @@ static void load_prefs_(char *buf)
                 ttfile[sizeof ttfile - 1] = 0;
             }
             else if (!stricmp(p, "ttsize")) ttsize = atoi(val);
+            else if (!stricmp(p, "fallbackfont")) {
+                strncpy(fallfile, val, sizeof fallfile - 1);
+                fallfile[sizeof fallfile - 1] = 0;
+            }
             else if (!stricmp(p, "font")) {
                 char *sl = strrchr(val, '/');
                 if (sl) {
@@ -579,6 +583,7 @@ static void save_prefs_(char *buf)
     strcat(buf, fontover ? keepfont.ttfile : ttfile);
     strcat(buf, "\nttsize=");
     numstr_cat(buf, fontover ? keepfont.ttsize : ttsize);
+    if (fallfile[0]) { strcat(buf, "\nfallbackfont="); strcat(buf, fallfile); }
     if (!pcfont) strcat(buf, "\npcfont=0");
     if (!altmeta) strcat(buf, "\naltmeta=0");
     if (!pics) strcat(buf, "\npictures=0");
@@ -1235,7 +1240,7 @@ BOOL loop_round(LONG xfd, LONG ms)
     ULONG rxsig = rexx_sigmask();
     ULONG sigs = winsig | setsig | SIGBREAKF_CTRL_C | con_timer_sig() |
                  xwin_sigmask() | bookwin_sigmask() | sersig | rxsig |
-                 hidesig | about_sigmask() | calls_sigmask();
+                 hidesig | about_sigmask() | calls_sigmask() | drop_sigmask();
     BOOL dialing = calls_any();
     BOOL hostdata = FALSE, ready = FALSE;
     ULONG consigs = 0;
@@ -1337,6 +1342,8 @@ BOOL loop_round(LONG xfd, LONG ms)
                                          * UPLOAD waiting is seen first */
     if (sigs & hidesig)
         hide_events();                  /* the AppIcon, Exchange: they ask */
+    if (sigs & drop_sigmask())
+        drop_events();                  /* files dropped on the window */
     T = shown;
     if ((sigs & winsig) && !window_events() && !quitting)
         quit_all();
@@ -1882,6 +1889,8 @@ static int cterm_main(int argc, char **argv)
     net_lookups_wait();                 /* a name lookup given up on runs
                                          * CTerm's code until it ends */
     find_free();                        /* openurl.library, if a link opened it */
+    drop_free();
+    fall_free();                        /* the fallback font's tables */
     con_spent_wait();                   /* a program Run from a tab: its
                                          * handles answered till closed */
 #ifdef PROFILE

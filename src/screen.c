@@ -464,6 +464,7 @@ BOOL open_display(void)
         return FALSE;
     }
     rp = win->RPort;
+    drop_add();                         /* files from Workbench (its screen only) */
     /* every plane, as a new window has: the mask kept is the last
      * screen's (a 16-colour one's narrows a graphics card's colours) */
     planes_full();
@@ -553,6 +554,7 @@ void close_display(int keep_screen)
             TT_DoneRastPort(rp);
         cx_keys_on(FALSE);              /* its hot keys: none now */
         float_unclip();                 /* no clip region left on its layer */
+        drop_remove();
         CloseWindow(win);
         win = NULL;
     }

@@ -687,15 +687,18 @@ static LONG c_tab(struct RexxMsg *rm, LONG *a, BOOL top)
  * i3 way: OPEN (a new Shell pane, the active pane's direction), KILL
  * (the pane and its tab), SPLIT H|V, FOCUS and MOVE LEFT|RIGHT|UP|DOWN,
  * FULL (fill the window, again: back), SHOW n (tab n in this pane), MODE
- * TABS|PANES. The tab the commands go to follows the active pane. */
+ * TABS|PANES; DWINDLE ON|OFF (none: RESULT says which), GAPS n [OUTER
+ * ON|OFF] [BORDER n] (none: RESULT "gaps ON|OFF border") - as the Panes
+ * menu and Settings' Screen tab set them (kept: CTerm saves its settings
+ * when it quits). The tab the commands go to follows the active pane. */
 static LONG c_pane(struct RexxMsg *rm, LONG *a, BOOL top)
 {
     static const char *const ops[] = { "SIDE", "UNDER", "NEXT", "SELECT",
         "CLOSE", "OPEN", "KILL", "SPLIT", "FOCUS", "MOVE", "FULL", "SHOW",
-        "MODE", NULL };
+        "MODE", "DWINDLE", "GAPS", NULL };
     static const char *const dirs[] = { "LEFT", "RIGHT", "UP", "DOWN",
                                         NULL };
-    char *w = (char *)a[0], *x = (char *)a[1];
+    char *w = (char *)a[0], *x = (char *)a[1], *o = (char *)a[2];
     int n = x ? atoi(x) : 0, op, d = -1;
     BOOL ok = TRUE;
     (void)rm;
@@ -721,6 +724,47 @@ static LONG c_pane(struct RexxMsg *rm, LONG *a, BOOL top)
         (op == 12 && (!x || (stricmp(x, "TABS") && stricmp(x, "PANES")))) ||
         ((op == 3 || op == 11) && n < 1))
         return RC_ERROR;
+    if (op == 13) {                     /* DWINDLE [ON|OFF] */
+        if (!x) {
+            res_set(dwindle ? "ON" : "OFF", -1);
+            return RC_OK;
+        }
+        if (stricmp(x, "ON") && stricmp(x, "OFF"))
+            return RC_ERROR;
+        if (!top)
+            return LATER;
+        if ((dwindle != 0) != (stricmp(x, "ON") == 0))
+            pane_do(PO_DWINDLE, 0);     /* (the title says it) */
+        return RC_OK;
+    }
+    if (op == 14) {                     /* GAPS [n] [OUTER ON|OFF] [BORDER n] */
+        LONG bd = a[3] ? *(LONG *)a[3] : bordersize;
+        if (!x && !o && !a[3]) {
+            char r[24];
+            r[0] = 0;
+            numstr_cat(r, gaps);
+            strcat(r, outergaps ? " ON " : " OFF ");
+            numstr_cat(r, bordersize);
+            res_set(r, -1);
+            return RC_OK;
+        }
+        if ((x && (x[0] < '0' || x[0] > '9' || n > MAXGAPS)) ||
+            (o && stricmp(o, "ON") && stricmp(o, "OFF")) ||
+            bd < 0 || bd > MAXBORDER)
+            return RC_ERROR;
+        if (!top)
+            return LATER;
+        if (x)
+            gaps = n;
+        if (o)
+            outergaps = !stricmp(o, "ON");
+        bordersize = bd;
+        if (win)
+            panes_changed();
+        return RC_OK;
+    }
+    if (o || a[3])
+        return RC_ERROR;                /* (OUTER, BORDER: GAPS's only) */
     if (!top)
         return LATER;
     if (!win)
@@ -1139,7 +1183,7 @@ static const struct {
     { "GETSCREEN", "", NULL, c_getscreen },
     { "CURSOR", "", NULL, c_cursor },
     { "TAB", "WHAT/A,N/N", NULL, c_tab },
-    { "PANE", "WHAT/A,ARG", NULL, c_pane },
+    { "PANE", "WHAT/A,ARG,OUTER/K,BORDER/K/N", NULL, c_pane },
     { "DOWNLOAD", "FILE,PROTOCOL/K,TIMEOUT/K/N", NULL,
       c_download },
     { "UPLOAD", "FILE/A/M,PROTOCOL/K", NULL, c_upload },

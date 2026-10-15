@@ -649,6 +649,7 @@ void transfer_free(void)
  * same memory and must not inherit it). */
 void transfer_tab_gone(struct Tab *t)
 {
+    drop_tab_gone(t);                   /* files dropped for its upload */
     if (hqtab == t) {
         nhq = 0;
         hqtab = NULL;
@@ -1070,6 +1071,8 @@ BOOL transfer_take(UBYTE *buf, LONG n)
          * A tab a script drives gets 2 s for its UPLOAD to come: the
          * script typed the host's upload command, the host was quicker */
         np = rexx_uploads(T, c->paths, paths, NUP);
+        if (!np)                        /* files dropped on the tab */
+            np = drop_uploads(T, c->paths, paths, NUP);
         if (!np && T->t_watch) {
             int i;
             for (i = 0; i < 20 && !np; i++) {

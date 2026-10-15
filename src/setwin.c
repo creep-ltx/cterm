@@ -83,7 +83,7 @@ static struct {                         /* what Cancel goes back to */
     BOOL k_ownfg, k_ownbg, k_usett, k_s_utf8, k_pc, k_pcfont, k_altmeta;
     BOOL k_pics, k_ownprog;
     ULONG k_myfg, k_mybg;
-    char k_ttfile[160], k_fontname[48];
+    char k_ttfile[160], k_fontname[48], k_fallfile[160];
     char k_dldir[160], k_uldir[160];
     SerLine k_serdef;
     Modem k_modem;
@@ -293,6 +293,9 @@ static void letters_changed(void)
     set_attr(S_TTSIZE, SLIDER_Level, ttsize);
     set_attr(S_FONT, GETFONT_TextAttr, (ULONG)&setfont);
     set_attr(S_TT, GETFILE_FullFile, (ULONG)ttfile);
+    set_attr(S_FALL, GETFILE_FullFile, (ULONG)fallfile);
+    set_attr(S_FALL, GA_Disabled, !usett);
+    set_attr(S_NOFALL, GA_Disabled, !usett);
 }
 
 static void where_changed(void)
@@ -469,6 +472,21 @@ static Object *page_text(void)
     r_disable(S_TT, !tt_installed());
     r_add(g, r_slider(S_TTSIZE, 6, 40, ttsize, "%ld"), "TrueType size");
     r_disable(S_TTSIZE, !usett);
+    {   /* letters the TrueType font lacks (emoji): from this one */
+        Object *h = HLayoutObject, End;
+        r_add(h, sg[S_FALL] = GetFileObject, GA_ID, S_FALL, GA_RelVerify,
+              TRUE, GETFILE_FullFile, (ULONG)fallfile, GETFILE_ReadOnly, TRUE,
+              GETFILE_TitleText,
+              (ULONG)"A TrueType font for what the font lacks (emoji)",
+              GETFILE_Pattern, (ULONG)"#?.(ttf|otf)", GETFILE_DoPatterns, TRUE,
+              GETFILE_RejectIcons, TRUE, End, NULL);
+        if (h && r_button(S_NOFALL, "None"))
+            SetAttrs(h, LAYOUT_AddChild, (ULONG)sg[S_NOFALL],
+                     CHILD_WeightedWidth, 0, TAG_END);
+        r_add(g, h, "Fallback font");
+        r_disable(S_FALL, !usett);
+        r_disable(S_NOFALL, !usett);
+    }
     r_add(g, r_slider(S_SPACE, 0, 8, linespace, "%ld"), "Line spacing");
     r_put(p, g);
     g = r_group("Characters");
@@ -890,6 +908,7 @@ static void open_settings_(void)
     snap.k_myfg = myfg; snap.k_mybg = mybg;
     snap.k_usett = usett; snap.k_ttsize = ttsize;
     strcpy(snap.k_ttfile, ttfile);
+    strcpy(snap.k_fallfile, fallfile);
     strcpy(snap.k_fontname, fontname);
     snap.k_fontsize = fontsize;
     snap.k_linespace = linespace;
@@ -1029,6 +1048,7 @@ static void finish_settings_(int how)
     if (how == 3) {
         BOOL letters = snap.k_usett != usett || snap.k_ttsize != ttsize ||
                        strcmp(snap.k_ttfile, ttfile) ||
+                       strcmp(snap.k_fallfile, fallfile) ||
                        strcmp(snap.k_fontname, fontname) ||
                        snap.k_fontsize != fontsize ||
                        snap.k_linespace != linespace;
@@ -1068,6 +1088,7 @@ static void finish_settings_(int how)
             usett = snap.k_usett;
             ttsize = snap.k_ttsize;
             strcpy(ttfile, snap.k_ttfile);
+            strcpy(fallfile, snap.k_fallfile);
             strcpy(fontname, snap.k_fontname);
             fontsize = snap.k_fontsize;
             linespace = snap.k_linespace;
@@ -1180,6 +1201,25 @@ static int settings_gadget(int id)
             }
             letters_changed();
         }
+        break;
+    case S_FALL:
+        if (DoMethod(sg[S_FALL], GFILE_REQUEST, (ULONG)setwin)) {
+            const char *f = (const char *)get_attr(S_FALL, GETFILE_FullFile);
+            if (f && f[0]) {
+                strncpy(fallfile, f, sizeof fallfile - 1);
+                fallfile[sizeof fallfile - 1] = 0;
+                letters_changed();
+                if (usett && !ttfall) {
+                    beep();             /* it would not open */
+                    fallfile[0] = 0;
+                    letters_changed();
+                }
+            }
+        }
+        break;
+    case S_NOFALL:
+        fallfile[0] = 0;
+        letters_changed();
         break;
     case S_TTSIZE:
         v = get_attr(S_TTSIZE, SLIDER_Level);
