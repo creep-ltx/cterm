@@ -124,6 +124,7 @@ static int cterm_main(int argc, char **argv);
 extern struct Device *TimerBase;
 ULONG pf_vt, pf_draw, pf_pkt, pf_wait, pf_all0, pf_writes, pf_draws;
 ULONG pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill, pf_nrows, pf_nall, pf_nscroll;
+ULONG pf_ppset, pf_ppasm, pf_ppnum;
 struct timeval pf_tv0;
 ULONG pf_calib;
 #endif
@@ -1124,12 +1125,12 @@ static void run(void)
 #ifdef PROFILE
     {   /* what one clock read costs, to take it out of the buckets */
         int k;
-        ULONG t0 = ticks();
+        ULONG t0 = pf_ticks();
         for (k = 0; k < 1000; k++)
-            (void)ticks();
-        pf_calib = ticks() - t0;
+            (void)pf_ticks();
+        pf_calib = pf_ticks() - t0;
     }
-    pf_all0 = ticks();
+    pf_all0 = pf_ticks();
     term_now(&pf_tv0);
 #endif
     T = shown = tabs[0];
@@ -1930,10 +1931,10 @@ static int cterm_main(int argc, char **argv)
         if (f) {
             struct timeval t1;
             term_now(&t1);
-            FPrintf(f, (STRPTR)"real s %ld; ticks: all %ld wait %ld packets %ld vt %ld draw %ld (scroll %ld text %ld cursor %ld knob %ld rows %ld fill %ld) nrows %ld nall %ld nscroll %ld calib1000 %ld draws %ld writes %ld\n",
+            FPrintf(f, (STRPTR)"real s %ld; ticks: all %ld wait %ld packets %ld vt %ld draw %ld (scroll %ld text %ld cursor %ld knob %ld rows %ld fill %ld) nrows %ld nall %ld nscroll %ld calib1000 %ld draws %ld writes %ld ppset %ld ppasm %ld ppnum %ld\n",
                     (LONG)(t1.tv_secs - pf_tv0.tv_secs),
-                    (ticks() - pf_all0), pf_wait, pf_pkt,
-                    pf_vt, pf_draw, pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill, pf_nrows, pf_nall, pf_nscroll, pf_calib, pf_draws, pf_writes);
+                    (pf_ticks() - pf_all0), pf_wait, pf_pkt,
+                    pf_vt, pf_draw, pf_scroll, pf_text, pf_cur, pf_knob, pf_rows, pf_fill, pf_nrows, pf_nall, pf_nscroll, pf_calib, pf_draws, pf_writes, pf_ppset, pf_ppasm, pf_ppnum);
             Close(f);
         }
     }

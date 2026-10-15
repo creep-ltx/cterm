@@ -101,15 +101,18 @@ const UBYTE *pp_lines(const ULONG *blk)
     return pp_bits + ((const UBYTE *)blk - pp_blk) / 2;
 }
 
-void pp_paint(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
-              LONG x, LONG y, int n)
+int pp_paint(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
+             LONG x, LONG y, int n, int lead, UWORD leadpw)
 {
     static struct PPRow f;
-    LONG J0 = x >> 3, B0 = x, B1 = x + 8 * n, q0, q1, i, np = 0;
+    LONG J0 = x >> 3, B0 = x - lead, B1 = x + 8 * n, q0, q1, i, np = 0;
     ULONG mh, ml;
     int p;
     if (n <= 0 || n > PP_MAXCOLS)
-        return;
+        return 0;
+#ifdef NOPPAINT
+    return 0;                           /* to measure: the row set up only */
+#endif
     pp_phase(x & 7);
     /* the pads: blank glyphs in the edge cells' pens, so a row in one
      * colour has uniform edge groups too */
@@ -121,7 +124,14 @@ void pp_paint(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
         pp_gp[n + i] = pp_blank;
         pp_pw[n + i] = pp_pw[n - 1];
     }
-    q0 = B0 >> 5;
+    q0 = x >> 5;
+    if (lead > 0 && lead <= 8 && B0 >> 5 == q0)
+        pp_pw[-1] = leadpw;             /* the margin: cell c0-1's last
+                                           pixels, in the edge long */
+    else {
+        B0 = x;
+        lead = 0;
+    }
     q1 = (B1 - 1) >> 5;
     f.ng = q1 - q0 + 1;
     f.ch = pp_ch;
@@ -151,13 +161,24 @@ void pp_paint(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
         (pp_s ? pp_row1 : pp_row1z)(&f);
     else if (np)
         pp_row(&f);
+    return lead > 0;
 }
 
 void pp_paint_c(UBYTE **planes, int depth, UBYTE mask, LONG bpr,
-                LONG x, LONG y, int n)
+                LONG x, LONG y, int n, int lead, UWORD leadpw)
 {
     int i, l, b, p;
     pp_phase(x & 7);
+    if (lead > 0 && lead <= 8 && (x - lead) >> 5 == x >> 5)
+        for (l = 0; l < pp_ch; l++)     /* the margin: background */
+            for (b = x - lead; b < x; b++)
+                for (p = 0; p < depth; p++) {
+                    UBYTE *d = planes[p] + (y + l) * bpr + (b >> 3);
+                    if (!(mask & (1 << p)))
+                        continue;
+                    if ((leadpw >> p) & 1) *d |= 0x80 >> (b & 7);
+                    else *d &= ~(0x80 >> (b & 7));
+                }
     for (i = 0; i < n; i++) {
         /* the glyph's lines back from its block: hi << s | lo >> 8-s */
         const UBYTE *blk = (const UBYTE *)pp_gp[i];

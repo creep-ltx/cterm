@@ -696,7 +696,7 @@ BOOL menu_pick(ULONG id)
 #ifdef PROFILE
         {   /* ms = ticks / TPMS */
             char l[200];
-            ULONG all = ticks() - pf_all0;
+            ULONG all = pf_ticks() - pf_all0;
             strcpy(l, "[profile ms: all ");
             numstr_cat(l, all / TPMS);
             strcat(l, ", waiting ");
@@ -714,7 +714,7 @@ BOOL menu_pick(ULONG id)
             strcat(l, "]\r\n");
             say(l);
             pf_vt = pf_draw = pf_pkt = pf_wait = pf_writes = pf_draws = 0;
-            pf_all0 = ticks();
+            pf_all0 = pf_ticks();
             refresh();
         }
 #endif

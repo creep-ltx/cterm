@@ -36,9 +36,20 @@ int main(int argc, char **argv)
         if (rnd() % 3 == 0) n = 1 + rnd() % 3;
         if (x + 8 * n > bpr * 8) n = (bpr * 8 - x) / 8;
         if (n < 1) continue;
+        /* half the time a few colours over and over (colour text: the
+         * same patterns of pens in group after group, row after row) */
+        UWORD pal[4], leadpw = (UWORD)(rnd() & 0xFFFF);
+        int lead = rnd() % 2 ? 0 : rnd() % 10;     /* 9: refused */
+        int few = rnd() % 2, rep, nrep = few ? 1 + rnd() % 4 : 1;
+        for (i = 0; i < 4; i++) {
+            UBYTE fg = (UBYTE)rnd(), bg = (UBYTE)rnd();
+            pal[i] = ((fg ^ bg) << 8) | bg;
+        }
+        for (rep = 0; rep < nrep; rep++) {
         for (i = 0; i < n; i++) {
             UBYTE fg = (UBYTE)rnd(), bg = (UBYTE)rnd();
             if (i && rnd() % 3) { pp_pw[i] = pp_pw[i - 1]; }
+            else if (few) pp_pw[i] = pal[rnd() % 4];
             else pp_pw[i] = ((fg ^ bg) << 8) | bg;
             pp_gp[i] = PP_BLOCK(slots[rnd() % ns]);
         }
@@ -47,15 +58,17 @@ int main(int argc, char **argv)
             pl1[p] = mem1 + p * bpr * 40;
             pl2[p] = mem2 + p * bpr * 40;
         }
-        pp_paint(pl1, depth, mask, bpr, x, y, n);
-        pp_paint_c(pl2, depth, mask, bpr, x, y, n);
+        pp_paint(pl1, depth, mask, bpr, x, y, n, lead, leadpw);
+        pp_paint_c(pl2, depth, mask, bpr, x, y, n, lead, leadpw);
         if (memcmp(mem1, mem2, sizeof mem1)) {
             for (i = 0; i < (int)sizeof mem1 && mem1[i] == mem2[i]; i++) ;
-            printf("DIFF it %d ch %d depth %d mask %02x bpr %ld x %d n %d: byte %d (plane %ld line %ld byte %ld) asm %02x c %02x\n",
-                   it, ch, depth, mask, bpr, x, n, i, i / (bpr * 40),
+            printf("DIFF it %d ch %d depth %d mask %02x bpr %ld x %d n %d lead %d: byte %d (plane %ld line %ld byte %ld) asm %02x c %02x\n",
+                   it, ch, depth, mask, bpr, x, n, lead, i, i / (bpr * 40),
                    (i % (bpr * 40)) / bpr, i % bpr, mem1[i], mem2[i]);
             if (++bad > 5) break;
         }
+        }
+        if (bad > 5) break;
     }
     pp_free();
     printf("%d rows, %d bad\n", it, bad);

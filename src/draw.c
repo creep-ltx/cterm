@@ -346,6 +346,7 @@ static LONG c_apen = -1, c_bpen = -1;
 static ULONG c_argb = ~0UL, c_brgb = ~0UL;
 static int c_drmd = -1, c_style = -1;
 static BOOL rgb_memo;                   /* cell_rgb's last answer holds */
+static ULONG ppp_gen = 1;               /* pp_pens' answers of this draw */
 static APTR c_ttfont;                   /* TrueType: the face and style set */
 static LONG c_ttstyle = -1;
 
@@ -355,6 +356,7 @@ void rp_forget(void)
     c_argb = c_brgb = ~0UL;
     c_drmd = c_style = -1;
     rgb_memo = FALSE;
+    ppp_gen++;
     c_ttfont = NULL;                    /* also when faces close: fonts.c */
     c_ttstyle = -1;
 }
@@ -413,6 +415,7 @@ void release_pens(void)
     memset(ph_rgb, 0, sizeof ph_rgb);   /* their numbers mean nothing now */
     ph_n = 0;
     pen_gen++;
+    ppp_gen++;
 }
 
 /* For Parts/Pictures: a pen for a colour of its cube, exactly that
@@ -1324,29 +1327,63 @@ static void pp_setup(void)
 }
 
 /* A run's pens as the asm wants them (fx<<8 | fb), its glyph style, and
- * the planes they need: called only where the colours change. */
+ * the planes they need: called only where the colours change. Kept per
+ * look for the draw (rp_forget starts a new one): a page of colour runs
+ * is the same few looks row after row, and working one out (its RGB, two
+ * pens) was ~1000 cycles on a 14 MHz 68020 - most of a colourful row's
+ * set-up (conbench sgr-perchar: 40 a row). */
+static struct {
+    const void *v;                      /* the emulator: its pen numbers */
+    ULONG gen;
+    UWORD pen, pw, st;
+    UBYTE used;
+} ppp[64];
+
 static __attribute__((noinline)) UWORD pp_pens(const VtCell *c, BOOL insel,
                                                UWORD *st, UBYTE *used)
 {
     ULONG fg, bg;
     LONG fp, bp;
-    UWORD s;
+    UWORD s, pw;
+    UBYTE u;
+    int k = c->pen & 63;
+    if (!insel && ppp[k].gen == ppp_gen && ppp[k].pen == c->pen &&
+        ppp[k].v == vt) {
+        *st = ppp[k].st;
+        *used |= ppp[k].used;
+        return ppp[k].pw;
+    }
     cell_rgb(c, &fg, &bg);
     if (insel) {
         ULONG t = fg; fg = bg; bg = t;
     }
     fp = pen_for(fg);
     bp = pen_for(bg);
-    *used |= (UBYTE)(fp ^ pbase) | (UBYTE)(bp ^ pbase);
+    u = (UBYTE)(fp ^ pbase) | (UBYTE)(bp ^ pbase);
+    *used |= u;
     s = PEN(c)->attr & (VT_BOLD | VT_ITALIC | VT_UNDERLINE | VT_STRIKE);
     if (pcmode)
         s &= ~VT_BOLD;
     *st = s;
-    return (UWORD)(((fp ^ bp) & 255) << 8 | (bp & 255));
+    pw = (UWORD)(((fp ^ bp) & 255) << 8 | (bp & 255));
+    if (!insel) {
+        ppp[k].v = vt;
+        ppp[k].gen = ppp_gen;
+        ppp[k].pen = c->pen;
+        ppp[k].pw = pw;
+        ppp[k].st = s;
+        ppp[k].used = u;
+    }
+    return pw;
 }
 
 /* Columns a..b of row r into the planes. FALSE: not here (the window
- * is covered there, say) - the caller draws them with Text(). */
+ * is covered there, say) - the caller draws them with Text(). From
+ * column 0 the margin left of it is painted with the row when it lies in
+ * the row's first long (pp_lm: done; draw_span's RectFill was ~0.3 ms a
+ * row on a 14 MHz 68020, ~1.4% of conbench). */
+static BOOL pp_lm;
+
 static BOOL pp_cells(int r, int a, int b)
 {
     if (chunky)
@@ -1363,6 +1400,7 @@ static BOOL pp_cells(int r, int a, int b)
     int n = b - a + 1, i, w, s0 = -1, s1 = -2, a0 = a, b0 = b;
     if (!ppon || !ly || !bm || n <= 0 || n > PP_MAXCOLS)
         return FALSE;
+    PF_START(tset);
     X = ly->bounds.MinX + ox + a * 8;
     Y = ly->bounds.MinY + oy + r * ch;
     LockLayerRom(ly);
@@ -1455,8 +1493,18 @@ static BOOL pp_cells(int r, int a, int b)
         SetWriteMask(rp, pmask);
     }
     WaitBlit();                         /* a scroll may still be moving */
-    pp_paint(bm->Planes, bm->Depth, pbase >= 0 ? pmask : 0xFF,
-             bm->BytesPerRow, X, Y, n);
+    PF_ADD(pf_ppset, tset);
+    {
+    int lead = a == 0 ? ox - cpane->fx0 : 0;
+    PF_START(tasm);
+    pp_lm = pp_paint(bm->Planes, bm->Depth, pbase >= 0 ? pmask : 0xFF,
+                     bm->BytesPerRow, X, Y, n, lead,
+                     (UWORD)(pen_for(defbg) & 255));
+    PF_ADD(pf_ppasm, tasm);
+    }
+#ifdef PROFILE
+    pf_ppnum++;
+#endif
     UnlockLayerRom(ly);
     if (a > a0 || b < b0) {             /* the edges' cells: Text() */
         BOOL keep = ppon;
@@ -1541,6 +1589,7 @@ static void draw_span(int r, int a, int b)
     if (last < a && a == 0 && b == cols - 1 &&
         r < (int)sizeof shown_blank && shown_blank[r])
         return;
+    pp_lm = FALSE;
     if (last >= a) {
         PF_START(tt);
         if (!pp_all || (line && VT_ROW_PICS(line)) || !pp_cells(r, a, last))
@@ -1550,7 +1599,7 @@ static void draw_span(int r, int a, int b)
     {
     PF_START(tf);
     apen(defbg);
-    if (a == 0)
+    if (a == 0 && !pp_lm)
         RectFill(rp, cpane->fx0, y, ox - 1, y + ch - 1);
     if (last < b || b == cols - 1) {
         int x1 = b == cols - 1 ? area_right() : ox + (b + 1) * cw - 1;
@@ -2977,6 +3026,59 @@ void refresh_all(void)
     T = keep;
 }
 
+/* After a draw of the only pane: the plane mask down to the planes the
+ * text on show needs. The mask only ever grew: after one page of colours
+ * every scroll moved all four planes of a 16-colour Workbench (a 616x224
+ * ScrollRaster: 12 ms a plane on a 14 MHz A1200) until the next full
+ * clear. Nothing is cleared: every row was drawn with all the mask's
+ * planes, so a plane none of its looks uses holds the background's bits
+ * there, as the planes outside the mask do - only the mask shrinks, for
+ * the next scrolls and draws (were it done before this draw, a changed
+ * span drawn without a plane its old letters used would leave them).
+ * Looked at only while the mask holds more than plain text needs, at
+ * every full redraw and draw that scrolled - after a look that found
+ * colours still on show, not at the next two scrolls (a look at all the
+ * cells is ~3 ms, a scroll 12 ms a plane). Not with pictures, panes, the scratchpad or a panel
+ * over the rows (their own pens and areas). */
+static void planes_fit(BOOL full)
+{
+    static const VtCell empty = { 0, 0 };
+    static int skip;
+    UBYTE need = 0;
+    UWORD st;
+    int r, x, w;
+    if (pbase < 0 || npanes > 1 || fshown)
+        return;
+    pp_pens(&empty, FALSE, &st, &need);     /* blanks, the rows' tails */
+    if (!(pmask & ~need))
+        return;
+    if (!full && skip > 0) {
+        skip--;                         /* colours were on show just now */
+        return;
+    }
+    skip = 2;
+    for (r = 0; r < rows; r++) {
+        const VtCell *line = vt_line(vt, r, back, &w);
+        UWORD kp = 0;                   /* the default look: counted */
+        if (!line)
+            continue;
+        if (VT_ROW_PICS(line))
+            return;
+        if (w > cols)
+            w = cols;
+        for (x = 0; x < w; x++)
+            if (line[x].pen != kp) {
+                kp = line[x].pen;
+                pp_pens(&line[x], FALSE, &st, &need);
+            }
+        if (!(pmask & ~need))
+            return;                     /* nothing to give up */
+    }
+    skip = 0;
+    pmask &= need;
+    SetWriteMask(rp, pmask);
+}
+
 /* The pane in use, T its tab. */
 static void refresh_pane(void)
 {
@@ -3056,7 +3158,8 @@ static void refresh_pane(void)
     if (xp) {
         xfer_panel();                   /* over the last rows again */
         find_bar();
-    }
+    } else if (chg.all || back > 0 || chg.scroll_n)
+        planes_fit(chg.all || back > 0);
 }
 
 /* What came from the host, as it came (escape codes and all: a BBS
