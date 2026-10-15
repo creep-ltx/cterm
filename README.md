@@ -21,7 +21,7 @@ files dropped from Workbench typed, sent or uploaded.
 |---|---|---|
 | `CTermSSH` | ssh and SFTP | ssh and SFTP calls do not start |
 | `Protocols/` | Zmodem, XYmodem, Hydra; Serial (serial lines and modems) | that transfer, or serial lines, say they are missing |
-| `Parts/` | Settings, PhoneBook, ARexx, Call, Transfers, SpeedTest, Files (the SFTP and FTP file browser), Pictures (pictures in the terminal) | that window or feature says it is missing (Pictures: PNG files and pictures on screens of 256 colours or fewer do not show) |
+| `Parts/` | Settings, PhoneBook, ARexx, Call, Transfers, SpeedTest, Files (the SFTP and FTP file browser), Pictures (pictures in the terminal) | that window or feature says it is missing (Pictures: PNG files, kitty's packed pictures and pictures on screens of 256 colours or fewer do not show) |
 | `Fonts/` | the PC's VGA font | PC BBSes use the Amiga font |
 | `Rexx/` | example ARexx scripts | |
 
@@ -287,15 +287,26 @@ letters' places, and the text goes on below it.
   Amiga programs that write sixel to the Shell. A program asking whether
   the terminal can do it is told yes (the answer to "what are you"
   includes sixel), and is told the size of a letter and of the window
-  in pixels, so it can size its picture to fit.
+  in pixels, so it can size its picture to fit. Old pictures made for
+  DEC's terminals with tall pixels (an "aspect" of 2:1 and the like)
+  keep their shape: each of their rows is drawn two (or more) pixels
+  tall.
 - **iTerm2's pictures** (a picture file sent whole: PNG, JPEG, GIF):
   `imgcat`, and the many tools that use it. CTerm opens the file with
   the Amiga's own datatypes, so any picture format your Amiga reads
   works. A width or height asked for (in letters, pixels or per cent of
   the window) is kept, in shape; a picture wider than the window is
-  made smaller to fit.
-- **kitty's pictures** are not shown, but they are swallowed cleanly:
-  you never see their code as text.
+  made smaller to fit. A picture sent in pieces (iTerm2's newer way,
+  used through tmux) works the same.
+- **kitty's pictures** (`kitty +kitten icat`, `timg`, `chafa`, `viu`,
+  `yazi` and other programs that speak kitty's way): raw pixels or
+  PNG files, packed or not, sent in one go or in pieces. A program
+  asking whether pictures work is told yes. A picture can be sent once
+  and shown again later, at its own size or stretched to a number of
+  letters, or just a part of it; programs can remove the pictures they
+  showed. Pictures stored on the other computer (kitty's "file" and
+  "shared memory" ways) are not read: programs are told so, and send
+  the picture itself instead.
 
 How they behave:
 
@@ -304,6 +315,15 @@ How they behave:
   that part. It survives everything that redraws the window: a tab
   switch, panes, hiding the window, another window passing over it.
 - A picture wider than the window (or a pane) is cut at its right edge.
+- **A new text size** (Settings, a font, Bigger text / Smaller text):
+  the pictures on screen and in the history grow or shrink with the
+  letters, so the text around them stays where it was. A font of a
+  different shape (taller for its width) leaves some empty room beside
+  or below a picture, never stretches it. CTerm keeps each picture as
+  it came, so going back to the first size shows it exactly as before.
+  The resized copy counts towards the memory below; when there is no
+  room for it, the picture is shown at its own size instead, cut at
+  the edge of its place.
 - **Memory:** each tab keeps its pictures in fast memory, up to 4 MB (a
   quarter of what is free on a smaller Amiga), and never takes the last
   512 KB. When a new picture does not fit, the oldest goes - also from
@@ -317,11 +337,12 @@ How they behave:
   (dithering). On a 16-colour Workbench whose colours are all taken,
   the nearest ones are used.
 - In the **Amiga Shell** tab pictures work too: a program that writes
-  sixel or iTerm2's code to the Shell shows its picture.
+  sixel, iTerm2's or kitty's code to the Shell shows its picture.
 
 **The setting:** Settings, Text tab, "Pictures in the terminal (sixel,
-iTerm2)", on at first. Off, the pictures' codes are swallowed, nothing
-is shown, and CTerm does not tell programs it can show pictures.
+iTerm2, kitty)", on at first. Off, the pictures' codes are swallowed,
+nothing is shown, and CTerm does not tell programs it can show
+pictures.
 
 **Trying it:** the `Pictures` drawer beside CTerm has test pictures.
 In CTerm's Shell, first `CD` to CTerm's drawer, then:
@@ -329,18 +350,21 @@ In CTerm's Shell, first `CD` to CTerm's drawer, then:
     Type Pictures/bars.six          colour bars (sixel)
     Type Pictures/kickstart.six     the Kickstart hand (sixel)
     Type Pictures/gradient.six      a colour gradient (sixel)
+    Type Pictures/bars-2to1.six     colour bars with tall pixels (sixel)
+    Type Pictures/bars.kitty        colour bars, the last see-through (kitty)
+    Type Pictures/kickstart.kitty   the Kickstart hand, a PNG (kitty)
     Pictures/ShowPic Pictures/kickstart.png
     Pictures/ShowPic Pictures/kickstart.png WIDTH 30
 
 `ShowPic FILE [WIDTH w] [HEIGHT h]` shows any picture file the Amiga
 can read, as `imgcat` does on Linux (w and h: letters, `300px`, or
 `50%` of the window). On a Linux host, over ssh or telnet:
-`img2sixel picture.png`, `chafa -f sixel picture.png`, or
-`imgcat picture.png`.
+`img2sixel picture.png`, `chafa -f sixel picture.png`,
+`imgcat picture.png`, or `kitty +kitten icat picture.png`.
 
-PNG and JPEG files, and pictures on screens of 256 colours or fewer,
-need `Parts/Pictures` (3.5 KB, loaded when the first picture needs it,
-gone when no tab holds a picture any more).
+PNG and JPEG files, kitty's packed pictures, and pictures on screens of
+256 colours or fewer need `Parts/Pictures` (5 KB, loaded when the first
+picture needs it, gone when no tab holds a picture any more).
 
 ## Tabs
 

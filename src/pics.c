@@ -7,7 +7,8 @@
  *  - pixels made screen pens for 8-bit cards and plain (AGA) screens: a
  *    colour cube as big as the screen's colours allow (6x6x6 on 256, the
  *    8 pure colours on 16), its pens asked of CTerm once (exact colours
- *    while there are free pens), ordered 4x4 dithering.
+ *    while there are free pens), ordered 4x4 dithering;
+ *  - kitty's pictures sent zlib'ed (o=z): unpacked (inflate.c).
  */
 #include "cterm.h"
 
@@ -159,7 +160,10 @@ static void p_pens(const UBYTE *rgb, int n, int x, int y, UBYTE *out)
     }
 }
 
-static const struct PicsPart fns = { p_decode, p_decode_free, p_pens };
+/* ---- kitty's o=z: zlib data unpacked ---- */
+#include "inflate.c"
+
+static const struct PicsPart fns = { p_decode, p_decode_free, p_pens, zinflate };
 
 APTR part_main(void)
 {

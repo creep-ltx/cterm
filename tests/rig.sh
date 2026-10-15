@@ -30,7 +30,8 @@ put() {
   if [ -n "$PICS" ]; then
     mkdir -p "$H/T/CT/Pictures"
     cp "$D"/tests/pictures/*.six "$D"/tests/pictures/*.png \
-       "$D"/tests/pictures/*.iterm "$D"/ShowPic "$H/T/CT/Pictures/" 2>/dev/null
+       "$D"/tests/pictures/*.iterm "$D"/tests/pictures/*.kitty "$D"/ShowPic \
+       "$H/T/CT/Pictures/" 2>/dev/null
   fi
 }
 seed() {

@@ -13,7 +13,8 @@
 #define REPLYMAX 256
 
 enum { S_GROUND, S_ESC, S_ESC_INT, S_CSI, S_OSC, S_OSC_ESC, S_STR,
-       S_STR_ESC, S_DCS, S_SIXEL, S_SIXEL_ESC, S_FILE, S_FILE_ESC };
+       S_STR_ESC, S_DCS, S_SIXEL, S_SIXEL_ESC, S_FILE, S_FILE_ESC, S_APC,
+       S_APC_ESC };
 
 struct Sixel;
 struct FileIn;
@@ -131,7 +132,11 @@ struct Vt {
                                            its line this long): a new
                                            line now is not a second one */
     struct Sixel *sx;                   /* a sixel picture coming in */
-    struct FileIn *fi;                  /* an iTerm2 file coming in */
+    struct FileIn *fi;                  /* an iTerm2 file or kitty's
+                                           picture coming in */
+    int pic_busy;                       /* a picture being copied: not
+                                           dropped to make room */
+    uint32_t kidn;                      /* kitty's ids given (I= alone) */
 };
 
 /* ---- small things ---------------------------------------------------- */
@@ -1365,6 +1370,7 @@ int (*vt_decode)(const uint8_t *, long, uint32_t **, int *, int *);
 void (*vt_decode_free)(uint32_t *);
 void *(*vt_palloc)(long n);
 void (*vt_pfree)(void *p);
+long (*vt_inflate)(const uint8_t *, long, uint8_t *, long);
 
 static void *palloc(long n)
 {
@@ -1402,11 +1408,71 @@ static COLD int pic_room(Vt *v, long n)
     return 1;
 }
 
+/* The same without making room (dropping none): a copy for a new letter
+ * size is not worth another picture. */
+static COLD int pic_fits(Vt *v, long n)
+{
+    if (n > 0 && (v->pic_bytes + n > v->pic_cap || (vt_room && !vt_room(n))))
+        return 0;
+    v->pic_bytes += n;
+    return 1;
+}
+
 static COLD void pic_free(Vt *v, VtPic *p)
 {
     v->pic_bytes -= (long)p->w * p->h * 3;
+    if (p->orgb) {
+        v->pic_bytes -= (long)p->ow * p->oh * 3;
+        pfree(p->orgb);
+    }
     pfree(p->rgb);
     free(p);
+}
+
+/* A picture w x h, its pixels not yet set (counted). NULL: no room. */
+static COLD VtPic *pic_new(Vt *v, int w, int h)
+{
+    VtPic *p = calloc(1, sizeof *p);
+    long n = (long)w * h * 3;
+    if (p && pic_room(v, n)) {
+        if ((p->rgb = palloc(n))) {
+            p->w = w;
+            p->h = h;
+            p->cw = v->pcw;
+            p->ch = v->pch;
+            return p;
+        }
+        v->pic_bytes -= n;
+    }
+    free(p);
+    return NULL;
+}
+
+/* Part of a picture (x0, y0, w x h of src, its rows stride pixels apart)
+ * scaled to tw x th into d, R G B: nearest pixel, in 16.16 steps (no
+ * divide a pixel). bpp: 3 (R G B) or 4 (0xAARRGGBB words, vt_decode's). */
+static COLD void pic_scale(uint8_t *d, const uint8_t *src, int bpp, int stride,
+                           int x0, int y0, int w, int h, int tw, int th)
+{
+    uint32_t sx, dx = ((uint32_t)w << 16) / tw;
+    int x, y;
+    for (y = 0; y < th; y++) {
+        const uint8_t *row = src + ((long)(y0 + (long)y * h / th) * stride +
+                                    x0) * bpp;
+        for (x = 0, sx = 0; x < tw; x++, sx += dx) {
+            const uint8_t *q = row + (sx >> 16) * bpp;
+            if (bpp == 4) {
+                uint32_t c = *(const uint32_t *)q;
+                *d++ = c >> 16;
+                *d++ = c >> 8;
+                *d++ = c;
+            } else {
+                *d++ = q[0];
+                *d++ = q[1];
+                *d++ = q[2];
+            }
+        }
+    }
 }
 
 /* fn on every row that may hold picture cells */
@@ -1445,31 +1511,42 @@ static COLD void pic_blank(VtCell *r, uint8_t *map)
             r[x].cp = r[x].pen = 0;
 }
 
-/* The pictures no cell shows go; then, while need more bytes would pass
- * the cap, the oldest, and their cells become blanks. */
+/* The pictures no cell shows go (but kitty's kept ones); then, while
+ * need more bytes would pass the cap, kitty's kept ones no cell shows,
+ * then the oldest, and their cells become blanks. One being copied
+ * (pic_busy) stays. */
 static COLD void pic_gc(Vt *v, long need)
 {
-    uint8_t *map;
-    int i, n = 0, drop = 0;
-    if (!v->npics || !(map = calloc(1024, 1)))
+    uint8_t *map, *gone;
+    int i, n = 0, drop = 0, pass;
+    if (!v->npics || !(map = calloc(2048, 1)))
         return;
+    gone = map + 1024;
     pic_rows(v, pic_mark, map);
-    for (i = 0; i < v->npics; i++)
-        if (MAPPED(map, v->pics[i]->id))
-            v->pics[n++] = v->pics[i];
+    for (i = 0; i < v->npics; i++) {
+        VtPic *p = v->pics[i];
+        if (MAPPED(map, p->id) || p->kept || p->id == v->pic_busy)
+            v->pics[n++] = p;
         else
-            pic_free(v, v->pics[i]);
-    v->npics = n;
-    memset(map, 0, 1024);
-    while (v->npics && v->pic_bytes + need > v->pic_cap) {
-        VtPic *p = v->pics[0];
-        map[p->id >> 3] |= 1 << (p->id & 7);
-        pic_free(v, p);
-        memmove(v->pics, v->pics + 1, --v->npics * sizeof *v->pics);
-        drop = 1;
+            pic_free(v, p);
     }
+    v->npics = n;
+    for (pass = 0; pass < 2; pass++)
+        for (i = 0; i < v->npics && v->pic_bytes + need > v->pic_cap; ) {
+            VtPic *p = v->pics[i];
+            if (p->id == v->pic_busy || (!pass && MAPPED(map, p->id))) {
+                i++;
+                continue;
+            }
+            gone[p->id >> 3] |= 1 << (p->id & 7);
+            if (MAPPED(map, p->id))
+                drop = 1;
+            pic_free(v, p);
+            memmove(v->pics + i, v->pics + i + 1,
+                    (--v->npics - i) * sizeof *v->pics);
+        }
     if (drop) {
-        pic_rows(v, pic_blank, map);
+        pic_rows(v, pic_blank, gone);
         dirty_all(v);
     }
     v->pic_last = -1;
@@ -1512,20 +1589,28 @@ static COLD int pic_add(Vt *v, VtPic *p)
             ;
     } while (i < v->npics);
     p->id = v->pic_id;
+    p->ow = p->w;                       /* as it was made */
+    p->oh = p->h;
+    p->ocw = p->cw;
+    p->och = p->ch;
     v->pics[v->npics++] = p;
     return 1;
 }
 
-/* At the cursor (sixel scrolling off: the screen's top left), as rows of
- * tiles; the screen scrolls for it. The cursor goes to the line below it
- * (sixel, iTerm2), or right of its last row (sixel with 8452). */
-static COLD void pic_place(Vt *v, VtPic *p, int right)
+/* How a picture is placed (pic_place) */
+enum { PL_SIXEL, PL_FILE, PL_STAY };
+
+/* A picture in the table at the cursor (sixel scrolling off: the screen's
+ * top left), as rows of tiles; the screen scrolls for it. The cursor goes
+ * to the line below it (sixel; iTerm2's and kitty's: PL_FILE), or right
+ * of its last row (sixel with 8452). PL_STAY (kitty's C=1) and sixel
+ * scrolling off: no scrolling (cut at the bottom), the cursor stays. */
+static COLD void pic_place(Vt *v, VtPic *p, int how)
 {
     int nc = (p->w + p->cw - 1) / p->cw, nr = (p->h + p->ch - 1) / p->ch;
-    int fixed = !right && v->sdm, x0 = fixed ? 0 : v->x, y = fixed ? 0 : v->y;
+    int top = how == PL_SIXEL && v->sdm, fixed = top || how == PL_STAY;
+    int x0 = top ? 0 : v->x, y = top ? 0 : v->y;
     int i, j, nx = nc;
-    if (!pic_add(v, p))
-        return;
     if (x0 + nx > v->cols)
         nx = v->cols - x0;              /* cut at the right edge */
     v->pending = 0;
@@ -1553,7 +1638,7 @@ static COLD void pic_place(Vt *v, VtPic *p, int right)
     }
     if (fixed)
         return;                         /* the cursor stays */
-    if (v->sright && !right) {
+    if (v->sright && how == PL_SIXEL) {
         v->x = x0 + nx;
         if (v->x >= v->cols) {
             v->x = v->cols - 1;
@@ -1562,7 +1647,7 @@ static COLD void pic_place(Vt *v, VtPic *p, int right)
     } else {
         linefeed(v);
         v->x = x0;
-        if ((v->picnl = right)) {       /* iTerm2's: see pic_nl */
+        if ((v->picnl = how == PL_FILE)) {  /* iTerm2's: see pic_nl */
             v->picx = v->x;
             v->picy = v->y;
             v->picl = (int)RLEN(row(v, v->y));
@@ -1591,7 +1676,10 @@ struct Sixel {
     int maxw, maxh;                     /* the most it may be */
     int w, h;                           /* drawn so far */
     int rw, rh;                         /* the raster attributes' size */
-    int x, y;                           /* the next sixel: column, band */
+    int x, y;                           /* the next sixel: column, band
+                                           (in pixels) */
+    int ax, ay;                         /* a sixel's pixel is ax wide, ay
+                                           tall (the aspect: P1, "Pan;Pad) */
     uint32_t col, reg[256];
     int cmd, par[5], npar, rep;
     int full;                           /* memory ran out: the rest cut */
@@ -1678,10 +1766,11 @@ static COLD int sixel_grow(Vt *v, struct Sixel *s, int nw, int nh)
     return np != NULL;
 }
 
-/* One sixel: a column of six pixels (bits, top first), rep times */
+/* One sixel: a column of six pixels (bits, top first), rep times; each
+ * of its pixels ax x ay of the picture's */
 static COLD void sixel_put(Vt *v, struct Sixel *s, int bits)
 {
-    int n = s->rep, x = s->x, m, i, k;
+    int n = s->rep * s->ax, x = s->x, m, i, j, k;
     s->rep = 1;
     s->x += n;
     if (s->x > (1 << 20))
@@ -1690,24 +1779,28 @@ static COLD void sixel_put(Vt *v, struct Sixel *s, int bits)
         return;
     if (x + n > s->maxw)
         n = s->maxw - x;
-    i = bits & 32 ? 6 : bits & 16 ? 5 : bits & 8 ? 4 : bits & 4 ? 3
-      : bits & 2 ? 2 : 1;               /* the rows it reaches */
+    i = (bits & 32 ? 6 : bits & 16 ? 5 : bits & 8 ? 4 : bits & 4 ? 3
+       : bits & 2 ? 2 : 1) * s->ay;     /* the rows it reaches */
     if (x + n > s->aw || s->y + i > s->ah)
         sixel_grow(v, s, x + n > s->aw ? x + n : s->aw,
                    s->y + i > s->ah ? s->y + i : s->ah);
     m = x + n <= s->aw ? n : s->aw - x;
     if (m <= 0)
         return;
-    for (i = 0; i < 6 && s->y + i < s->ah; i++)
-        if (bits & 1 << i) {
-            uint8_t *p = s->px + ((long)(s->y + i) * s->aw + x) * 3;
-            uint8_t r = s->col >> 16, g = s->col >> 8, b = s->col;
-            for (k = 0; k < m; k++, p += 3) {
-                p[0] = r; p[1] = g; p[2] = b;
+    for (i = 0; i < 6; i++)
+        if (bits & 1 << i)
+            for (j = 0; j < s->ay; j++) {
+                int y = s->y + i * s->ay + j;
+                uint8_t *p, r = s->col >> 16, g = s->col >> 8, b = s->col;
+                if (y >= s->ah)
+                    break;
+                p = s->px + ((long)y * s->aw + x) * 3;
+                for (k = 0; k < m; k++, p += 3) {
+                    p[0] = r; p[1] = g; p[2] = b;
+                }
+                if (y + 1 > s->h)
+                    s->h = y + 1;
             }
-            if (s->y + i + 1 > s->h)
-                s->h = s->y + i + 1;
-        }
     if (x + m > s->w)
         s->w = x + m;
 }
@@ -1719,9 +1812,19 @@ static COLD void sixel_cmd(Vt *v, struct Sixel *s)
     if (s->cmd == '!')
         s->rep = a[0] > 0 ? a[0] : 1;
     else if (s->cmd == '"') {
+        /* "Pan;Pad;Ph;Pv: a pixel Pan/Pad as tall as wide (the nearest
+         * whole number of the picture's pixels: 2:1 two rows), the size */
+        if (s->npar >= 2 && a[0] > 0 && a[1] > 0) {
+            s->ay = (a[0] + a[1] / 2) / a[1];
+            s->ax = a[1] > a[0] ? (a[1] + a[0] / 2) / a[0] : 1;
+            if (s->ay < 1) s->ay = 1;
+            if (s->ay > 10) s->ay = 10;
+            if (s->ax > 10) s->ax = 10;
+        }
         if (s->npar >= 4 && a[2] > 0 && a[3] > 0) {
-            s->rw = a[2] < s->maxw ? a[2] : s->maxw;
-            s->rh = a[3] < s->maxh ? a[3] : s->maxh;
+            long rw = (long)a[2] * s->ax, rh = (long)a[3] * s->ay;
+            s->rw = rw < s->maxw ? (int)rw : s->maxw;
+            s->rh = rh < s->maxh ? (int)rh : s->maxh;
             sixel_grow(v, s, s->rw, s->rh);
         }
     } else if (s->cmd == '#') {
@@ -1768,7 +1871,7 @@ static COLD void sixel_byte(Vt *v, int c)
     else if (c == '-') {
         s->x = 0;
         if (s->y < (1 << 20))
-            s->y += 6;
+            s->y += 6 * s->ay;
     }
 }
 
@@ -1777,9 +1880,15 @@ static COLD int sixel_begin(Vt *v)
 {
     struct Sixel *s;
     int x0 = v->sdm ? 0 : v->x, i;
+    int p1 = v->nparam > 0 && v->param[0] > 0 ? v->param[0] : 0;
     if (!v->pic_on || v->pcw <= 0 || v->pch <= 0 ||
         !(s = calloc(1, sizeof *s)))
         return 0;
+    /* P1, the VT340's aspect: 0, 1 (and none), 5, 6 2:1; 2 5:1; 3, 4
+     * 3:1; 7-9 1:1. Raster attributes (what img2sixel, chafa send: 1:1)
+     * say it again. */
+    s->ay = p1 >= 7 ? 1 : p1 == 2 ? 5 : p1 == 3 || p1 == 4 ? 3 : 2;
+    s->ax = 1;
     s->maxw = (v->cols - x0) * v->pcw;
     if (s->maxw > PIC_MAXT * v->pcw)
         s->maxw = PIC_MAXT * v->pcw;
@@ -1833,10 +1942,14 @@ static COLD void sixel_end(Vt *v, int keep)
     p->cw = v->pcw;
     p->ch = v->pch;
     free(s);
-    pic_place(v, p, 0);
+    if (pic_add(v, p))
+        pic_place(v, p, PL_SIXEL);
 }
 
 /* ---- iTerm2's inline files: OSC 1337 ; File = args : base64 ST ---- */
+
+/* What is coming in a FileIn */
+enum { FI_FILE, FI_PART, FI_KITTY };
 
 struct FileIn {
     uint8_t *buf;
@@ -1846,6 +1959,11 @@ struct FileIn {
     int wv, hv;                         /* width=, height=: how many */
     char wu, hu;                        /* ... of what: c cells, p pixels,
                                            % of the screen; 0 auto */
+    int kind;                           /* FI_: iTerm2's File=, its
+                                           MultipartFile (FilePart pieces
+                                           until FileEnd), kitty's */
+    int more;                           /* kitty's m=1: more chunks */
+    uint32_t kv[52];                    /* kitty's keys, A-Z a-z (KV) */
 };
 
 static COLD void file_arg(int *val, char *unit, const char *s)
@@ -1857,11 +1975,16 @@ static COLD void file_arg(int *val, char *unit, const char *s)
     *unit = !n ? 0 : *s == 'p' ? 'p' : *s == '%' ? '%' : 'c';
 }
 
-/* The arguments before ':' are in v->osc after "1337;File=". */
-static COLD int file_begin(Vt *v)
+static COLD void file_end(Vt *v, int keep);
+
+/* The arguments are in v->osc from off on (after "1337;File=" or
+ * "1337;MultipartFile="). One unfinished before: dropped. */
+static COLD int file_begin(Vt *v, int off)
 {
     struct FileIn *f;
-    char *a = v->osc + 10, *e = v->osc + v->osclen;
+    char *a = v->osc + off, *e = v->osc + v->osclen;
+    if (v->fi)
+        file_end(v, 0);
     if (!v->pic_on || !vt_decode || v->pcw <= 0 ||
         !(f = calloc(1, sizeof *f)))
         return 0;
@@ -1896,6 +2019,10 @@ static COLD void file_byte(Vt *v, int c)
     int d = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26
           : c >= '0' && c <= '9' ? c - '0' + 52 : c == '+' ? 62
           : c == '/' ? 63 : -1;
+    if (c == '=')
+        f->bits = 0;                    /* the end of a piece: what is left
+                                           over is no byte (kitty's chunks
+                                           may each end so) */
     if (d < 0 || f->full || !f->inl)
         return;                         /* '=', line breaks; a download */
     f->acc = f->acc << 6 | d;
@@ -1930,18 +2057,18 @@ static COLD int file_size(int val, char unit, int cell, int whole)
 }
 
 /* ST: decoded by the host, sized as asked (and to fit the width left),
- * shown at the cursor */
+ * shown at the cursor. keep 0: whatever is coming in is dropped. */
 static COLD void file_end(Vt *v, int keep)
 {
     struct FileIn *f = v->fi;
     uint32_t *argb = NULL;
-    int w = 0, h = 0, tw, th, x, y, ok;
+    int w = 0, h = 0, tw, th, x, ok;
     VtPic *p;
     if (!f)
         return;
     v->fi = NULL;
-    ok = keep && f->inl && !f->full && f->len && vt_decode &&
-         vt_decode(f->buf, f->len, &argb, &w, &h) && argb;
+    ok = keep && f->kind == FI_FILE && f->inl && !f->full && f->len &&
+         vt_decode && vt_decode(f->buf, f->len, &argb, &w, &h) && argb;
     pfree(f->buf);
     v->pic_bytes -= f->cap;
     if (!ok || w <= 0 || h <= 0) {
@@ -1977,34 +2104,451 @@ static COLD void file_end(Vt *v, int keep)
     if (tw < 1) tw = 1;
     if (th < 1) th = 1;
     free(f);
-    p = calloc(1, sizeof *p);
-    if (p && pic_room(v, (long)tw * th * 3)) {
-        if ((p->rgb = palloc((long)tw * th * 3))) {
-            /* nearest pixel, in 16.16 steps (no divide a pixel) */
-            uint32_t sx, dx = ((uint32_t)w << 16) / tw;
-            uint8_t *d = p->rgb;
-            for (y = 0; y < th; y++) {
-                const uint32_t *srow = argb + (long)y * h / th * w;
-                for (x = 0, sx = 0; x < tw; x++, sx += dx) {
-                    uint32_t c = srow[sx >> 16];
-                    *d++ = c >> 16;
-                    *d++ = c >> 8;
-                    *d++ = c;
-                }
-            }
-            p->w = tw;
-            p->h = th;
-            p->cw = v->pcw;
-            p->ch = v->pch;
-        } else
-            v->pic_bytes -= (long)tw * th * 3;
-    }
+    if ((p = pic_new(v, tw, th)))
+        pic_scale(p->rgb, (const uint8_t *)argb, 4, w, 0, 0, w, h, tw, th);
     if (vt_decode_free)
         vt_decode_free(argb);
-    if (p && p->rgb)
-        pic_place(v, p, 1);
+    if (p && pic_add(v, p))
+        pic_place(v, p, PL_FILE);
+}
+
+/* OSC 1337 but File= (whose data comes as File's): iTerm2's picture in
+ * pieces, MultipartFile=args, FilePart=base64 (as S_FILE), FileEnd -
+ * the same as one File= with all of it. */
+static COLD void osc_1337(Vt *v, int off)
+{
+    const char *s = v->osc + off;
+    if (!strncmp(s, "MultipartFile=", 14)) {
+        if (file_begin(v, off + 14))
+            v->fi->kind = FI_PART;
+    } else if (!strcmp(s, "FileEnd") && v->fi && v->fi->kind == FI_PART) {
+        v->fi->kind = FI_FILE;
+        file_end(v, 1);
+    }
+}
+
+/* ---- kitty's graphics: APC G keys ; base64 ST ----
+ * Transmitted (a=t, kept by its id) and shown (a=T, a=p) as tiles as the
+ * others are; RGB (f=24), RGBA (f=32, over the background) or a PNG
+ * (f=100, through vt_decode), zlib'ed or not (o=z, vt_inflate), in
+ * chunks (m=1); sized in cells (c=, r=), cut (x, y, w, h); deleted
+ * (a=d); asked (a=q). Only data in the code itself (t=d): no files. */
+
+#define KV(f, c) ((f)->kv[(c) >= 'a' ? (c) - 'a' + 26 : (c) - 'A'])
+
+/* the keys in v->osc after the G: a=T,f=100,i=7 (a letter or a number) */
+static COLD void kitty_keys(Vt *v, uint32_t *kv)
+{
+    const char *s = v->osc + 1, *e = v->osc + v->osclen;
+    while (s < e) {
+        int k = *s;
+        if (s + 1 < e && s[1] == '=' &&
+            ((k >= 'a' && k <= 'z') || (k >= 'A' && k <= 'Z'))) {
+            uint32_t val = 0;
+            s += 2;
+            if (s < e && *s == '-')
+                s++;                    /* z<0: under the text (it is not) */
+            if (s < e && (*s < '0' || *s > '9'))
+                val = (uint8_t)*s++;
+            else
+                while (s < e && *s >= '0' && *s <= '9')
+                    val = val * 10 + (uint32_t)(*s++ - '0');
+            kv[k >= 'a' ? k - 'a' + 26 : k - 'A'] = val;
+        }
+        while (s < e && *s != ',')
+            s++;
+        s++;
+    }
+}
+
+/* At ';' (its data follows) or ST: the keys taken. The first chunk
+ * brings them all, the next ones only m= (q=). 0: swallowed. */
+static COLD int kitty_begin(Vt *v)
+{
+    struct FileIn *f = v->fi;
+    uint32_t kv[52];
+    memset(kv, 0, sizeof kv);
+    kitty_keys(v, kv);
+    if (f && f->kind == FI_KITTY && f->more) {
+        f->more = kv['m' - 'a' + 26] == 1;
+        return 1;
+    }
+    if (f)
+        file_end(v, 0);                 /* one unfinished: dropped */
+    if (!(f = calloc(1, sizeof *f)))
+        return 0;
+    memcpy(f->kv, kv, sizeof kv);
+    f->kind = FI_KITTY;
+    f->inl = 1;
+    f->more = KV(f, 'm') == 1;
+    v->fi = f;
+    return 1;
+}
+
+/* kitty's answer, when it gave an id or number and q= does not say no */
+static COLD void kitty_reply(Vt *v, struct FileIn *f, uint32_t id,
+                             const char *err)
+{
+    char b[96];
+    int n;
+    if ((!id && !KV(f, 'I')) || KV(f, 'q') >= (err ? 2u : 1u))
+        return;
+    n = sprintf(b, "\x1b_G");
+    if (id)
+        n += sprintf(b + n, "i=%lu", (unsigned long)id);
+    if (KV(f, 'I'))
+        n += sprintf(b + n, "%sI=%lu", id ? "," : "",
+                     (unsigned long)KV(f, 'I'));
+    if (KV(f, 'p'))
+        n += sprintf(b + n, ",p=%lu", (unsigned long)KV(f, 'p'));
+    sprintf(b + n, ";%.48s\x1b\\", err ? err : "OK");
+    reply(v, b);
+}
+
+/* The data as a picture of its own size (R G B), not in the table.
+ * NULL: *err says why. */
+static COLD VtPic *kitty_image(Vt *v, struct FileIn *f, const char **err)
+{
+    int fmt = KV(f, 'f') ? (int)KV(f, 'f') : 32, bpp = fmt == 24 ? 3 : 4;
+    int w = (int)KV(f, 's'), h = (int)KV(f, 'v'), z = KV(f, 'o') == 'z';
+    uint8_t *raw = f->buf, bg[3];
+    uint32_t *argb = NULL;
+    long i, need = 0;
+    VtPic *p = NULL;
+    if (KV(f, 't') && KV(f, 't') != 'd') {
+        *err = "EBADF:only data in the code (t=d)";
+        return NULL;
+    }
+    if ((fmt != 24 && fmt != 32 && fmt != 100) || (z && fmt == 100) ||
+        (z && !vt_inflate) || (fmt == 100 && !vt_decode)) {
+        *err = "EINVAL:format not supported";
+        return NULL;
+    }
+    if (f->full || !f->len) {
+        *err = f->full ? "ENOMEM:too big" : "ENODATA:no data";
+        return NULL;
+    }
+    if (fmt == 100) {
+        if (!vt_decode(f->buf, f->len, &argb, &w, &h) || !argb) {
+            *err = "EBADPNG:not a picture";
+            return NULL;
+        }
+        raw = (uint8_t *)argb;
+    } else {
+        if (w <= 0 || h <= 0 || w > 8192 || h > 8192) {
+            *err = "EINVAL:no size (s=, v=)";
+            return NULL;
+        }
+        need = (long)w * h * bpp;
+        if (z) {
+            raw = NULL;
+            if (pic_room(v, need) && !(raw = palloc(need)))
+                v->pic_bytes -= need;
+            if (!raw) {
+                *err = "ENOMEM:too big";
+                return NULL;
+            }
+            if (vt_inflate(f->buf, f->len, raw, need) != need) {
+                pfree(raw);
+                v->pic_bytes -= need;
+                *err = "EINVAL:broken zlib data";
+                return NULL;
+            }
+        } else if (f->len < need) {
+            *err = "ENODATA:too little data";
+            return NULL;
+        }
+    }
+    if (raw != f->buf) {                /* what came in: done with */
+        pfree(f->buf);
+        v->pic_bytes -= f->cap;
+        f->buf = NULL;
+        f->cap = f->len = 0;
+    }
+    if (!(p = pic_new(v, w, h)))
+        *err = "ENOMEM:too big";
+    bg[0] = v->pic_bg >> 16; bg[1] = v->pic_bg >> 8; bg[2] = v->pic_bg;
+    for (i = 0; p && i < (long)w * h; i++) {
+        uint8_t *d = p->rgb + i * 3;
+        const uint8_t *q = raw + i * bpp;
+        int k;
+        if (argb) {
+            uint32_t c = argb[i];
+            d[0] = c >> 16; d[1] = c >> 8; d[2] = c;
+        } else if (bpp == 3) {
+            d[0] = q[0]; d[1] = q[1]; d[2] = q[2];
+        } else                          /* R G B A: over the background */
+            for (k = 0; k < 3; k++)
+                d[k] = bg[k] + (q[k] - bg[k]) * q[3] / 255;
+    }
+    if (argb && vt_decode_free)
+        vt_decode_free(argb);
+    else if (z) {
+        pfree(raw);
+        v->pic_bytes -= need;
+    }
+    return p;
+}
+
+/* kitty's kept image by id, else by number (the newest) */
+static COLD VtPic *kitty_find(Vt *v, uint32_t id, uint32_t num)
+{
+    int i;
+    for (i = v->npics - 1; i >= 0; i--) {
+        VtPic *p = v->pics[i];
+        if (p->kept && (id ? p->kid == id : num && p->knum == num))
+            return p;
+    }
+    return NULL;
+}
+
+/* src shown at the cursor as f's keys say: its part x, y, w, h (pixels,
+ * 0: all), c x r cells (one of them: in shape; none: its own size), cut
+ * at the right edge; C=1: the cursor stays. intab: src is in the table
+ * (kept from before); else it goes into it when kept, or is freed. */
+static COLD void kitty_put(Vt *v, struct FileIn *f, VtPic *src, int intab)
+{
+    const uint8_t *s = src->orgb ? src->orgb : src->rgb;  /* as it came */
+    int sw = src->orgb ? src->ow : src->w, sh = src->orgb ? src->oh : src->h;
+    int x0 = (int)KV(f, 'x'), y0 = (int)KV(f, 'y'), w = (int)KV(f, 'w');
+    int h = (int)KV(f, 'h'), c = (int)KV(f, 'c'), r = (int)KV(f, 'r');
+    int tw, th, left = (v->cols - v->x) * v->pcw;
+    VtPic *p = src;
+    if (x0 >= sw || y0 >= sh || x0 < 0 || y0 < 0)
+        x0 = y0 = 0;
+    if (w <= 0 || w > sw - x0) w = sw - x0;
+    if (h <= 0 || h > sh - y0) h = sh - y0;
+    if (c > PIC_MAXT) c = PIC_MAXT;
+    if (r > PIC_MAXT) r = PIC_MAXT;
+    tw = c ? c * v->pcw : r ? (int)((long)w * r * v->pch / h) : w;
+    th = r ? r * v->pch : c ? (int)((long)h * tw / w) : h;
+    if (tw < 1) tw = 1;
+    if (th < 1) th = 1;
+    if (tw > left && left > 0) {        /* cut at the right edge */
+        w = (int)((long)w * left / tw);
+        tw = left;
+    }
+    if (th > PIC_MAXT * v->pch) {       /* and at the most tiles */
+        h = (int)((long)h * PIC_MAXT * v->pch / th);
+        th = PIC_MAXT * v->pch;
+    }
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    if (tw == sw && th == sh && w == sw && h == sh && !src->orgb &&
+        src->cw == v->pcw && src->ch == v->pch &&
+        (!intab || (src->ocw == v->pcw && src->och == v->pch))) {
+        if (!intab && !pic_add(v, src))  /* itself, as it is */
+            return;
+    } else {
+        v->pic_busy = intab ? src->id : 0;
+        if ((p = pic_new(v, tw, th))) {
+            pic_scale(p->rgb, s, 3, sw, x0, y0, w, h, tw, th);
+            p->kitty = 1;
+            p->kid = src->kid;
+            p->knum = src->knum;
+        }
+        v->pic_busy = 0;
+        if (!intab && !src->kept)
+            pic_free(v, src);
+        else if (!intab)
+            pic_add(v, src);            /* (freed when there is no room) */
+        if (!p || !pic_add(v, p))
+            return;
+    }
+    pic_place(v, p, KV(f, 'C') == 1 ? PL_STAY : PL_FILE);
+}
+
+/* blank (in map) the cells of the pictures on the screen in use only */
+static COLD void kitty_blank_screen(Vt *v, uint8_t *map)
+{
+    int y;
+    for (y = 0; y < v->rows; y++)
+        if (RPIC(row(v, y)))
+            pic_blank(row(v, y), map);
+}
+
+/* a=d: d=a all on the screen; i by id, n by number, r ids x..y
+ * (everywhere); c at the cursor, p at cell x;y, x column, y row (on the
+ * screen). Upper case: their kept images go too. */
+static COLD void kitty_delete(Vt *v, struct FileIn *f)
+{
+    int d = KV(f, 'd') ? (int)KV(f, 'd') : 'a', i, x, y, all;
+    int up = d >= 'A' && d <= 'Z', lo = up ? d + 32 : d;
+    uint32_t id = KV(f, 'i');
+    uint8_t *map = calloc(1024, 1);
+    if (!map)
+        return;
+    if (lo == 'n') {
+        VtPic *k = kitty_find(v, 0, KV(f, 'I'));
+        id = k ? k->kid : 0;
+        lo = 'i';
+    }
+    all = lo == 'i' || lo == 'r';
+    for (i = 0; i < v->npics; i++) {
+        VtPic *p = v->pics[i];
+        if (p->kitty && (lo == 'a' || (lo == 'i' && id && p->kid == id) ||
+                         (lo == 'r' && p->kid && p->kid >= KV(f, 'x') &&
+                          p->kid <= KV(f, 'y')))) {
+            map[p->id >> 3] |= 1 << (p->id & 7);
+            if (up)
+                p->kept = 0;
+        }
+    }
+    if (lo == 'c' || lo == 'p' || lo == 'x' || lo == 'y')
+        for (y = 0; y < v->rows; y++) {
+            VtCell *r = row(v, y);
+            int n = (int)RLEN(r);
+            if (!RPIC(r))
+                continue;
+            for (x = 0; x < n; x++) {
+                const VtPic *p;
+                if (!VT_IS_PIC(r[x].cp) ||
+                    !(lo == 'c' ? x == v->x && y == v->y
+                    : lo == 'p' ? x + 1 == (int)KV(f, 'x') && y + 1 == (int)KV(f, 'y')
+                    : lo == 'x' ? x + 1 == (int)KV(f, 'x') : y + 1 == (int)KV(f, 'y')) ||
+                    !(p = vt_pic(v, r[x].cp)) || !p->kitty)
+                    continue;
+                map[p->id >> 3] |= 1 << (p->id & 7);
+                if (up)
+                    ((VtPic *)p)->kept = 0;
+            }
+        }
+    if (all)
+        pic_rows(v, pic_blank, map);
     else
-        free(p);
+        kitty_blank_screen(v, map);
+    free(map);
+    pic_gc(v, 0);
+    dirty_all(v);
+}
+
+/* The last chunk in: what the keys ask done */
+static COLD void kitty_end(Vt *v)
+{
+    struct FileIn *f = v->fi;
+    int a = KV(f, 'a') ? (int)KV(f, 'a') : 't';
+    uint32_t id = KV(f, 'i'), num = KV(f, 'I');
+    const char *err = NULL;
+    VtPic *p = NULL;
+    v->fi = NULL;
+    if (KV(f, 'U') && (a == 'T' || a == 'p')) {
+        err = "EINVAL:no unicode placeholders";  /* (tmux's way): its */
+        a = a == 'T' ? 't' : 0;         /* characters show as they are */
+    }
+    if (a == 't' || a == 'T' || a == 'q')
+        p = kitty_image(v, f, &err);
+    pfree(f->buf);
+    v->pic_bytes -= f->cap;
+    if (p && a == 'q') {
+        pic_free(v, p);                 /* only asked: it would be shown */
+        p = NULL;
+    } else if (p) {
+        VtPic *old;
+        if (num && !id)
+            id = 0x40000000u | (++v->kidn & 0x3FFFFFFF);
+        while (id && (old = kitty_find(v, id, 0)))
+            old->kept = 0;              /* the same id again: the new one */
+        p->kitty = 1;
+        p->kid = id;
+        p->knum = num;
+        p->kept = id != 0;
+        if (a == 'T')
+            kitty_put(v, f, p, 0);
+        else if (!id || !pic_add(v, p)) {
+            if (!id)
+                pic_free(v, p);         /* nothing could show it again */
+            else
+                err = "ENOMEM:too many";
+        }
+    } else if (a == 'p') {
+        if (!(p = kitty_find(v, id, num)))
+            err = "ENOENT:no such image";
+        else {
+            id = p->kid;
+            kitty_put(v, f, p, 1);
+        }
+    } else if (a == 'd')
+        kitty_delete(v, f);
+    else if (!err)
+        err = "EINVAL:not supported";
+    if (a != 'd')
+        kitty_reply(v, f, id, err);
+    free(f);
+}
+
+/* The end of an APC with no data (a=d, a=p, a=q, a last empty chunk) */
+static COLD void apc_done(Vt *v)
+{
+    if (v->osclen && v->osc[0] == 'G' && kitty_begin(v) && !v->fi->more)
+        kitty_end(v);
+}
+
+/* ST (ok) or CAN (not) after a File=, FilePart= or kitty's data */
+static COLD void file_stop(Vt *v, int ok)
+{
+    struct FileIn *f = v->fi;
+    if (!f || f->kind == FI_PART)
+        return;                         /* a MultipartFile's piece: more */
+    if (!ok)
+        file_end(v, 0);
+    else if (f->kind == FI_KITTY) {
+        if (!f->more)
+            kitty_end(v);
+    } else
+        file_end(v, 1);
+}
+
+/* The letters' size changed: each picture scaled to the new cell in its
+ * box of cells (in shape, from its pixels as they came, which are kept),
+ * or - where the copy does not fit in the cap (no picture is dropped
+ * for it) - its own pixels cut at the new cell size. Back at the size
+ * it came for: the copy goes. */
+static COLD void pic_recut(Vt *v)
+{
+    int i, cw = v->pcw, ch = v->pch;
+    for (i = 0; i < v->npics; i++) {
+        VtPic *p = v->pics[i];
+        int tw, th;
+        long n;
+        uint8_t *np = NULL;
+        if (p->cw == cw && p->ch == ch)
+            continue;
+        if (p->orgb) {                  /* the last copy: gone */
+            v->pic_bytes -= (long)p->w * p->h * 3;
+            pfree(p->rgb);
+            p->rgb = p->orgb;
+            p->orgb = NULL;
+            p->w = p->ow;
+            p->h = p->oh;
+        }
+        p->cw = cw;
+        p->ch = ch;
+        if (cw == p->ocw && ch == p->och)
+            continue;
+        if ((long)cw * p->och <= (long)ch * p->ocw) {
+            tw = (int)((long)p->ow * cw / p->ocw);
+            th = (int)((long)p->oh * cw / p->ocw);
+        } else {
+            tw = (int)((long)p->ow * ch / p->och);
+            th = (int)((long)p->oh * ch / p->och);
+        }
+        if (tw < 1) tw = 1;
+        if (th < 1) th = 1;
+        n = (long)tw * th * 3;
+        if (!pic_fits(v, n))
+            continue;
+        if (!(np = palloc(n))) {
+            v->pic_bytes -= n;
+            continue;
+        }
+        pic_scale(np, p->rgb, 3, p->w, 0, 0, p->w, p->h, tw, th);
+        p->orgb = p->rgb;
+        p->rgb = np;
+        p->w = tw;
+        p->h = th;
+    }
+    v->pic_last = -1;
+    dirty_all(v);
 }
 
 /* A picture's data in one go (the state machine for each byte costs):
@@ -2041,9 +2585,12 @@ void vt_set_pictures(Vt *v, int on, long cap)
 
 void vt_set_cell_px(Vt *v, int cw, int ch, uint32_t bg)
 {
+    int changed = cw != v->pcw || ch != v->pch;
     v->pcw = cw;
     v->pch = ch;
     v->pic_bg = bg & 0xFFFFFF;
+    if (changed && v->npics && cw > 0 && ch > 0)
+        pic_recut(v);                   /* a new letter size */
 }
 
 long vt_pic_bytes(const Vt *v) { return v->pic_bytes; }
@@ -2223,6 +2770,8 @@ static void osc_done(Vt *v)
         osc_clip(v, v->osc + i + 1);
     else if (v->osc[i] == ';' && n == 8)
         osc_link(v, v->osc + i + 1);
+    else if (v->osc[i] == ';' && n == 1337)
+        osc_1337(v, i + 1);             /* iTerm2's picture in pieces */
 }
 
 /* ---- control characters ------------------------------------------- */
@@ -2297,7 +2846,14 @@ static int c1(Vt *v, int c)
         v->priv = v->priv2 = v->inter = 0;
         return 1;
     case 0x9D: v->state = S_OSC; v->osclen = 0; return 1;
-    case 0x98: case 0x9E: case 0x9F: v->state = S_STR; return 1;
+    case 0x9F:                                  /* APC: kitty's pictures */
+        if (v->pic_on) {
+            v->state = S_APC;
+            v->osclen = 0;
+            return 1;
+        }
+        /* fall through */
+    case 0x98: case 0x9E: v->state = S_STR; return 1;
     case 0x9C: return 1;                        /* ST alone */
     }
     return 0;
@@ -2491,8 +3047,13 @@ static void byte(Vt *v, int c)
             dcs_start(v);
             return;
         }
+        if (c == '_' && v->pic_on) {    /* APC: kitty's pictures */
+            v->state = S_APC;
+            v->osclen = 0;
+            return;
+        }
         if (c == 'X' || c == '^' || c == '_') {
-            v->state = S_STR;           /* APC too: kitty's pictures are
+            v->state = S_STR;           /* APC too (pictures off): kitty's
                                            swallowed, never shown as text */
             return;
         }
@@ -2556,8 +3117,13 @@ static void byte(Vt *v, int c)
         }
         if (c == 0x1B) { v->state = S_OSC_ESC; return; }
         if (c == ':' && v->osclen >= 10 && !memcmp(v->osc, "1337;File=", 10) &&
-            v->osclen < OSCMAX - 1 && file_begin(v)) {
+            v->osclen < OSCMAX - 1 && file_begin(v, 10)) {
             v->state = S_FILE;          /* iTerm2's picture: its base64 */
+            return;
+        }
+        if (c == '=' && v->osclen == 13 && v->fi && v->fi->kind == FI_PART &&
+            !memcmp(v->osc, "1337;FilePart", 13)) {
+            v->state = S_FILE;          /* a piece of a MultipartFile */
             return;
         }
         if (v->osclen < OSCMAX - 1)
@@ -2614,7 +3180,7 @@ static void byte(Vt *v, int c)
         if (c == 0x1B)
             v->state = S_FILE_ESC;
         else if (c == 7 || (c == 0x9C && !v->utf8) || c == 0x18 || c == 0x1A) {
-            file_end(v, c == 7 || c == 0x9C);
+            file_stop(v, c == 7 || c == 0x9C);
             v->state = S_GROUND;
         } else
             file_byte(v, c);
@@ -2627,7 +3193,32 @@ static void byte(Vt *v, int c)
         if (v->state == S_SIXEL_ESC)
             sixel_end(v, 1);
         else
-            file_end(v, 1);
+            file_stop(v, 1);
+        v->state = S_ESC;
+        v->inter = 0;
+        byte(v, c);
+        return;
+
+    case S_APC:
+        /* kitty's: G, its keys, ';' and the data (S_FILE); anything else
+         * swallowed */
+        if (c == 0x1B)
+            v->state = S_APC_ESC;
+        else if ((c == 0x9C && !v->utf8) || c == 0x18 || c == 0x1A) {
+            if (c == 0x9C)
+                apc_done(v);
+            v->state = S_GROUND;
+        } else if (!v->osclen && c != 'G')
+            v->state = S_STR;
+        else if (c == ';') {
+            v->osc[v->osclen] = 0;
+            v->state = kitty_begin(v) ? S_FILE : S_STR;
+        } else if (v->osclen < 255)
+            v->osc[v->osclen++] = (char)c;
+        return;
+
+    case S_APC_ESC:
+        apc_done(v);
         v->state = S_ESC;
         v->inter = 0;
         byte(v, c);

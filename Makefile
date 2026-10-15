@@ -124,7 +124,7 @@ Parts/SpeedTest: src/partstart.c src/bench.c $(PARTHDR)
 # moved: p->top - p->path[] passed for p->cur - p->top)
 # pictures in the terminal: iTerm2's files by datatypes, pens for plain
 # and 8-bit screens
-Parts/Pictures: src/partstart.c src/pics.c $(PARTHDR)
+Parts/Pictures: src/partstart.c src/pics.c src/inflate.c $(PARTHDR)
 	$(call partlink,src/pics.c)
 Parts/Files: PARTFLAGS += -fbbb=-
 Parts/Settings: PARTFLAGS += -fbbb=-
@@ -168,8 +168,8 @@ test: tests/vtdump tests/amiga_test tests/shadow_test tests/pic_test tests/link_
 	tests/shadow_test tests/streams/*.bin tests/lines/*.bin
 
 # pictures: sixel and iTerm2 files (tests/pictures/mksixel.py makes them)
-tests/pic_test: tests/pic_test.c src/vt.c src/vt.h
-	gcc -O2 -Wall -o $@ tests/pic_test.c src/vt.c
+tests/pic_test: tests/pic_test.c src/vt.c src/vt.h src/inflate.c
+	gcc -O2 -Wall -o $@ tests/pic_test.c src/vt.c src/inflate.c
 
 # hyperlinks (OSC 8) and the wrapped-row mark; a cap of 4 addresses, so
 # dropping the unused ones is tried too
@@ -202,8 +202,8 @@ ztest: tests/zmodem_test tests/hydra_test
 
 # The emulator against random hostile bytes, with ASan/UBSan (a few
 # minutes; any report or hang is a bug): make fuzz
-tests/fuzz/fz: tests/fuzz/fz.c src/vt.c src/vt.h
-	gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -I. -o $@ tests/fuzz/fz.c src/vt.c
+tests/fuzz/fz: tests/fuzz/fz.c src/vt.c src/vt.h src/inflate.c
+	gcc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -I. -o $@ tests/fuzz/fz.c src/vt.c src/inflate.c
 
 fuzz: tests/fuzz/fz
 	for s in 1 2 3 4 5 6 7 8 9 10; do tests/fuzz/fz $$s || exit 1; done; echo "fuzz: all passed"

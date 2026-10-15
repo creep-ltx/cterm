@@ -794,6 +794,9 @@ static __attribute__((cold, noinline)) const UBYTE *pic_tile(ULONG cp, int *tw, 
         return NULL;
     px = VT_PIC_TX(cp) * p->cw;
     py = VT_PIC_TY(cp) * p->ch;
+    if (px >= p->w || py >= p->h)
+        return NULL;                    /* past its pixels: a new letter
+                                           size cut it so (vt.h) */
     *tw = p->w - px < p->cw ? p->w - px : p->cw;
     *th = p->h - py < p->ch ? p->h - py : p->ch;
     if (*tw > cw) *tw = cw;             /* the letters got smaller since */

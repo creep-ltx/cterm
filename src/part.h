@@ -98,6 +98,9 @@ struct PicsPart {                       /* Parts/Pictures: pics.c */
                   int *h);
     void (*decode_free)(ULONG *argb);
     void (*pens)(const UBYTE *rgb, int n, int x, int y, UBYTE *out);
+    /* kitty's o=z: zlib data unpacked (inflate.c), -1 broken */
+    long (*inflate)(const unsigned char *in, long n, unsigned char *out,
+                    long max);
 };
 
 #ifdef PART

@@ -1777,6 +1777,7 @@ static int cterm_main(int argc, char **argv)
     vt_room = hist_room;
     vt_decode = pics_decode;            /* iTerm2's files: Parts/Pictures */
     vt_decode_free = pics_decode_free;
+    vt_inflate = pics_inflate;          /* kitty's zlib'ed pixels: the same */
     vt_palloc = pic_alloc;
     vt_pfree = pic_release;
     ML("timer");
