@@ -10,6 +10,17 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**0.3b48 (2026-10-16): Quit asked again while a program will not end** (old Maki 0.1b2 spun on
+a Read of 0): quit_all tells the stuck tabs again (EOF + Ctrl-C), says so in the tab and names the
+program in the title ("quitting: waiting for X to end"); the window cannot go while a raw program
+may draw in it. Quit again was ignored before (`!quitting` guards), and ARexx QUIT while quitting
+was queued for ever (rx_run runs nothing once quitting): c_quit now runs at once then. Also
+tests/rig.sh: csh 0.1b11+ is the system Shell only ("one csh"): L:csh without the e bit +
+`C:useshell L:csh` at the top of S:User-Startup; tabs are csh themselves - never SHELL=csh with
+it (started as a command it waits for ever for the Shell start-up packet; it took an FS-UAE down
+once). Verified in FS-UAE: 3 idle csh tabs quit at once; Maki 0.1b2 + 2 tabs: the second QUIT
+answered with the title shown. Maki 0.1b3 (csh session) ends on end-of-input itself.
+
 **0.3b47 (2026-10-15): speed on a stock A1200 + 8 MB fast** (a helper, details in
 docs/extras-speed.md): conbench SYNC REPS 3 SCALE 1, 76x28, cycle-exact: 0.3b41 17.69 s, 0.3b45
 17.95 (the extras cost +1.7%), now **15.02 s against CCON 1.2.8's 15.67**; 030/50 18.89 -> 15.93.

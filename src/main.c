@@ -1053,16 +1053,41 @@ void tab_hangup(void)
     say_key("\r\n\x1b[0;2m[hung up - ", KA_REDIAL, " calls again]\x1b[0m\r\n");
 }
 
-/* Everyone out: the Shells are told the input ended, hosts hung up on. */
+/* Everyone out: the Shells are told the input ended, hosts hung up on.
+ * Asked again while a tab's program has not ended (one that ignores the
+ * end of its input and Ctrl-C): told again, and the title and the tab
+ * say what CTerm waits for - the window cannot go while a program may
+ * still draw in it (DISK_INFO gave it the window). */
 void quit_all(void)
 {
     int i;
+    BOOL again = quitting;
+    char what[120], dir[8], hint[100];
     quitting = TRUE;
+    what[0] = 0;
     for (i = 0; i < ntabs; i++)
-        if (tabs[i]->con)
+        if (tabs[i]->con) {
+            if (again && con_done(tabs[i]->con))
+                continue;
             con_stop(tabs[i]->con);
-        else
+            if (again && !what[0]) {
+                struct Tab *keep = T;
+                con_shell_info(tabs[i]->con, dir, sizeof dir, what, sizeof what);
+                if (!what[0])
+                    strcpy(what, "its Shell");
+                T = tabs[i];
+                say("\r\n\x1b[0;2m[quitting: waiting for this tab's program to end - "
+                    "it ignores the end of its input; Quit again sends Ctrl-C again]\x1b[0m\r\n");
+                T = keep;
+            }
+        } else
             tabs[i]->ended = TRUE;
+    if (again && what[0]) {
+        strcpy(hint, "quitting: waiting for ");
+        strncat(hint, FilePart((STRPTR)what), 40);
+        strcat(hint, " to end (Quit again: Ctrl-C)");
+        title_prompt(hint);
+    }
 }
 
 /* A host's bytes for tab t (T is t): take what has come, and what keeps
@@ -1358,8 +1383,8 @@ BOOL loop_round(LONG xfd, LONG ms)
     if (sigs & ~(con_timer_sig() | consigs))
         term_sync_all();
     T = shown;
-    if ((sigs & SIGBREAKF_CTRL_C) && !quitting)
-        quit_all();
+    if (sigs & SIGBREAKF_CTRL_C)
+        quit_all();                     /* (again: the stuck ones again) */
     if (setwin && (sigs & setsig))
         settings_events();
     if (sigs & xwin_sigmask())
@@ -1376,7 +1401,7 @@ BOOL loop_round(LONG xfd, LONG ms)
     if (sigs & drop_sigmask())
         drop_events();                  /* files dropped on the window */
     T = shown;
-    if ((sigs & winsig) && !window_events() && !quitting)
+    if ((sigs & winsig) && !window_events())
         quit_all();
     /* every tab: its Shell's packets, its host's bytes */
     for (i = 0; i < ntabs; i++) {

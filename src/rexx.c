@@ -1032,7 +1032,8 @@ static LONG c_version(struct RexxMsg *rm, LONG *a, BOOL top)
 static LONG c_quit(struct RexxMsg *rm, LONG *a, BOOL top)
 {
     (void)rm; (void)a;
-    if (!top)
+    if (!top && !quitting)              /* (quitting, queued commands no
+                                         * longer run: a QUIT again now) */
         return LATER;
     quit_all();
     return RC_OK;

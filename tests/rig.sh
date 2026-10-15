@@ -7,7 +7,7 @@
 # Pictures), EXTRA (FS-UAE lines, one per line). The machine is Workbench
 # 3.2.1 + MUI 5 on an A1200 with 8 MB fast RAM (68EC020), its volume named
 # AmigaOS3.2 as the tests expect. This tree's CTerm, CTermSSH, Parts/ and
-# Protocols/ go into SYS:T/CT/ (put), csh into C: when ~/Projects/CShell/csh
+# Protocols/ go into SYS:T/CT/ (put), csh as the system Shell (L:csh + useshell) when ~/Projects/CShell/csh
 # is built. Each rig its own emulator in its own systemd scope (2 GB at
 # most); stop ends that one only.
 D=$(cd "$(dirname "$0")/../.." && pwd)
@@ -26,7 +26,19 @@ put() {
   [ -f "$D/CTermSSH" ] && cp "$D/CTermSSH" "$H/T/CT/"
   cp "$D"/Parts/* "$H/T/CT/Parts/"
   cp "$D"/Protocols/* "$H/T/CT/Protocols/"
-  [ -f "$HOME/Projects/CShell/csh" ] && cp "$HOME/Projects/CShell/csh" "$H/C/csh"
+  # csh 0.1b11+ is the system Shell only ("one csh"): L:csh with no e bit
+  # (started as a command it waits for ever, or worse), `useshell L:csh`
+  # at the top of S:User-Startup points "shell" and the BootShell at it -
+  # so CTerm's tabs are csh themselves and no SHELL=csh is wanted
+  rm -f "$H/C/csh" "$H/C/csh.uaem"
+  if [ -f "$HOME/Projects/CShell/csh" ] && [ -f "$HOME/Projects/CShell/useshell" ]; then
+    mkdir -p "$H/L"
+    cp "$HOME/Projects/CShell/csh" "$H/L/csh"
+    printf -- '--p-rw-d %s 00:00:00.00 \n' "$(date +%F)" > "$H/L/csh.uaem"
+    cp "$HOME/Projects/CShell/useshell" "$H/C/useshell"
+    grep -q '^C:useshell L:csh' "$H/S/User-Startup" ||
+      sed -i '1i C:useshell L:csh' "$H/S/User-Startup"
+  fi
   if [ -n "$PICS" ]; then
     mkdir -p "$H/T/CT/Pictures"
     cp "$D"/tests/pictures/*.six "$D"/tests/pictures/*.png \

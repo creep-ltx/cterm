@@ -284,8 +284,7 @@ void hide_events(void)
                 beep();
             break;
         case CXCMD_KILL:
-            if (!quitting)
-                quit_all();
+            quit_all();
             break;
         }
     }
