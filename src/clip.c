@@ -139,6 +139,8 @@ void sel_copy(void)
  * clipboard (buf has room for the 20-byte head and a pad byte). */
 void clip_put(UBYTE *buf, ULONG n)
 {
+    if (!clip_open())
+        return;
     memcpy(buf, "FORM", 4);
     put_be(buf + 4, 12 + n + (n & 1));
     memcpy(buf + 8, "FTXTCHRS", 8);

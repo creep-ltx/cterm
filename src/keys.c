@@ -150,6 +150,13 @@ BOOL key(struct IntuiMessage *m)
             pane_resize_key(k);
         return TRUE;
     }
+    if (find_active() && !(k & (KQ_A | KQ_L))) {
+        /* finding in the history: the keys are its (Right Amiga's still
+         * the menus', Left Amiga's the panes') */
+        if (!(code & IECODE_UP_PREFIX) && k)
+            find_key(k);
+        return TRUE;
+    }
     if (!(code & IECODE_UP_PREFIX) && !keys_find(KC_WINDOW, k) &&
         (a = keys_find(KC_PANES, k)))
         return panes_key(a);            /* i3's, in every tab, always */
@@ -686,6 +693,14 @@ BOOL window_events(void)
                 mouse_cell(copy.MouseX, copy.MouseY, &r, &c);
                 files_mouse(0, r, c, copy.Seconds, copy.Micros);
                 break;
+            }
+            if (copy.Code == SELECTDOWN && (copy.Qualifier & IEQUALIFIER_CONTROL) &&
+                copy.MouseX >= ox && copy.MouseY >= oy &&
+                copy.MouseY < oy + rows * ch && copy.MouseX < ox + cols * cw) {
+                int r, c;               /* Ctrl+click: a link opened */
+                mouse_cell(copy.MouseX, copy.MouseY, &r, &c);
+                if (link_click(r, c))
+                    break;
             }
             if ((copy.Code == SELECTDOWN || copy.Code == MIDDLEDOWN ||
                  ((copy.Code == SELECTUP || copy.Code == MIDDLEUP) &&

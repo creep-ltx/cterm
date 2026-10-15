@@ -410,7 +410,7 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
 | Left Amiga+1 to 9 | workspace 1 to 9 (below); an empty one opens with a new Shell |
 | Left Amiga+Shift+1 to 9 | the tab you are in moves to that workspace (the keys follow your keymap: Shift+3 is £ on some) |
 | Left Amiga+Ctrl+1 to 9 | tab 1 to 9 of this workspace comes into the pane you are in (the one there goes behind it) |
-| Left Amiga+R | resize mode: the arrows move the edge of the pane you are in; on the scratchpad the arrows size it and Shift+arrows move it; Return or Esc ends |
+| Left Amiga+R | resize mode: the arrows move the edge of the pane you are in (Shift+arrows: a tenth of the room at a time, as i3's `10 ppt`); on the scratchpad the arrows size it and Shift+arrows move it; Return or Esc ends |
 | Left Amiga+- | the scratchpad (below): shown, given the keys, hidden |
 | Left Amiga+Shift+- | the tab you are in becomes the scratchpad |
 | Left Amiga+T | all panes become tabs: the whole window shows the tab you were in, the others run on behind it, the tab bar lists them |
@@ -535,6 +535,37 @@ copies it, Right Amiga+V types the clipboard in.
 Programs on the other computer can copy too: what you copy in vim, tmux
 and the like (the OSC 52 code) lands on the Amiga's clipboard. They
 cannot read it.
+
+## Finding in the history
+
+Edit/Find in history... (Right Amiga+H) searches the tab's history and
+screen for what you type, from the newest line back; capitals or not does
+not matter. The title shows what you typed; the match is marked and
+brought into view.
+
+| Key | What it does |
+|---|---|
+| a letter, Backspace | the text to find, found as you type |
+| Return, Up | the next match, older |
+| Shift+Return, Down | the next match, newer |
+| Right Amiga+H | the next older; right at the start: the text you looked for last time |
+| Esc | done: the view stays there, the match marked (Right Amiga+C copies it) |
+
+## Links
+
+Addresses in the text (`https://`, `http://`, `www.`, `ftp://`,
+`sftp://`, `ssh://`, `telnet://`, `gopher://`, `gemini://`) can be
+opened: **Ctrl+click** one, or mark it (or a part of it) and choose
+Edit/Open link (Right Amiga+O; with nothing marked: the first address on
+the cursor's line).
+
+- `telnet://`, `ssh://`, `ftp://` and `sftp://` open in a new CTerm tab
+  (the file browser for FTP and SFTP).
+- Web addresses go to your browser through `openurl.library` when it is
+  installed, else through the `browser=` line in `ENV:CTerm.prefs`: a
+  command that gets the address, at `%s` or at the end, for example
+  `browser=Work:IBrowse/IBrowse "%s"`. With neither, the address goes onto
+  the clipboard and the title says "link copied".
 
 ## File transfers
 
@@ -709,6 +740,8 @@ The keys CTerm comes with:
 | Right Amiga+U, P | `senduser`, `sendpass` | Project/Send user name, Send password |
 | Right Amiga+Q | `quit` | Project/Quit |
 | Right Amiga+C, V | `copy`, `paste` | Edit/Copy, Paste |
+| Right Amiga+H | `find` | Edit/Find in history... |
+| Right Amiga+O | `openlink` | Edit/Open link |
 | Right Amiga+S | `settings` | Settings/Settings... |
 | Right Amiga + `+`, `-` | `bigger`, `smaller` | Settings/Bigger text, Smaller text |
 | Right Amiga+F | `fullscreen` | Settings/Full screen |

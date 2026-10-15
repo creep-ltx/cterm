@@ -567,6 +567,17 @@ static const char *const kdesc[KA_N] = {
     "Tab 1 in this pane", "Tab 2 in this pane", "Tab 3 in this pane",
     "Tab 4 in this pane", "Tab 5 in this pane", "Tab 6 in this pane",
     "Tab 7 in this pane", "Tab 8 in this pane", "Tab 9 in this pane",
+    "Automatic split (dwindle)",
+    "Workspace 1", "Workspace 2", "Workspace 3", "Workspace 4", "Workspace 5",
+    "Workspace 6", "Workspace 7", "Workspace 8", "Workspace 9",
+    "Move the tab to workspace 1", "Move the tab to workspace 2",
+    "Move the tab to workspace 3", "Move the tab to workspace 4",
+    "Move the tab to workspace 5", "Move the tab to workspace 6",
+    "Move the tab to workspace 7", "Move the tab to workspace 8",
+    "Move the tab to workspace 9",
+    "Resize mode (arrows, Return ends)", "Show or hide the scratchpad",
+    "The tab to the scratchpad",
+    "Find in history...", "Open link (marked or on the cursor's line)",
 };
 typedef char kdesc_check[sizeof kdesc / sizeof kdesc[0] == KA_N ? 1 : -1];
 static const char *const khead[KC_N] = {

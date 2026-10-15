@@ -34,6 +34,9 @@ static struct NewMenu newmenu[] = {
     { NM_TITLE, (STRPTR)"Edit", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Copy", 0, 0, 0, (APTR)M_COPY },
     {  NM_ITEM, (STRPTR)"Paste", 0, 0, 0, (APTR)M_PASTE },
+    {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    {  NM_ITEM, (STRPTR)"Find in history...", 0, 0, 0, (APTR)M_FIND },
+    {  NM_ITEM, (STRPTR)"Open link", 0, 0, 0, (APTR)M_OPENLINK },
     { NM_TITLE, (STRPTR)"Files", 0, 0, 0, 0 },
     {  NM_ITEM, (STRPTR)"Open SFTP browser", 0, 0, 0, (APTR)M_SFTP },
     {  NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
@@ -617,6 +620,8 @@ BOOL menu_pick(ULONG id)
     case M_CLOSETAB: tab_close_current(); break;
     case M_COPY: sel_copy(); break;
     case M_PASTE: paste(); break;
+    case M_FIND: find_start(); break;
+    case M_OPENLINK: link_menu(); break;
     case M_LOG: log_start(); break;
     case M_SENDUSER: send_login(FALSE); break;
     case M_SENDPASS: send_login(TRUE); break;

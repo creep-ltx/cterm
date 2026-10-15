@@ -483,6 +483,10 @@ static void load_prefs_(char *buf)
                 strncpy(shellcmd, val, sizeof shellcmd - 1);
                 shellcmd[sizeof shellcmd - 1] = 0;
             }
+            else if (!stricmp(p, "browser")) {
+                strncpy(browsercmd, val, sizeof browsercmd - 1);
+                browsercmd[sizeof browsercmd - 1] = 0;
+            }
             else if (!stricmp(p, "dldir")) {
                 strncpy(dldir, val, sizeof dldir - 1);
                 dldir[sizeof dldir - 1] = 0;
@@ -588,6 +592,7 @@ static void save_prefs_(char *buf)
     if (ownbact) { strcat(buf, "\nbordera="); hex_cat(buf, bordact, 6); }
     if (ownbin) { strcat(buf, "\nborderi="); hex_cat(buf, bordin, 6); }
     if (shellcmd[0]) { strcat(buf, "\nshell="); strcat(buf, shellcmd); }
+    if (browsercmd[0]) { strcat(buf, "\nbrowser="); strcat(buf, browsercmd); }
     if (dldir[0]) { strcat(buf, "\ndldir="); strcat(buf, dldir); }
     if (uldir[0]) { strcat(buf, "\nuldir="); strcat(buf, uldir); }
     if (bgfile[0]) {
@@ -640,20 +645,33 @@ static void save_prefs_(char *buf)
 /* A word in the title for a moment (a pane's new direction, what did
  * not fit): gone after about two seconds of IntuiTicks (the window is
  * active: a key was just pressed in it), or with the next one. */
-static char hint[64];
+static char hint[100];
 static int hint_ticks;
+static BOOL hint_stay;                  /* a prompt (find): till taken away */
 
 void title_hint(const char *s)
 {
     strncpy(hint, s, sizeof hint - 1);
     hint[sizeof hint - 1] = 0;
     hint_ticks = 20;
+    hint_stay = FALSE;
+    title_update_now();
+}
+
+void title_prompt(const char *s)
+{
+    if (s) {
+        strncpy(hint, s, sizeof hint - 1);
+        hint[sizeof hint - 1] = 0;
+    }
+    hint_ticks = s ? 1 : 0;
+    hint_stay = s != NULL;
     title_update_now();
 }
 
 void title_tick(void)
 {
-    if (hint_ticks && !--hint_ticks)
+    if (hint_ticks && !hint_stay && !--hint_ticks)
         title_update_now();
 }
 
@@ -1863,6 +1881,7 @@ static int cterm_main(int argc, char **argv)
     if (SocketBase) CloseLibrary(SocketBase);
     net_lookups_wait();                 /* a name lookup given up on runs
                                          * CTerm's code until it ends */
+    find_free();                        /* openurl.library, if a link opened it */
     con_spent_wait();                   /* a program Run from a tab: its
                                          * handles answered till closed */
 #ifdef PROFILE

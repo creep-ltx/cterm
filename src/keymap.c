@@ -180,6 +180,8 @@ const struct KeyAct keys_acts[] = {
     { "resize", KC_PANES, 0 },
     { "scratch", KC_PANES, 0 },
     { "toscratch", KC_PANES, 0 },
+    { "find", KC_WINDOW, M_FIND },
+    { "openlink", KC_WINDOW, M_OPENLINK },
 };
 
 /* (one entry an action, in the enum's order) */
@@ -195,6 +197,7 @@ static const struct KeyBind defbinds[] = {
     { A('p'), KA_SENDPASS }, { A('q'), KA_QUIT }, { A('c'), KA_COPY },
     { A('v'), KA_PASTE }, { A('s'), KA_SETTINGS }, { A('+'), KA_BIGGER },
     { A('-'), KA_SMALLER }, { A('f'), KA_FULL },
+    { A('h'), KA_FIND }, { A('o'), KA_OPENLINK },
     { A('1'), KA_TAB1 }, { A('2'), KA_TAB1 + 1 }, { A('3'), KA_TAB1 + 2 },
     { A('4'), KA_TAB1 + 3 }, { A('5'), KA_TAB1 + 4 },
     { A('6'), KA_TAB1 + 5 }, { A('7'), KA_TAB1 + 6 },

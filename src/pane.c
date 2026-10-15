@@ -1245,7 +1245,9 @@ static BOOL resizing;
 
 BOOL pane_resizing(void) { return resizing; }
 
-static BOOL resize_tiled(int dir)
+/* The pane's edge that way moved: 4 columns or 2 rows, or (big, Shift)
+ * a tenth of the split's room - i3's "resize grow width 10 ppt". */
+static BOOL resize_tiled(int dir, BOOL big)
 {
     int n = leaf_of(apane), up = -1, axis = dir == PD_LEFT || dir == PD_RIGHT ? 'h' : 'v';
     BOOL grow = dir == PD_RIGHT || dir == PD_DOWN;
@@ -1260,11 +1262,12 @@ static BOOL resize_tiled(int dir)
     if (up < 0)
         return FALSE;
     d = &nodes[up];
-    pos = d->m + ((d->a == n) == grow ? 1 : -1) * (axis == 'h' ? 4 * cw : 2 * ch);
+    span = axis == 'h' ? d->x1 - d->x0 + 1 - DIVW : d->y1 - d->y0 + 1 - DIVW;
+    pos = d->m + ((d->a == n) == grow ? 1 : -1) *
+                 (big ? (int)(span / 10) : axis == 'h' ? 4 * cw : 2 * ch);
     drag = up;
     pos = drag_clamp(pos);
     drag = -1;
-    span = axis == 'h' ? d->x1 - d->x0 + 1 - DIVW : d->y1 - d->y0 + 1 - DIVW;
     if (span <= 0 || pos == d->m)
         return FALSE;
     d->at = (pos - (axis == 'h' ? d->x0 : d->y0)) * 1000L / span;
@@ -1309,7 +1312,7 @@ void pane_resize_key(UWORD k)
     }
     if (dir < 0)
         return;
-    if (!(apane == &fpane ? resize_float(dir, shift) : resize_tiled(dir)))
+    if (!(apane == &fpane ? resize_float(dir, shift) : resize_tiled(dir, shift)))
         beep();
 }
 
@@ -1317,7 +1320,7 @@ static BOOL resize_mode(void)
 {
     resizing = TRUE;
     title_hint(apane == &fpane ? "resize: arrows size, Shift+arrows move, Return ends"
-                               : "resize: arrows move the pane's edge, Return ends");
+                               : "resize: arrows move the edge, Shift+arrows 10%, Return ends");
     return TRUE;
 }
 

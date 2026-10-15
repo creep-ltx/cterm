@@ -322,6 +322,7 @@ enum { KA_NONE, KA_NEWTAB, KA_CALL, KA_BOOK, KA_SERIAL, KA_ANSWER, KA_SFTP,
        /* i3's workspaces, its resize mode, its scratchpad */
        KA_P_WS1, KA_P_WS9 = KA_P_WS1 + 8, KA_P_MOVEWS1,
        KA_P_MOVEWS9 = KA_P_MOVEWS1 + 8, KA_P_RESIZE, KA_P_SCRATCH, KA_P_TOSCRATCH,
+       KA_FIND, KA_OPENLINK,
        KA_N };                          /* KA_ED_*: console.h's CE_* order */
 struct KeyAct {
     const char *name;                   /* in the file */
@@ -372,7 +373,7 @@ enum { M_QUIT = 1, M_FONT, M_BAR, M_FULL, M_SCR_WB, M_SCR_16, M_SCR_256,
        M_SFTP, M_POPEN, M_PKILL, M_PFLEFT, M_PFRIGHT, M_PFUP, M_PFDOWN,
        M_PMLEFT, M_PMRIGHT, M_PMUP, M_PMDOWN, M_PSPLITH, M_PSPLITV, M_PFULL,
        M_PTABS, M_PPANES, M_PDWINDLE, M_SHNEW, M_SHCLOSE, M_INPANES,
-       M_INTABS, M_LSAVE, M_LOPEN, M_LSTART };
+       M_INTABS, M_LSAVE, M_LOPEN, M_LSTART, M_FIND, M_OPENLINK };
 struct KeepFont { BOOL usett; char ttfile[160]; int ttsize; };
 
 enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
@@ -627,6 +628,15 @@ void mouse_reporting(void);
 BOOL window_events(void);
 void title_update_now(void);
 void title_hint(const char *s);         /* in the title a moment */
+void title_prompt(const char *s);       /* in the title till NULL (find) */
+/* find.c: searching the history; links */
+BOOL find_active(void);
+void find_start(void);
+void find_key(UWORD k);
+BOOL link_click(int r, int c);
+void link_menu(void);
+void find_free(void);
+extern char browsercmd[160];
 void title_tick(void);                  /* an IntuiTick: the hint goes */
 ULONG shells_sigmask(void);
 void shells_handle(ULONG sigs);

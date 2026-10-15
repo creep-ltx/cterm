@@ -10,6 +10,13 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**Parallel sessions (2026-10-15):** CTerm, csh and CUtils may each have a session at once; each
+stays in its own repo (a change another needs: a note in its design.md, or a message). FS-UAE on
+port 1240 (tests/files/uae.sh) is shared: own RAM: names, never stop/restart it without asking
+the others. The A1200: message the others before installing, rebooting or restarting wasabid.
+csh will keep the running command's line in the local variable `_CMDLINE` (its session's job,
+see CShell/docs/design.md); when it is in, con_shell_info can read it for saved layouts.
+
 **Open after 0.3b40 (2026-10-14):**
 - **Fixed in 0.3b42 (2026-10-15, FS-UAE; not yet on the A1200):** ARexx `QUIT` (also the close
   gadget, Ctrl-C, TAB CLOSE) waited for a program Run from a tab (`Run Wait 60`, `Run List SYS:
@@ -31,8 +38,30 @@ across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 - Proposed, NOT wanted for now (user, 2026-10-14): i3's tabbed container inside a split (LA+W
   tabbed pane with its own tab row, LA+E back to split, every tab in exactly one pane). The user
   is happy with one view per workspace (LA+P panes / LA+T tabs, kept per workspace).
-- Keyboard resize of tiled panes moves one divider (4 columns / 2 rows a press); i3's
-  "resize grow/shrink" by percentage not done.
+- Keyboard resize of tiled panes moves one divider (4 columns / 2 rows a press); **0.3b43:
+  Shift+arrows a tenth of the split's room** (i3's `10 ppt`; the floating pane keeps Shift for
+  moving).
+- **0.3b43 (2026-10-15, FS-UAE; not yet on the A1200): Find in history and links** (src/find.c,
+  +5.5 KB in CTerm; small enough to stay out of Parts/). Edit/Find in history... (RA+H, action
+  `find`): a key mode as resize's (keys.c sends every key but Right/Left Amiga's to find_key);
+  history and screen as one list of lines (0 = oldest, vt_history() = the screen's top),
+  Latin-1, any case; the match is the selection (sa/sb in screen cells), scrolled to the middle
+  when off screen; Return/Up older, Shift+Return/Down newer, Backspace, Esc ends (view and mark
+  stay); a new find starts empty, RA+H then recalls the last text. The prompt stays in the title
+  (title_prompt, hint_stay) - not seen in full screen (no title bar). Links: url_next() finds
+  `scheme://` or `www.` (a sentence's end and an unmatched `)` left off); Ctrl+click (keys.c,
+  before the mouse goes to a program) or Edit/Open link (RA+O, `openlink`: the address the
+  selection touches, else the cursor line's first). telnet/ssh/ftp/sftp: call_rexx() -> a new
+  tab; the web: openurl.library's URL_OpenA (-30, inline asm, no NDK header), else `browser=`
+  in CTerm.prefs (SystemTags async, `%s` or appended), else the clipboard ("link copied").
+  clip_put() now opens the clipboard itself (link_open's first copy crashed the Amiga: clipreq
+  was NULL). PART_VERSION 15 (KA_N grew; the Settings part's key list has the new actions, and
+  the missing descriptions of dwindle..toscratch were added). Verified in FS-UAE: find, recall,
+  older/newer, the whole URL from a partial mark, `(www.example.com).` -> http://www.example.com,
+  telnet://127.0.0.1:2323 opened a tab to a test board, browser= ran with the address, Shift
+  resize 10%. Not tried: Ctrl+click itself (wasabi cannot hold Ctrl with a click) - it uses
+  the same url_at() as the menu. Not done: OSC 8 hyperlinks (the cells keep no link; could go in
+  VtPen), links that wrap onto the next line.
 
 **2026-10-14, 0.3b38-0.3b40 (INSTALLED, parts too: PART_VERSION 14; 0.3b37 kept as CTerm-0.3b37.bak,
 Parts-0.3b37.bak, the keys as ENVARC:CTerm/CTerm.keys-0.3b37.bak):** the user asked for workspaces
@@ -382,8 +411,8 @@ In the order the user and I agreed (2026-10-10):
   a small test window, a screenshot from the A1200, and the user decides
   on the look. The other way: tabs drawn by CTerm, like cdiff's
   (AmigaTools/cdiff, ltx_drawtabs in ltxwin.c).
-- Search the scrollback;
-  clickable links. (Done 2026-10-10: double/triple-click, OSC 52 copy, logging.)
+- **Done 0.3b43:** search the scrollback (Edit/Find in history), clickable links (Ctrl+click,
+  Edit/Open link). (Done 2026-10-10: double/triple-click, OSC 52 copy, logging.)
 - **Done 2026-10-10 (A1200 tests pending: ssh login, letters):** the
   phone book. Was: **the phone book** (the user's spec, 2026-10-10). Each entry: a name;
   the address (IP, host name or URL) and port; telnet or ssh; a user name
