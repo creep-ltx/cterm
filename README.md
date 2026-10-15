@@ -963,6 +963,35 @@ reboot, Cancel puts everything back. The window's place and size are
 kept as well. The Settings menu still has the quick items (fonts, text
 size, screen, full screen, scroll bar).
 
+## Speed
+
+CTerm is built to keep up on a plain A1200 (14 MHz 68020) with extra
+memory: text, colours and scrolling are drawn straight into the screen's
+bitplanes, the parsing of what programs write runs in hand-written 68020
+assembly where it counts, and while text pours in the window is redrawn
+only as often as it can afford to. Nothing needs setting up for this.
+
+Measured with conbench (the console benchmark: plain lines, colours, a
+colour per letter, cursor moves, full-screen redraws, single bytes...) on
+an emulated A1200 with 8 MB of extra memory, on a 16-colour Workbench:
+
+| | conbench, seconds |
+|---|---|
+| CTerm 0.3b45 | 18.0 |
+| CTerm now | 15.0 |
+| CCON 1.2.8 (for comparison) | 15.7 |
+
+Two things you may notice: after colourful output has scrolled away,
+scrolling plain text is up to four times cheaper again (only the
+bitplanes the text on show needs are moved), and a flood of coloured text
+reaches the screen in fewer, fuller steps. On a graphics card (RTG) the
+drawing is different and was already quick; the parsing gains apply there
+too.
+
+`tests/stock/bench.sh` runs the benchmark on a private emulated A1200
+(see the comment at its top); `docs/extras-speed.md` has every step and
+what each was worth.
+
 ## Building
 
 `make` (bebbo's m68k-amigaos-gcc in ~/opt/amiga) builds CTerm, CTermSSH,
