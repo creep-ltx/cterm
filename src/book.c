@@ -173,7 +173,8 @@ void book_load(void)
         else if (!stricmp(line, "port")) e->port = atoi(v);
         else if (!stricmp(line, "kind")) {
             e->fkind = !stricmp(v, "sftp") ? FK_SFTP
-                     : !stricmp(v, "ftp") ? FK_FTP : FK_NONE;
+                     : !stricmp(v, "ftp") ? FK_FTP
+                     : !stricmp(v, "ftps") ? FK_FTPS : FK_NONE;
             e->ssh = !stricmp(v, "ssh") || e->fkind == FK_SFTP;
             e->serial = !stricmp(v, "serial");
         }
@@ -239,7 +240,8 @@ BOOL book_save(void)
         if (e->port)
             number(f, "port", e->port);
         field(f, "kind", e->serial ? "serial" : e->fkind == FK_SFTP ? "sftp"
-                         : e->fkind == FK_FTP ? "ftp" : e->ssh ? "ssh"
+                         : e->fkind == FK_FTP ? "ftp"
+                         : e->fkind == FK_FTPS ? "ftps" : e->ssh ? "ssh"
                          : "telnet");
         if (e->fkind)
             field(f, "dir", e->dir);
@@ -282,15 +284,16 @@ int book_find(const char *name)
 void book_tidy(BookEntry *e)
 {
     static const char *const sch[] = { "telnet://", "ssh://", "sftp://",
-                                       "ftp://" };
+                                       "ftp://", "ftps://" };
     char *h = e->host, *p;
     int i;
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < 5; i++)
         if (!strnicmp(h, (char *)sch[i], strlen(sch[i])))
             break;
-    if (i < 4) {
+    if (i < 5) {
         e->ssh = i == 1 || i == 2;
-        e->fkind = i == 2 ? FK_SFTP : i == 3 ? FK_FTP : FK_NONE;
+        e->fkind = i == 2 ? FK_SFTP : i == 3 ? FK_FTP : i == 4 ? FK_FTPS
+                 : FK_NONE;
         memmove(h, h + strlen(sch[i]), strlen(h + strlen(sch[i])) + 1);
     } else {
         /* host:port typed plainly (one colon: not an IPv6 address) */
@@ -348,7 +351,8 @@ void book_target(const BookEntry *e0, char *out, int max)
         strcat(out, "@");
     }
     strncat(out, e->host, max - strlen(out) - 8);
-    if (e->port && e->port != (e->ssh ? 22 : e->fkind == FK_FTP ? 21 : 23)) {
+    if (e->port && e->port != (e->ssh ? 22 : e->fkind == FK_FTP ||
+                               e->fkind == FK_FTPS ? 21 : 23)) {
         char *p = num + sizeof num - 1;
         int n = e->port;
         *p = 0;
@@ -363,7 +367,8 @@ void book_url(BookEntry *e, const char *url, int kind)
     book_blank(e, "");
     if (!strstr(url, "://"))            /* the kind's scheme: user@, the
                                          * port and a drawer taken apart */
-        strcpy(e->host, kind == FK_SFTP ? "sftp://" : "ftp://");
+        strcpy(e->host, kind == FK_SFTP ? "sftp://" : kind == FK_FTPS
+                        ? "ftps://" : "ftp://");
     strncat(e->host, url, sizeof e->host - 1 - strlen(e->host));
     book_tidy(e);
 }

@@ -110,6 +110,13 @@ struct RConn {
     BOOL quiet;                         /* a refusal expected: not shown */
     BOOL active;                        /* active FTP (PORT): passive failed,
                                            or `passive` typed */
+    /* FTPS: ftp.c with ftps.c */
+    BOOL tls;                           /* an FTPS place: AUTH TLS, PROT P */
+    void *ctl, *dtl;                    /* TLS on the control line, on the
+                                           data's (ftps.h) */
+    int dwant;                          /* the data's TLS waits: SF_IN/OUT */
+    char hname[128];                    /* the host's name, as called */
+    BOOL tlsup;                         /* AmiSSL opened for it (counted) */
     /* uploads */
     int upmode;                         /* names there already: 0 replaced,
                                            1 gone on from where they end */
@@ -208,6 +215,12 @@ LONG ftp_size(struct RConn *c, const char *name);  /* -1: not known */
  * the data socket, -1 failed */
 LONG ftp_xopen(struct RConn *c, const char *name, int how, ULONG *from);
 BOOL ftp_xend(struct RConn *c, BOOL stopped);
+/* the data socket's bytes (TLS when FTPS): >0, 0 the end, -1, AGAIN
+ * (c->dwant: the way to wait) */
+LONG ftp_dread(struct RConn *c, UBYTE *b, LONG n);
+LONG ftp_dwrite(struct RConn *c, const UBYTE *b, LONG n);
+BOOL ready_now(LONG fd, BOOL wr);       /* files.c: no wait needed */
+void ftps_done(struct RConn *c);        /* a place goes: AmiSSL with the last */
 #define FR_RMDIR 100                    /* ftp_do: a drawer goes */
 
 #endif

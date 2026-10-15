@@ -711,7 +711,8 @@ static void title_update_(void)
         strcat(title, ": ");
         strcat(title, T->t_bookname);
     } else if (dialhost[0]) {
-        strcat(title, T->t_fkind == FK_SFTP ? ": sftp " : T->t_fkind
+        strcat(title, T->t_fkind == FK_SFTP ? ": sftp " : T->t_fkind == FK_FTPS
+                      ? ": ftps " : T->t_fkind
                       ? ": ftp " : sshmode ? ": ssh " : ": ");
         strcat(title, dialhost);
     }

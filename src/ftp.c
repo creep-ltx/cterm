@@ -1,15 +1,24 @@
 /*
  * ftp - FTP for the file browser (files.h): one control connection, a
- * passive data connection per listing or file (EPSV, else PASV - its
+ * data connection per listing or file - passive (EPSV, else PASV; its
  * address is not trusted: the data goes to the host already called, as
- * curl does), binary, listings from MLSD where the host has it, else
- * LIST (Unix ls -l, or Windows' DOS style), REST to go on from a part.
- * Plain FTP: the password goes as it is, as FTP has always sent it.
- * Part of Parts/Files; every wait is files.c's await (CTerm goes on).
+ * curl does), else active (PORT) when passive fails - binary, listings
+ * from MLSD where the host has it, else LIST (Unix ls -l, or Windows'
+ * DOS style), REST to go on from a part (an upload: REST + STOR, else
+ * APPE). Plain FTP: the password goes as it is, as FTP has always sent
+ * it. FTPS (an ftps place): AUTH TLS before the login, PROT P for the
+ * data, on AmiSSL (ftps.c); the host's certificate is checked as ssh
+ * checks a host key. Part of Parts/Files; every wait is files.c's await
+ * (CTerm goes on).
  */
 #include "cterm.h"
 #include "files.h"
+#include "ftps.h"
+#include <amitcp/socketbasetags.h>
 #pragma GCC optimize("Os")              /* called rarely: small before quick */
+
+#define KNOWN "ENVARC:CTerm/ftps_hosts" /* certificates said yes to */
+#define KNOWN_NEW "ENVARC:CTerm/ftps_hosts.new"
 
 void sock_nonblock(LONG s)
 {
@@ -20,11 +29,30 @@ void sock_nonblock(LONG s)
 
 static void lost(struct RConn *c)
 {
+    if (c->dtl)
+        tls_end(c->dtl, FALSE);
+    if (c->ctl)
+        tls_end(c->ctl, FALSE);
+    c->ctl = c->dtl = NULL;
     if (c->cfd >= 0)
         CloseSocket(c->cfd);
     c->cfd = -1;
     c->inlen = 0;
     c->lost = TRUE;
+}
+
+/* TLS's bytes from fd: tls_read, and a host that closed without saying
+ * so (no close_notify) seen as the end - AmiSSL's read then says "wait"
+ * for ever while the socket reads as ready (Knowledge: CUtils wget) */
+static LONG t_read(void *t, LONG fd, UBYTE *b, LONG n)
+{
+    LONG k = tls_read(t, b, n);
+    if (k == TLS_WR && ready_now(fd, FALSE)) {
+        UBYTE x;
+        if (recv(fd, &x, 1, MSG_PEEK) == 0)
+            return 0;
+    }
+    return k;
 }
 
 /* A command to the host (PASS never shown). FALSE: the line is gone. */
@@ -43,20 +71,33 @@ static BOOL put_cmd(struct RConn *c, const char *cmd, const char *arg)
     n = strlen(line);
     while (done < n) {
         LONG k;
-        if (!await(c, c->cfd, SF_OUT, 30)) {
-            if (c->timedout)
-                lost(c);
-            return FALSE;
+        if (c->ctl) {                   /* TLS: tried, then waited for */
+            k = tls_write(c->ctl, (UBYTE *)line + done, n - done);
+            if (k == TLS_WR || k == TLS_WW) {
+                if (!await(c, c->cfd, k == TLS_WR ? SF_IN : SF_OUT, 30)) {
+                    if (c->timedout)
+                        lost(c);
+                    return FALSE;
+                }
+                continue;
+            }
+        } else {
+            if (!await(c, c->cfd, SF_OUT, 30)) {
+                if (c->timedout)
+                    lost(c);
+                return FALSE;
+            }
+            k = send(c->cfd, line + done, n - done, 0);
+            if (WOULDBLOCK(k))
+                continue;               /* no room after all: wait again */
         }
-        k = send(c->cfd, line + done, n - done, 0);
-        if (WOULDBLOCK(k))
-            continue;                   /* no room after all: wait again */
         if (k <= 0) {
             lost(c);
             return FALSE;
         }
         done += k;
     }
+    memset(line, 0, sizeof line);       /* (a password) */
     return TRUE;
 }
 
@@ -82,14 +123,27 @@ static BOOL get_line(struct RConn *c, char *out, int max, LONG secs)
         }
         if (c->cfd < 0)
             return FALSE;
-        if (!await(c, c->cfd, SF_IN, secs)) {
-            if (c->timedout)
-                lost(c);                /* silent: no use any more */
-            return FALSE;
+        if (c->ctl) {                   /* TLS: what it holds first */
+            k = t_read(c->ctl, c->cfd, c->in + c->inlen,
+                       sizeof c->in - c->inlen);
+            if (k == TLS_WR || k == TLS_WW) {
+                if (!await(c, c->cfd, k == TLS_WR ? SF_IN : SF_OUT, secs)) {
+                    if (c->timedout)
+                        lost(c);
+                    return FALSE;
+                }
+                continue;
+            }
+        } else {
+            if (!await(c, c->cfd, SF_IN, secs)) {
+                if (c->timedout)
+                    lost(c);            /* silent: no use any more */
+                return FALSE;
+            }
+            k = recv(c->cfd, c->in + c->inlen, sizeof c->in - c->inlen, 0);
+            if (WOULDBLOCK(k))
+                continue;               /* "readable", yet nothing: wait */
         }
-        k = recv(c->cfd, c->in + c->inlen, sizeof c->in - c->inlen, 0);
-        if (WOULDBLOCK(k))
-            continue;                   /* "readable", yet nothing: wait */
         if (k <= 0) {
             lost(c);
             return FALSE;
@@ -165,9 +219,235 @@ static void pwd(struct RConn *c)
     c->cwd[k] = 0;
 }
 
+/* ---- FTPS ---- */
+
+static int ftps_users;                  /* FTPS places with AmiSSL open */
+
+/* A TLS handshake on fd, waited through. FALSE: it failed (said). */
+static BOOL shake(struct RConn *c, void *t, LONG fd)
+{
+    for (;;) {
+        int r = tls_shake(t);
+        if (r == 1)
+            return TRUE;
+        if (r != TLS_WR && r != TLS_WW) {      /* -1: failed */
+            tsay(c, "\x1b[1;31m[TLS: ", tls_why(), "]\x1b[0m\r\n");
+            return FALSE;
+        }
+        if (!await(c, fd, r == TLS_WR ? SF_IN : SF_OUT, 60))
+            return FALSE;
+    }
+}
+
+/* The certificate said yes to for hostport: 1 this one, 0 none, -1
+ * another one (it has changed). ENVARC:CTerm/ftps_hosts, a line each:
+ * "host:port SHA256:..." (as ssh's known_hosts). */
+static int known_check(const char *hp, const char *fp)
+{
+    char line[200];
+    int r = 0, n = strlen(hp);
+    BPTR f = Open((STRPTR)KNOWN, MODE_OLDFILE);
+    if (!f)
+        return 0;
+    while (FGets(f, (STRPTR)line, sizeof line)) {
+        char *e = line + strlen(line);
+        while (e > line && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' '))
+            *--e = 0;
+        if (!strncmp(line, hp, n) && line[n] == ' ') {
+            r = strcmp(line + n + 1, fp) ? -1 : 1;
+            if (r == 1)
+                break;
+        }
+    }
+    Close(f);
+    return r;
+}
+
+/* hostport's certificate is fp from now on (the file written anew, the
+ * old one kept until the new one is whole) */
+static void known_add(struct RConn *c, const char *hp, const char *fp)
+{
+    char line[200];
+    int n = strlen(hp);
+    BOOL ok = TRUE;
+    BPTR in, out, d;
+    if (!(d = Lock((STRPTR)"ENVARC:CTerm", ACCESS_READ)))
+        d = CreateDir((STRPTR)"ENVARC:CTerm");
+    if (d)
+        UnLock(d);
+    if (!(out = Open((STRPTR)KNOWN_NEW, MODE_NEWFILE))) {
+        tsay(c, "\x1b[1;31m[the certificate could not be remembered]"
+             "\x1b[0m\r\n", NULL, NULL);
+        return;
+    }
+    if ((in = Open((STRPTR)KNOWN, MODE_OLDFILE))) {
+        while (ok && FGets(in, (STRPTR)line, sizeof line))
+            if (strncmp(line, hp, n) || line[n] != ' ')
+                ok = FPuts(out, (STRPTR)line) == 0;
+        Close(in);
+    }
+    ok = ok && FPuts(out, (STRPTR)hp) == 0 && FPutC(out, ' ') >= 0 &&
+         FPuts(out, (STRPTR)fp) == 0 && FPutC(out, '\n') >= 0;
+    if (!Close(out) || !ok) {
+        DeleteFile((STRPTR)KNOWN_NEW);
+        tsay(c, "\x1b[1;31m[the certificate could not be remembered]"
+             "\x1b[0m\r\n", NULL, NULL);
+        return;
+    }
+    DeleteFile((STRPTR)KNOWN);
+    Rename((STRPTR)KNOWN_NEW, (STRPTR)KNOWN);
+}
+
+/* The host's certificate: one an authority in AmiSSL's store signed for
+ * the name called is good; else as ssh does with host keys - one not
+ * met before is shown and asked about (y), a changed one is warned
+ * about and needs "yes" in full. */
+static BOOL cert_ok(struct RConn *c, const char *hp)
+{
+    char fp[64], a[8];
+    int k;
+    if (tls_trusted(c->ctl)) {
+        tsay(c, "\x1b[2m[", tls_version(c->ctl), ", the certificate is "
+             "signed for this host by an authority AmiSSL knows]\x1b[0m\r\n");
+        return TRUE;
+    }
+    tls_print(c->ctl, fp);
+    if (!fp[0]) {
+        tsay(c, "\x1b[1;31m[the host showed no certificate]\x1b[0m\r\n",
+             NULL, NULL);
+        return FALSE;
+    }
+    k = known_check(hp, fp);
+    if (k == 1) {
+        tsay(c, "\x1b[2m[", tls_version(c->ctl), ", the certificate is the "
+             "one said yes to before]\x1b[0m\r\n");
+        return TRUE;
+    }
+    if (k == 0) {
+        tsay(c, "\x1b[1m[a host not met before: ", hp, "]\x1b[0m\r\n");
+        tsay(c, "[its certificate: ", fp, "]\r\n");
+        tsay(c, "[no authority AmiSSL knows signed it for this name: one "
+             "the host made itself, perhaps]\r\n", NULL, NULL);
+        if (!ask_tab(c, "Trust it and remember it? (y/n) ", a, sizeof a,
+                     TRUE) || (a[0] != 'y' && a[0] != 'Y'))
+            return FALSE;
+    } else {
+        tsay(c, "\x1b[1;31m[THE CERTIFICATE OF ", hp, " HAS CHANGED - "
+             "someone may be in between]\x1b[0m\r\n");
+        tsay(c, "[its certificate now: ", fp, "]\r\n");
+        tsay(c, "[Unless you know the host was given a new certificate (its "
+             "owner says so), someone may be reading and changing all you "
+             "send it, passwords too. Then answer no.]\r\n", NULL, NULL);
+        if (!ask_tab(c, "Type yes in full to trust the new certificate: ",
+                     a, sizeof a, TRUE) || stricmp(a, "yes"))
+            return FALSE;
+    }
+    known_add(c, hp, fp);
+    return TRUE;
+}
+
+/* AUTH TLS on the control line, before the login: AmiSSL opened (the
+ * first time), the handshake, the certificate. FALSE: no FTPS (said). */
+static BOOL tls_begin(struct RConn *c, const char *hp)
+{
+    const char *e;
+    BPTR l;
+    BOOL store = FALSE, user = FALSE;
+    if (has_ssh) {
+        /* CTermSSH has AmiSSL open for ssh already: one task, one */
+        tsay(c, "\x1b[1;31m[FTPS is CTerm's: call it from CTerm]\x1b[0m\r\n",
+             NULL, NULL);
+        return FALSE;
+    }
+    if (!c->tlsup) {                    /* AmiSSL for this place */
+        if (!ftps_users) {
+            tsay(c, "\x1b[2m[opening AmiSSL...]\x1b[0m\r\n", NULL, NULL);
+            /* its authorities: only where AmiSSL: is (no requester) */
+            {
+                struct DosList *dl = LockDosList(LDF_ASSIGNS | LDF_VOLUMES |
+                                                 LDF_READ);
+                store = FindDosEntry(dl, (STRPTR)"AmiSSL", LDF_ASSIGNS |
+                                     LDF_VOLUMES) != NULL;
+                UnLockDosList(LDF_ASSIGNS | LDF_VOLUMES | LDF_READ);
+            }
+            if (store &&
+                (l = Lock((STRPTR)"AmiSSL:UserCerts", ACCESS_READ))) {
+                user = TRUE;
+                UnLock(l);
+            }
+        }
+        if ((e = tls_open(SocketBase, store, user))) {
+            tsay(c, "\x1b[1;31m[", e, "]\x1b[0m\r\n");
+            return FALSE;
+        }
+        c->tlsup = TRUE;
+        ftps_users++;
+    }
+    if (cmd(c, "AUTH", "TLS") != 234) {
+        if (c->code)
+            tsay(c, "\x1b[1;31m[the host has no FTPS (AUTH TLS): not logged "
+                 "in - ftp:// is plain FTP]\x1b[0m\r\n", NULL, NULL);
+        return FALSE;
+    }
+    c->inlen = 0;                       /* nothing plain after 234 */
+    if (!(c->ctl = tls_new(c->cfd, c->hname, NULL)))
+        return FALSE;
+    if (!shake(c, c->ctl, c->cfd) || !cert_ok(c, hp)) {
+        tls_end(c->ctl, FALSE);
+        c->ctl = NULL;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* A place goes (files.c): with the last FTPS place, AmiSSL closed. */
+void ftps_done(struct RConn *c)
+{
+    if (c->tlsup && !--ftps_users) {
+        tls_close();
+        /* AmiSSL told bsdsocket to write errno into the part's memory
+         * (AmiSSL_ErrNoPtr): no more, the part may leave memory now.
+         * CTerm reads Errno(), never a pointer. */
+        struct TagItem t[2];
+        t[0].ti_Tag = SBTM_SETVAL(SBTC_ERRNOLONGPTR);
+        t[0].ti_Data = 0;
+        t[1].ti_Tag = TAG_DONE;
+        SocketBaseTagList(t);
+    }
+    c->tlsup = FALSE;
+}
+
+/* The data connection's TLS (PROT P), on the session of the control
+ * line's (hosts such as vsftpd insist on that). -1: failed (closed). */
+static LONG data_tls(struct RConn *c, LONG d)
+{
+    if (!c->tls || d < 0)
+        return d;
+    if (!(c->dtl = tls_new(d, c->hname, c->ctl)) || !shake(c, c->dtl, d)) {
+        if (c->dtl)
+            tls_end(c->dtl, FALSE);
+        c->dtl = NULL;
+        CloseSocket(d);
+        return -1;
+    }
+    return d;
+}
+
+/* The data connection closed: TLS's close_notify sent first when it
+ * ended well (an upload's end: the host knows it is whole) */
+static void data_close(struct RConn *c, LONG d, BOOL well)
+{
+    if (c->dtl) {
+        tls_end(c->dtl, well);
+        c->dtl = NULL;
+    }
+    if (d >= 0)
+        CloseSocket(d);
+}
+
 BOOL ftp_open(struct RConn *c)
 {
-    char host[128], *colon, pw[64];
+    char host[128], hp[140], *colon, pw[64];
     const char *user;
     LONG port = 21;
     struct sockaddr_in peer;
@@ -178,10 +458,13 @@ BOOL ftp_open(struct RConn *c)
     c->lost = FALSE;
     strncpy(host, c->tab->t_dialhost, sizeof host - 1);
     host[sizeof host - 1] = 0;
+    strcpy(hp, host);
     if ((colon = strchr(host, ':'))) {
         *colon = 0;
         port = atol(colon + 1);
-    }
+    } else
+        strcat(hp, ":21");
+    strcpy(c->hname, host);
     T = c->tab;
     c->cfd = net_connect(host, port, fsay);
     sock_nonblock(c->cfd);
@@ -195,6 +478,8 @@ BOOL ftp_open(struct RConn *c)
         strncpy(c->peer, host, sizeof c->peer - 1);
     c->chatty = TRUE;
     if (reply(c) != 220)
+        goto fail;
+    if (c->tls && !tls_begin(c, hp))
         goto fail;
     user = c->tab->t_user[0] ? c->tab->t_user : "anonymous";
     r = cmd(c, "USER", user);
@@ -220,6 +505,11 @@ BOOL ftp_open(struct RConn *c)
         goto fail;
     }
     c->chatty = FALSE;
+    if (c->tls && (cmd(c, "PBSZ", "0") != 200 || cmd(c, "PROT", "P") != 200)) {
+        tsay(c, "\x1b[1;31m[the host will not encrypt the files (PROT P): "
+             "given up]\x1b[0m\r\n", NULL, NULL);
+        goto fail;
+    }
     if (cmd(c, "TYPE", "I") != 200)
         goto fail;
     if (!c->cwd[0] && c->tab->t_fdir[0] &&
@@ -233,6 +523,9 @@ BOOL ftp_open(struct RConn *c)
     return TRUE;
 fail:
     c->chatty = FALSE;
+    if (c->ctl)
+        tls_end(c->ctl, FALSE);
+    c->ctl = NULL;
     if (c->cfd >= 0)
         CloseSocket(c->cfd);
     c->cfd = -1;
@@ -241,11 +534,13 @@ fail:
 
 void ftp_close(struct RConn *c)
 {
-    if (c->dfd >= 0)
-        CloseSocket(c->dfd);
+    data_close(c, c->dfd, FALSE);
     c->dfd = -1;
     if (c->cfd >= 0 && !quitting && put_cmd(c, "QUIT", NULL))
         reply_t(c, 3);                  /* a goodbye, not waited long */
+    if (c->ctl)
+        tls_end(c->ctl, TRUE);
+    c->ctl = NULL;
     if (c->cfd >= 0)
         CloseSocket(c->cfd);
     c->cfd = -1;
@@ -579,7 +874,7 @@ BOOL ftp_list(struct RConn *c, const char *path)
             }
             return FALSE;
         }
-        if ((d = data_go(c, d, lis)) < 0) {
+        if ((d = data_tls(c, data_go(c, d, lis))) < 0) {
             reply_t(c, 10);             /* its 425, if it says one */
             return FALSE;
         }
@@ -587,14 +882,26 @@ BOOL ftp_list(struct RConn *c, const char *path)
         for (;;) {
             UBYTE b[512];
             LONG k, i;
-            if (!await(c, d, SF_IN, 60)) {
-                ok = FALSE;
-                break;
+            if (c->dtl) {               /* TLS: what it holds first */
+                k = t_read(c->dtl, d, b, sizeof b);
+                if (k == TLS_WR || k == TLS_WW) {
+                    if (!await(c, d, k == TLS_WR ? SF_IN : SF_OUT, 60)) {
+                        ok = FALSE;
+                        break;
+                    }
+                    continue;
+                }
+            } else {
+                if (!await(c, d, SF_IN, 60)) {
+                    ok = FALSE;
+                    break;
+                }
+                k = recv(d, b, sizeof b, 0);
+                if (WOULDBLOCK(k))
+                    continue;
             }
-            if ((k = recv(d, b, sizeof b, 0)) == 0)
+            if (k == 0)
                 break;
-            if (WOULDBLOCK(k))
-                continue;
             if (k < 0) {
                 ok = FALSE;
                 break;
@@ -613,7 +920,7 @@ BOOL ftp_list(struct RConn *c, const char *path)
                     line[ll++] = b[i];
             }
         }
-        CloseSocket(d);
+        data_close(c, d, ok);
         r = reply(c);
         return ok && (r == 226 || r == 250);
     }
@@ -689,11 +996,59 @@ LONG ftp_xopen(struct RConn *c, const char *name, int how, ULONG *from)
         CloseSocket(d);
         return -1;
     }
-    if ((d = data_go(c, d, lis)) < 0) {
+    if ((d = data_tls(c, data_go(c, d, lis))) < 0) {
         reply_t(c, 10);
         return -1;
     }
+    c->dwant = 0;
     return c->dfd = d;
+}
+
+/* The file's bytes: plain, read only when the socket has some (written:
+ * room for 2 KB, the stack's low-water mark); TLS, what it holds first
+ * and the way it says to wait (c->dwant). */
+LONG ftp_dread(struct RConn *c, UBYTE *b, LONG n)
+{
+    LONG k;
+    if (c->dtl) {
+        if (!tls_pending(c->dtl) && !ready_now(c->dfd, FALSE))
+            return AGAIN;
+        k = t_read(c->dtl, c->dfd, b, n);
+        if (k == TLS_WR || k == TLS_WW) {
+            c->dwant = k == TLS_WR ? SF_IN : SF_OUT;
+            return AGAIN;
+        }
+        c->dwant = 0;
+        return k;
+    }
+    if (!ready_now(c->dfd, FALSE))
+        return AGAIN;
+    k = recv(c->dfd, b, n, 0);
+    if (WOULDBLOCK(k))
+        return AGAIN;
+    return k >= 0 ? k : -1;
+}
+
+LONG ftp_dwrite(struct RConn *c, const UBYTE *b, LONG n)
+{
+    LONG k;
+    if (!ready_now(c->dfd, TRUE))
+        return AGAIN;
+    if (n > 2048)
+        n = 2048;
+    if (c->dtl) {
+        k = tls_write(c->dtl, b, n);
+        if (k == TLS_WR || k == TLS_WW) {
+            c->dwant = k == TLS_WR ? SF_IN : SF_OUT;
+            return AGAIN;
+        }
+        c->dwant = 0;
+        return k > 0 ? k : -1;
+    }
+    k = send(c->dfd, (APTR)b, n, 0);
+    if (WOULDBLOCK(k))
+        return AGAIN;
+    return k > 0 ? k : -1;
 }
 
 /* The data's end: the host's word on it. After a stop the host may say
@@ -702,8 +1057,7 @@ LONG ftp_xopen(struct RConn *c, const char *name, int how, ULONG *from)
 BOOL ftp_xend(struct RConn *c, BOOL stopped)
 {
     int r;
-    if (c->dfd >= 0)
-        CloseSocket(c->dfd);
+    data_close(c, c->dfd, !stopped);    /* TLS: close_notify, all sent */
     c->dfd = -1;
     if (!stopped) {
         r = reply_t(c, 120);

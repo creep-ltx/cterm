@@ -2,8 +2,8 @@
 
 A terminal for AmigaOS 3.2 and up, in C: the Amiga Shell in a window of its own,
 and a terminal for other computers (telnet, ssh, a serial line or a modem,
-BBSes, programs on a PC), in one program, with a file browser for SFTP and
-FTP. VT100/xterm emulation, Amiga and TrueType fonts, 2 to 16
+BBSes, programs on a PC), in one program, with a file browser for SFTP, FTP
+and FTPS. VT100/xterm emulation, Amiga and TrueType fonts, 2 to 16
 million colours, Latin-1, UTF-8 and the PC's character set.
 
 ## What it needs
@@ -56,18 +56,20 @@ Project/Call... (Right Amiga+K) asks for a host and remembers the last
 eight; the phone book's places are listed first. A call opens in a new
 tab (or a window of its own); when it ends, Return calls again.
 
-## Files on other computers: SFTP and FTP
+## Files on other computers: SFTP, FTP and FTPS
 
 CTerm copies files to and from other computers with SFTP (files over
-ssh, as safe as ssh) and FTP (the old way: the password goes over the
-network as it is - use it only where that does not matter, or on your
-own network). It stays in the terminal, as ssh and telnet do: the files
+ssh, as safe as ssh), FTPS (FTP locked with TLS, as https is) and FTP
+(the old way: the password goes over the network as it is - use it only
+where that does not matter, or on your own network). It stays in the
+terminal, as ssh and telnet do: the files
 show in the tab itself, in two panels, the way Midnight Commander shows
 them on Linux.
 
-- **Opening it:** a phone book place of the kind `sftp` or `ftp`
-  (Call, a double-click, `CTerm BOOK "name"`), `ftp://` or `sftp://` typed
-  in the Call window (`ftp://user:password@host/drawer`), `CTerm FTP ...`
+- **Opening it:** a phone book place of the kind `sftp`, `ftp` or `ftps`
+  (Call, a double-click, `CTerm BOOK "name"`), `ftp://`, `ftps://` or
+  `sftp://` typed in the Call window (`ftp://user:password@host/drawer`),
+  `CTerm FTP ...` (`CTerm FTP ftps://host` for FTPS)
   or `CTerm SFTP ...` from the Shell, or in an ssh tab Project/Open SFTP
   browser (the same host and login, a tab and a connection of its own).
   SFTP is CTermSSH's: CTerm starts it for an SFTP place, as it does for
@@ -99,15 +101,19 @@ them on Linux.
 | letters | find the first name that starts so, as you type it |
 | F1 (Help) | every key, and the commands |
 | F2 (Ctrl+R) | read both drawers again |
-| F5 | copy the marked files - or the one under the bar - to the other side |
-| F6 | rename (a new name is asked on the message line) |
+| F5 | copy the marked files and drawers - or the one under the bar - to the other side (a drawer with all that is in it) |
+| F6 (Shift+F6) | rename (a new name is asked on the message line) |
 | F7 | a new drawer (its name is asked) |
-| F8 (Del) | delete the marked, or the one under the bar (asks y/n first; a drawer must be empty) |
+| F8 (Del) | delete the marked, or the one under the bar (asks y/n first; a drawer goes with all that is in it, and the question says so) |
 | F9 | the messages: the tab's own text (the greeting, each file copied); any key goes back |
 | F10 | hang up and close the tab (asks y/n) |
 | Esc | stop a transfer or a listing; forget a name being looked for |
 | `:` | the command line |
 
+- **Shift and the function keys:** Shift+F1 to Shift+F10 are keys of
+  their own; while Shift is held, the key bar shows what they do (only
+  Shift+F6, rename, has a job at the start - give the others one in
+  Settings, Keys).
 - **The mouse:** a click chooses a line (and the panel), a double-click
   goes into a drawer, the wheel scrolls the panel under the pointer, a
   click on a function key's name does what it says. Shift and the mouse
@@ -126,11 +132,12 @@ them on Linux.
 | `ls [pattern]`, `lls [pattern]` | the other computer's drawer, the Amiga's, as a list over the panels (any key goes back) |
 | `cd drawer`, `lcd drawer` | into a drawer there, on the Amiga (`cd ..`, `lcd Work:`, `lcd ..`) |
 | `pwd`, `lpwd` | where each side is |
-| `get name...`, `mget pattern...` | copy files from there into the Amiga's drawer |
-| `put name...`, `mput pattern...` | copy files from the Amiga's drawer (or `Work:path`) there |
+| `get name...`, `mget pattern...` | copy files from there into the Amiga's drawer (a drawer named: with all in it; `get -r pattern`: the drawers the pattern matches too) |
+| `put name...`, `mput pattern...` | copy files from the Amiga's drawer (or `Work:path`) there (drawers as get) |
 | `mkdir name` | a new drawer there |
-| `rm name...`, `rmdir name` | delete there (asks y/n first) |
+| `rm name...`, `rmdir name` | delete there (asks y/n first; a drawer with all in it) |
 | `rename old new` | rename there |
+| `passive` | FTP: switch between passive and active (see below) |
 | `bye` | hang up and close the tab |
 | `help` | the keys and these commands |
 
@@ -138,21 +145,31 @@ them on Linux.
   over: a number is added (`name.1`). A name the Amiga cannot take
   (with `:` or `/` in it) gets `_` instead. Sending files that are on
   the other computer already asks first: `y` replaces them, `n` leaves
-  them out. Drawers are not copied (mark their files).
+  them out, `g` sends only what is missing (a file that is shorter there
+  goes on from where it ends, one as long is left as it is).
+- **Drawers** are copied with all that is in them, both ways, keeping
+  their drawers inside. Copying a drawer again goes into the one there:
+  what it has already (as long) is left out, so a copy that was stopped
+  goes on. Links on the host are copied as files, not followed into.
+- **Dates:** a file copied to the Amiga gets the date it has on the
+  other computer.
 - **CTerm goes on while files move:** the other tabs, the Shell, other
   panes, a second place. The message line shows the file, how much of
   it, per cent, the speed and how many files are left; the tab's name
   shows the per cent, and Transfer/Show transfers... lists it as it
   does Zmodem. Esc (or Stop there) stops it. A stopped download keeps
   `name.part`; copying the same file again goes on from where it
-  stopped. One transfer at a time in all of CTerm.
+  stopped. A stopped upload goes on too: sending the same file again
+  (F5, put, ARexx's PUT) sends only the rest (FTP's REST or APPE, SFTP
+  adds to it). One transfer at a time in all of CTerm.
 - **Logins:** SFTP checks the host's key and logs in as ssh does (a key
   file in `ENVARC:CTerm/`, else the phone book's password, else it asks
   in the tab). FTP uses the phone book's user and password, asks in the
   tab for a password it has not got, or logs in as anonymous with no
   user. An FTP host that hung up on a quiet line is called again by
   itself at the next command.
-- **The phone book** has the kinds `sftp (files)` and `ftp (files)`;
+- **The phone book** has the kinds `sftp (files)`, `ftp (files)` and
+  `ftps (files)`;
   their More... button (where Line... is for a serial line) sets the
   drawer on the other computer the browser starts in.
 - **ARexx** (LIST, CD, GET, PUT, MKDIR, DELETE, RENAME, below) works on
@@ -160,10 +177,30 @@ them on Linux.
 - The browser is a file of its own, `Parts/Files` (52 KB): loaded when a
   place is called, gone when the last one hangs up. It uses no windows
   of its own, so OS 3.2's window classes are not loaded for it.
-- Dates: FTP hosts that list the old way show their own clock; SFTP and
-  the newer FTP listing (MLSD) give UTC, which is shown as it is.
-- Not there yet: FTPS (FTP with TLS), active FTP (passive only, which is
-  what works through home routers), copying whole drawers.
+- **Dates** are shown in the Amiga's own time. SFTP and the newer FTP
+  listing (MLSD) give UTC; CTerm turns it into the Amiga's time with
+  `ENV:TZ` when it is set, written as Unix writes it
+  (`SetEnv SAVE TZ CET-1CEST,M3.5.0,M10.5.0/3` for Sweden: one hour east,
+  summer time from the last Sunday in March to the last in October),
+  else with Prefs/Locale's time zone (which knows no summer time). FTP
+  hosts that list the old way show their own clock, as they give it.
+- **Active FTP:** CTerm asks the host for passive FTP first (it calls
+  the host for each file - what works through a home router). A host
+  that refuses it (or whose passive port cannot be reached) is asked for
+  active FTP instead, from then on: the host calls the Amiga back. That
+  works on your own network; through a router the call usually cannot
+  get in. The command `passive` switches between the two by hand.
+- **FTPS** (a place of the kind `ftps`, or `ftps://`): FTP with TLS, the
+  same as https - the password and the files are locked. It needs AmiSSL
+  5 (as ssh does; about 4 MB of free memory) and a host that offers it
+  (`AUTH TLS`; the place is not called without it). The host's
+  certificate is checked as ssh checks a host key: one signed for that
+  name by an authority AmiSSL knows (`AmiSSL:Certs`, or your own in
+  `AmiSSL:UserCerts`) is taken; one that is not (a home server's own) is
+  shown with its fingerprint and asked about once - `y` remembers it, in
+  `ENVARC:CTerm/ftps_hosts`; if it changes later, CTerm warns loudly and
+  asks for `yes` in full. FTPS is CTerm's own: CTermSSH does not call it.
+  On a 50 MHz 68030 each file's own TLS start takes a few seconds.
 
 ## Serial lines and modems
 
@@ -651,11 +688,11 @@ limit, 10 for an error, 20 for a failure):
 | `PANE FOCUS LEFT` / `RIGHT` / `UP` / `DOWN`, `PANE MOVE ...` | to the pane that way; the pane changes places with that one. RC 10: no pane there |
 | `PANE FULL`, `PANE SHOW n`, `PANE MODE TABS` / `PANES` | fill the window (again: back); tab n in this pane; all panes to tabs, all tabs to panes (RESULT: how many panes) |
 | `PHONEBOOK` | the places' names, each in quotes |
-| `SFTP place`, `FTP place` | opens the file browser: a phone book place, or `[user@]host[:port][/drawer]` (or a URL), in a new tab; RC 0 when it is connected. The commands below go to that tab |
+| `SFTP place`, `FTP place` | opens the file browser: a phone book place, or `[user@]host[:port][/drawer]` (or a URL, `ftps://` too), in a new tab; RC 0 when it is connected. The commands below go to that tab |
 | `LIST` | the files in the browser's drawer, each in quotes, drawers with a `/` at the end |
 | `CD drawer` | goes to that drawer (`..` up); RESULT: where it is now |
-| `GET name... [TO drawer]` | downloads files from the drawer into the Amiga panel's drawer (TO: into that drawer); RC 5 when some failed |
-| `PUT file...` | uploads Amiga files into the drawer (a file of that name there is replaced) |
+| `GET name... [TO drawer]` | downloads files (and drawers, with all in them) from the drawer into the Amiga panel's drawer (TO: into that drawer); RC 5 when some failed |
+| `PUT file...` | uploads Amiga files and drawers into the drawer (a file of that name there is replaced; one whose upload was stopped goes on) |
 | `MKDIR name`, `DELETE name`, `RENAME name TO newname` | on the other computer (DELETE: a file, or an empty drawer) |
 | `VERSION`, `HELP [command]`, `QUIT` | |
 
@@ -789,10 +826,10 @@ The keys CTerm comes with:
 | `*` | `invert` | the files' marks turned over |
 | F1, Help | `help` | the keys and the commands |
 | F2, Ctrl+R | `refresh` | both drawers read again |
-| F5 | `copy` | copy the marked (or the bar's) across |
-| F6 | `rename` | rename the one under the bar |
+| F5 | `copy` | copy the marked (or the bar's) across, drawers with all in them |
+| F6, Shift+F6 | `rename` | rename the one under the bar |
 | F7 | `mkdir` | a new drawer |
-| F8, Del | `delete` | delete the marked (asks first) |
+| F8, Del | `delete` | delete the marked (asks first; drawers with all in them) |
 | F9 | `log` | the messages |
 | F10 | `quit` | hang up and close the tab (asks first) |
 | Esc | `stop` | stop a transfer or a listing; forget a search |

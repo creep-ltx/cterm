@@ -1087,7 +1087,9 @@ static void call_start_book(const BookEntry *e)
         strcat(cmd, e->name);
     } else {
         strcat(cmd, e->fkind == FK_SFTP ? "\" SFTP \"" : "\" FTP \"");
-        if (e->fkind == FK_FTP && e->user[0]) {
+        if (e->fkind == FK_FTPS)
+            strcat(cmd, "ftps://");     /* the FTP word takes its URL */
+        if (e->fkind != FK_SFTP && e->user[0]) {
             strcat(cmd, e->user);
             strcat(cmd, "@");
         }

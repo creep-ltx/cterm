@@ -20,7 +20,8 @@ static int bcur = -1;                   /* the entry shown: -1 none */
 
 static STRPTR kindlabels[] = { (STRPTR)"telnet", (STRPTR)"ssh",
                                (STRPTR)"serial", (STRPTR)"sftp (files)",
-                               (STRPTR)"ftp (files)", NULL };
+                               (STRPTR)"ftp (files)",
+                               (STRPTR)"ftps (files)", NULL };
 static STRPTR lettlabels[] = { (STRPTR)"CTerm's setting",
                                (STRPTR)"Amiga font", (STRPTR)"TrueType",
                                (STRPTR)"PC font (IBM VGA)", NULL };
@@ -121,7 +122,8 @@ static void entry_read(void)
     v = bget(B_KIND, CHOOSER_Selected);
     e->ssh = v == 1 || v == 3;
     e->serial = v == 2;
-    e->fkind = v == 3 ? FK_SFTP : v == 4 ? FK_FTP : FK_NONE;
+    e->fkind = v == 3 ? FK_SFTP : v == 4 ? FK_FTP : v == 5 ? FK_FTPS
+             : FK_NONE;
     e->letters = bget(B_LET, CHOOSER_Selected);
     e->chars = bget(B_CHR, CHOOSER_Selected);
     book_tidy(e);
@@ -131,7 +133,7 @@ static void entry_read(void)
 static int kind_of(const BookEntry *e)
 {
     return e->serial ? 2 : e->fkind == FK_SFTP ? 3 : e->fkind == FK_FTP ? 4
-                                                    : e->ssh;
+         : e->fkind == FK_FTPS ? 5 : e->ssh;
 }
 
 /* The fields that mean something for the kind of place: an address and

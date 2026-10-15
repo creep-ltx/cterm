@@ -1066,7 +1066,7 @@ static BOOL x_open(struct RConn *c, const char *name, int how, ULONG *from)
 }
 
 /* The socket can be read (wr: written) now, without waiting. */
-static BOOL ready_now(LONG fd, BOOL wr)
+BOOL ready_now(LONG fd, BOOL wr)
 {
     fd_set s;
     struct timeval tv;
@@ -1083,14 +1083,8 @@ static BOOL ready_now(LONG fd, BOOL wr)
 static LONG x_read(struct RConn *c, UBYTE *b, LONG n)
 {
     LONG k;
-    if (c->kind == FK_FTP) {
-        if (!ready_now(c->dfd, FALSE))
-            return AGAIN;
-        k = recv(c->dfd, b, n, 0);
-        if (WOULDBLOCK(k))
-            return AGAIN;
-        return k >= 0 ? k : -1;
-    }
+    if (c->kind == FK_FTP)
+        return ftp_dread(c, b, n);
     k = OPS->sf_read(c->sfh, b, n);
     if (k == SF_AGAIN)
         return AGAIN;
@@ -1102,14 +1096,8 @@ static LONG x_read(struct RConn *c, UBYTE *b, LONG n)
 static LONG x_write(struct RConn *c, const UBYTE *b, LONG n)
 {
     LONG k;
-    if (c->kind == FK_FTP) {
-        if (!ready_now(c->dfd, TRUE))
-            return AGAIN;
-        k = send(c->dfd, (APTR)b, n < 2048 ? n : 2048, 0);
-        if (WOULDBLOCK(k))
-            return AGAIN;
-        return k > 0 ? k : -1;
-    }
+    if (c->kind == FK_FTP)
+        return ftp_dwrite(c, b, n);
     k = OPS->sf_write(c->sfh, b, n);
     if (k == SF_AGAIN)
         return AGAIN;
@@ -1120,8 +1108,9 @@ static LONG x_write(struct RConn *c, const UBYTE *b, LONG n)
 
 static BOOL x_wait(struct RConn *c, BOOL up)
 {
-    if (c->kind == FK_FTP)
-        return await(c, c->dfd, up ? SF_OUT : SF_IN, 120);
+    if (c->kind == FK_FTP)              /* (TLS: the way it said) */
+        return await(c, c->dfd, c->dwant ? c->dwant : up ? SF_OUT : SF_IN,
+                     120);
     return sf_wait(c);
 }
 
@@ -1501,7 +1490,7 @@ static int get_one(struct RConn *c, struct XItem *it, const char *rname,
         }
         if (k == AGAIN && x_wait(c, FALSE)) {
             /* "ready" by the wait, "not yet" by the look: no spinning */
-            if (c->kind == FK_FTP && !ready_now(c->dfd, FALSE))
+            if (c->kind == FK_FTP && !c->dtl && !ready_now(c->dfd, FALSE))
                 Delay(1);
             continue;
         }
@@ -1701,7 +1690,7 @@ int xfer_batch(struct RConn *c, BOOL up, struct Job *j, const char *dir)
     if (!(buf = AllocVec(BUFSZ, MEMF_ANY)))
         return -1;
     memset(&x, 0, sizeof x);
-    x.proto = c->kind == FK_SFTP ? "SFTP" : "FTP";
+    x.proto = c->kind == FK_SFTP ? "SFTP" : c->tls ? "FTPS" : "FTP";
     x.dir = up ? 2 : 1;
     if (up)
         to_latin1(c->cwd, strlen(c->cwd), x.where, sizeof x.where, '?');
@@ -1810,6 +1799,7 @@ static void conn_free(struct RConn *c)
         ui_stop(c);                     /* the tab stays: its messages */
     ui_free(c);
     r_drop(c);
+    ftps_done(c);                       /* the last FTPS place: AmiSSL goes */
     pan_free(&c->pn[0]);
     pan_free(&c->pn[1]);
     for (q = &conns; *q && *q != c; q = &(*q)->next)
@@ -1833,7 +1823,8 @@ static void f_call_(void)
         if (!(c = AllocVec(sizeof *c, MEMF_ANY | MEMF_CLEAR)))
             return;
         c->tab = T;
-        c->kind = T->t_fkind;
+        c->kind = T->t_fkind == FK_FTPS ? FK_FTP : T->t_fkind;
+        c->tls = T->t_fkind == FK_FTPS; /* FTP, with AUTH TLS */
         c->cfd = c->dfd = -1;
         c->side = 1;
         strcpy(c->pass, T->t_pass);
