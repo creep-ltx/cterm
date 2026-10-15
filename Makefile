@@ -20,8 +20,8 @@ TP = third_party
 SSHINC = -I$(TP)/amiga -I$(TP)/AmiSSL/Developer/include -I$(TP)/libssh2-1.11.1/include
 SSHLIB = $(TP)/lib/libssh2.a -L$(TP)/AmiSSL/Developer/lib/AmigaOS3 -lamisslstubs -lm
 
-SRC = src/main.c src/hide.c src/pane.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/find.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c src/serial.c src/classes.c src/parts.c
-HDR = src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h src/serial.h src/sermod.h src/part.h src/partlist.h src/partuse.h
+SRC = src/main.c src/hide.c src/pane.c src/draw.c src/ppaint.c src/fonts.c src/screen.c src/net.c src/keys.c src/clip.c src/find.c src/drop.c src/cmap.c src/transfer.c src/detect.c src/vt.c src/console.c src/book.c src/serial.c src/classes.c src/parts.c
+HDR = src/cmap.h src/ppaint.h src/cterm.h src/xfer.h src/xfermod.h src/vt.h src/boxtable.h src/console.h src/ssh.h src/book.h src/serial.h src/sermod.h src/part.h src/partlist.h src/partuse.h
 
 # CTerm: everything but ssh (small enough for a stock A1200)
 # -flto: the parts (split into files) inlined across files again - the
@@ -158,16 +158,27 @@ tests/vtdump: tests/vtdump.c src/vt.c src/vt.h
 tests/amiga_test: tests/amiga_test.c src/vt.c src/vt.h
 	gcc -O2 -Wall -o $@ tests/amiga_test.c src/vt.c
 
-test: tests/vtdump tests/amiga_test tests/shadow_test tests/pic_test
+test: tests/vtdump tests/amiga_test tests/shadow_test tests/pic_test tests/link_test tests/cmap_test
 	.venv/bin/python tests/compare.py
 	tests/amiga_test
 	tests/pic_test
+	tests/link_test
+	tests/cmap_check.sh fonts/PxPlus_IBM_VGA_8x16.ttf $(wildcard /usr/share/fonts/TTF/DejaVuSansMono.ttf)
 	.venv/bin/python tests/lines.py
 	tests/shadow_test tests/streams/*.bin tests/lines/*.bin
 
 # pictures: sixel and iTerm2 files (tests/pictures/mksixel.py makes them)
 tests/pic_test: tests/pic_test.c src/vt.c src/vt.h
 	gcc -O2 -Wall -o $@ tests/pic_test.c src/vt.c
+
+# hyperlinks (OSC 8) and the wrapped-row mark; a cap of 4 addresses, so
+# dropping the unused ones is tried too
+tests/link_test: tests/link_test.c src/vt.c src/vt.h
+	gcc -O2 -Wall -DLINK_MAX=5 -DLINK_BYTES=200 -o $@ tests/link_test.c src/vt.c
+
+# the fallback font's cmap reader (src/cmap.c) against fontconfig's
+tests/cmap_test: tests/cmap_test.c src/cmap.c src/cmap.h
+	gcc -O2 -Wall -o $@ tests/cmap_test.c src/cmap.c
 
 tests/shadow_test: tests/shadow_test.c src/vt.c src/vt.h
 	gcc -O2 -Wall -o tests/shadow_test tests/shadow_test.c src/vt.c

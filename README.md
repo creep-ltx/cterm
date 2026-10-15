@@ -3,8 +3,10 @@
 A terminal for AmigaOS 3.2 and up, in C: the Amiga Shell in a window of its own,
 and a terminal for other computers (telnet, ssh, a serial line or a modem,
 BBSes, programs on a PC), in one program, with a file browser for SFTP and
-FTP. VT100/xterm emulation, Amiga and TrueType fonts, 2 to 16
-million colours, Latin-1, UTF-8 and the PC's character set.
+FTP. VT100/xterm emulation, Amiga and TrueType fonts (with a fallback
+font for emoji), 2 to 16 million colours, Latin-1, UTF-8 and the PC's
+character set, links you can open (also programs' own, OSC 8), and
+files dropped from Workbench typed, sent or uploaded.
 
 ## What it needs
 
@@ -559,6 +561,13 @@ opened: **Ctrl+click** one, or mark it (or a part of it) and choose
 Edit/Open link (Right Amiga+O; with nothing marked: the first address on
 the cursor's line).
 
+- **Links programs make** (the OSC 8 code: `ls --hyperlink`, `gcc`'s
+  warnings, man pages, many modern tools) are underlined. Ctrl+click
+  or Open link opens the address the program gave, even when the text
+  shown is something else ("click here"); with no such link there, the
+  address written in the text.
+- **An address cut by the window's right edge** (it ran on into the next
+  line) is found whole, whichever of its lines you click or mark.
 - `telnet://`, `ssh://`, `ftp://` and `sftp://` open in a new CTerm tab
   (the file browser for FTP and SFTP).
 - Web addresses go to your browser through `openurl.library` when it is
@@ -566,6 +575,23 @@ the cursor's line).
   command that gets the address, at `%s` or at the end, for example
   `browser=Work:IBrowse/IBrowse "%s"`. With neither, the address goes onto
   the clipboard and the title says "link copied".
+
+## Dropping files on the window
+
+Drag file icons from Workbench onto CTerm's window (CTerm in a Workbench
+window: Workbench gives dropped icons only to its own screen's windows):
+
+- **On a Shell tab** their full names are typed at the cursor, in quotes
+  when a name needs them (a space, `*`, `;`...), a space after each:
+  type `Copy ` first, drop, then type the rest.
+- **On a call to a host** (telnet, ssh, serial) they wait for the host's
+  Zmodem upload: start it there (`rz` in a Unix shell, a board's upload
+  command) and they go, with no requester. The title says they wait.
+- **On a file browser tab** (FTP, SFTP) they are uploaded into the
+  drawer it shows.
+
+Up to 16 files at a time. With panes, the pane they are dropped on is
+the one that gets them.
 
 ## File transfers
 
@@ -650,6 +676,8 @@ limit, 10 for an error, 20 for a failure):
 | `PANE SPLIT H` / `V` | new panes from this one side by side, or one below the other |
 | `PANE FOCUS LEFT` / `RIGHT` / `UP` / `DOWN`, `PANE MOVE ...` | to the pane that way; the pane changes places with that one. RC 10: no pane there |
 | `PANE FULL`, `PANE SHOW n`, `PANE MODE TABS` / `PANES` | fill the window (again: back); tab n in this pane; all panes to tabs, all tabs to panes (RESULT: how many panes) |
+| `PANE DWINDLE ON` / `OFF` | new panes split by shape (along the longer side), or as `PANE SPLIT` says; `PANE DWINDLE` alone: RESULT is `ON` or `OFF` |
+| `PANE GAPS n [OUTER ON\|OFF] [BORDER n]` | the gap between panes in pixels (0-32), the same gap round them or not, the border round each pane (0-8); any of the three alone, e.g. `PANE GAPS BORDER 2`. `PANE GAPS` alone: RESULT is "gaps ON/OFF border", e.g. `5 ON 1`. As the Settings window's Screen tab; kept like the other settings |
 | `PHONEBOOK` | the places' names, each in quotes |
 | `SFTP place`, `FTP place` | opens the file browser: a phone book place, or `[user@]host[:port][/drawer]` (or a URL), in a new tab; RC 0 when it is connected. The commands below go to that tab |
 | `LIST` | the files in the browser's drawer, each in quotes, drawers with a `/` at the end |
@@ -826,7 +854,8 @@ like the system's settings programs):
   and number of colours), full screen, scroll bar. In full screen a thin
   bar on the right edge shows where you are in the history; pull it with
   the mouse to scroll back.
-- **Text:** an Amiga font or TrueType, the TrueType size, line spacing,
+- **Text:** an Amiga font or TrueType, the TrueType size, the fallback
+  font (below), line spacing,
   the characters (UTF-8, Latin-1, PC BBS), and whether PC BBS mode uses
   the PC's own font. The characters are what every new tab starts in
   (a phone book place's own characters win for its tab); the shown tab
@@ -847,6 +876,22 @@ like the system's settings programs):
   the background, 0 to 100 %. It covers the window without stretching,
   stays still while the text scrolls over it, and costs no speed. It
   needs a screen of 16 bits of colour or more (a graphics card).
+
+**The fallback font** is a second TrueType font for the letters the
+TrueType font lacks: emoji and symbols. Without one they show as an
+empty box. TrueType on the Amiga draws in one colour, so it must be a
+one-colour emoji font: **Noto Emoji** (free, from Google Fonts; not
+"Noto Color Emoji"). TrueType on the Amiga (ttengine.library) cannot
+reach most emoji in a font as it comes (all above U+FFFF), so make
+CTerm's copy of it once, on any computer with Python:
+`pip install fonttools`, then
+`python3 tools/emojifont.py "NotoEmoji[wght].ttf" NotoEmoji-CTerm.ttf`,
+and choose `NotoEmoji-CTerm.ttf` (copied to `SYS:Fonts/TrueType/`). A
+symbol font as it comes (Symbola, DejaVu Sans) works too, for what it
+has below U+FFFF. Emoji the terminal counts as two cells wide are drawn
+two cells wide; those it counts as one are drawn smaller, to fit one.
+The fallback font is `fallbackfont=` in `ENV:CTerm.prefs`; None in the
+Settings window turns it off.
 
 Letters and colours change at once, so you see them; the screen changes
 on Use or Save. Save keeps them (ENVARC:CTerm.prefs), Use until the next

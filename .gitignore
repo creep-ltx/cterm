@@ -33,3 +33,5 @@ Parts/
 src/partuse.h
 ShowPic
 tests/pic_test
+tests/link_test
+tests/cmap_test

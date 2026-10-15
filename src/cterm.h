@@ -383,7 +383,7 @@ enum { S_TABS = 1, S_WHERE, S_MODE, S_FULL, S_BAR, S_LETTERS, S_FONT, S_TT,
        S_DLDIR, S_ULDIR, S_SHELL,
        S_MINIT, S_MINIT2, S_MDIALK, S_MDIAL, S_MSUFFIX, S_MHANG, S_MHANGCMD,
        S_MWAIT, S_MREDIAL, S_MPAUSE, S_MANSWER, S_SERLINE, S_PICS, S_GAPS, S_OWNPROG,
-       S_OUTER, S_BORDER,
+       S_OUTER, S_BORDER, S_FALL, S_NOFALL,
        S_SAVE, S_USE, S_CANCEL, S_N };
 
 /* ---- shared state ---- */
@@ -431,6 +431,13 @@ extern BOOL ttaa;
 extern struct KeepFont keepfont;
 extern int ttsize;
 extern APTR ttface[4];
+/* fonts.c: the fallback TrueType font for letters the main one lacks */
+extern char fallfile[160];
+extern APTR ttfall, ttfall1;           /* for two cells, for one */
+extern int fallgen;
+BOOL tt_missing(ULONG cp);
+ULONG tt_fallcp(ULONG cp);
+void fall_free(void);
 extern BOOL ttruns;
 extern int ox, oy, cols, rows;
 extern APTR visual;
@@ -798,6 +805,15 @@ void show_ask(void);
 BOOL hide_state(void);
 ULONG hide_sigmask(void);
 void hide_events(void);
+/* drop.c: files dropped on the window from Workbench (an AppWindow) */
+void drop_add(void);
+void drop_remove(void);
+void drop_free(void);
+ULONG drop_sigmask(void);
+void drop_events(void);
+int drop_uploads(struct Tab *t, char (*store)[256], const char **paths,
+                 int max);
+void drop_tab_gone(struct Tab *t);
 void hide_show(void);                   /* at a round's end: what was asked */
 void cx_open(void);
 void cx_close(void);

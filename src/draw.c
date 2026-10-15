@@ -906,16 +906,19 @@ static APTR tt_for(UWORD attr)
     return ttface[i] ? ttface[i] : ttface[i & 1] ? ttface[i & 1] : ttface[0];
 }
 
-/* A row's TrueType letters and their cells (512 each), made when
- * TrueType first draws: 4 KB a stock A1200 need not keep */
+/* A row's TrueType letters and their cells (512 each), then those the
+ * fallback font draws (wide, narrow), made when TrueType first draws:
+ * 12 KB a stock A1200 need not keep */
 static ULONG *ttbuf;
 
 /* A run of TrueType text on its background; cols[i]: glyph i's cell. */
+static APTR tt_over;                    /* set: tt_run draws with this face */
+
 static void tt_run(const ULONG *u, const int *cols, int n, int y,
                    ULONG fg, UWORD attr)
 {
     int i;
-    APTR f = tt_for(attr);
+    APTR f = tt_over ? tt_over : tt_for(attr);
     LONG st = attr & VT_UNDERLINE ? TT_SoftStyle_Underlined
                                   : TT_SoftStyle_None;
     drmd(JAM1);
@@ -1133,19 +1136,47 @@ static void draw_cells(int r, int x0, int x1)
             int *ucol, k, m = 0;
             apen(bg);
             RectFill(rp, ox + start * cw, y, ox + x * cw - 1, y + ch - 1);
-            if (!ttbuf && !(ttbuf = AllocVec(512 * 8, MEMF_ANY)))
+            if (!ttbuf && !(ttbuf = AllocVec(512 * 24, MEMF_ANY)))
                 continue;               /* no memory: the background only */
             u = ttbuf;
             ucol = (int *)(ttbuf + 512);
-            for (k = start; k < x; k++) {
-                const VtCell *d = k < w && line ? &line[k] : &empty;
-                if (d->cp == VT_WIDE_TAIL || d->cp <= ' ')
-                    continue;           /* spaces: the background did it */
-                u[m] = tt_stand_in(d->cp);
-                ucol[m++] = k;
+            {
+                /* the letters the font lacks: the fallback font's (fonts.c),
+                 * the wide ones (two cells) and the narrow ones apart */
+                ULONG *fu = ttbuf + 1024, *nu = ttbuf + 2048;
+                int *fcol = (int *)(ttbuf + 1536), fm = 0;
+                int *ncol = (int *)(ttbuf + 2560), nm = 0;
+                for (k = start; k < x; k++) {
+                    const VtCell *d = k < w && line ? &line[k] : &empty;
+                    ULONG cp2;
+                    if (d->cp == VT_WIDE_TAIL || d->cp <= ' ')
+                        continue;       /* spaces: the background did it */
+                    cp2 = tt_stand_in(d->cp);
+                    if (tt_missing(cp2)) {
+                        if (k + 1 < w && line && line[k + 1].cp == VT_WIDE_TAIL) {
+                            fu[fm] = tt_fallcp(cp2);
+                            fcol[fm++] = k;
+                        } else {
+                            nu[nm] = tt_fallcp(cp2);
+                            ncol[nm++] = k;
+                        }
+                        continue;
+                    }
+                    u[m] = cp2;
+                    ucol[m++] = k;
+                }
+                if (m)
+                    tt_run(u, ucol, m, y, fg, cat);
+                if (fm) {
+                    tt_over = ttfall;
+                    tt_run(fu, fcol, fm, y, fg, cat);
+                }
+                if (nm) {
+                    tt_over = ttfall1;
+                    tt_run(nu, ncol, nm, y, fg, cat);
+                }
+                tt_over = NULL;
             }
-            if (m)
-                tt_run(u, ucol, m, y, fg, cat);
         } else {
             if (linespace) {            /* Text() fills the font's rows only */
                 apen(bg);
@@ -1692,6 +1723,7 @@ static struct {
     int cw, ch, cbase, ttsize;
     BOOL usett, ttaa;
     char ttfile[sizeof ttfile];
+    int fallgen;                        /* the fallback face (fonts.c) */
 } made;
 
 void cache_free(void)
@@ -1719,7 +1751,7 @@ static BOOL cache_fits(void)
         made.cbase != cbase || made.usett != usett)
         return FALSE;
     if (usett && (made.ttsize != ttsize || made.ttaa != ttaa ||
-                  strcmp(made.ttfile, ttfile)))
+                  strcmp(made.ttfile, ttfile) || made.fallgen != fallgen))
         return FALSE;
     return cache_small || cache_want() <= cmask + 1;
 }
@@ -1760,6 +1792,7 @@ static BOOL cache_alloc(void)
     made.ttaa = ttaa;
     made.ttsize = ttsize;
     strcpy(made.ttfile, ttfile);
+    made.fallgen = fallgen;
     return TRUE;
 }
 
@@ -1802,7 +1835,12 @@ static void cell_tt_glyph(ULONG cp, ULONG fg, ULONG bg, UWORD attr, int w)
     int x, y, ph, pw;
     struct TextExtent te;
     int top, left;
-    pm = TT_GetPixmap(tt_for(attr), (APTR)&u, 1, TT_Encoding,
+    APTR face = tt_for(attr);
+    if (tt_missing(cp)) {               /* the fallback font's (fonts.c) */
+        face = w > cw ? ttfall : ttfall1;
+        u = tt_fallcp(cp);
+    }
+    pm = TT_GetPixmap(face, (APTR)&u, 1, TT_Encoding,
                       TT_Encoding_UTF32_BE, TT_Antialias,
                       ttaa ? TT_Antialias_On : TT_Antialias_Off,
                       TAG_END);
@@ -1811,8 +1849,8 @@ static void cell_tt_glyph(ULONG cp, ULONG fg, ULONG bg, UWORD attr, int w)
     /* the picture is the letter's ink only: it goes where the ink sits
      * on the baseline (measured: an "n" is 8 rows, an "E" 10 - put both
      * at the cell's top and the text jitters) */
-    TT_SetFont(rp, tt_for(attr));
-    c_ttfont = tt_for(attr);            /* tt_run's memo: what is set now */
+    TT_SetFont(rp, face);
+    c_ttfont = face;                    /* tt_run's memo: what is set now */
     TT_SetAttrs(rp, TT_Encoding, TT_Encoding_UTF32_BE, TAG_END);
     TT_TextExtent(rp, (APTR)&u, 1, &te);
     top = cbase + te.te_Extent.MinY;
