@@ -8,7 +8,8 @@
 # (or compare them with tests/stock/samepng.py when the files differ).
 # SCROLL=1: the page twice more, so the grab is of scrolled rows; SCROLL=2:
 # colours flooded off by plain lines, single lines, colours again; SCROLL=3:
-# the grab after the single lines (after a flood took the colours off).
+# the grab after the single lines (after a flood took the colours off);
+# SCROLL=4: colours overwritten in place, lines scrolled, a colour again.
 # MOVE=n: a 64x24 window dragged n pixels right before the text comes.
 D=$(cd "$(dirname "$0")/../.." && pwd)
 bash "$D/tests/stock/bench.sh" start >/dev/null || exit 1
@@ -30,6 +31,17 @@ elif [ "$SCROLL" = 3 ]; then
   # colours flooded off, then single lines: the grab after them
   { printf 'Prompt "> "\nType SYS:T/look.txt\nType SYS:T/plain.txt\n'
     for i in 1 2 3 4 5; do printf 'Echo "one more line %s"\n' "$i"; done; } > "$H/S/xlook"
+elif [ "$SCROLL" = 4 ]; then
+  # colours overwritten in place by plain text (no full redraw), single
+  # lines scrolled after, then a colour again: the plane mask shrinks and
+  # grows on partial draws
+  { printf 'Prompt "> "\nType SYS:T/look.txt\n'
+    for i in a b c; do printf 'Echo "line %s"\n' "$i"; done
+    for r in $(seq 1 28); do printf 'Echo "*E[%d;1H*E[0mplain over row %d*E[K" NOLINE\n' "$r" "$r"; done
+    printf 'Echo "*E[28;1H"\n'
+    for i in $(seq 1 30); do printf 'Echo "after %s"\n' "$i"; done
+    printf 'Echo "*E[31mred*E[0m and *E[44mblue*E[0m"\n'
+    for i in 8 9 10; do printf 'Echo "after %s"\n' "$i"; done; } > "$H/S/xlook"
 elif [ -n "$SCROLL" ]; then
   printf 'Prompt "> "\nType SYS:T/look.txt\nType SYS:T/look.txt\nType SYS:T/look.txt\n' > "$H/S/xlook"
 elif [ -n "$MOVE" ]; then

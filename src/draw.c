@@ -3026,23 +3026,37 @@ void refresh_all(void)
     T = keep;
 }
 
-/* A whole redraw of the only pane: the plane mask down to the planes
- * its text needs now. The mask only ever grew: after one page of colours
- * every scroll moved all four planes of a 16-colour Workbench (a 640x224
- * ScrollRaster ~43 ms against ~11 for one plane on a 14 MHz A1200), until
- * the next full clear. The planes given up are set to the background's
- * bits over the text area first, so the mask's promise holds again:
- * outside it, the background everywhere. Not with pictures, panes, the
- * scratchpad or a panel over the rows (their own pens and areas). */
-static void planes_fit(void)
+/* After a draw of the only pane: the plane mask down to the planes the
+ * text on show needs. The mask only ever grew: after one page of colours
+ * every scroll moved all four planes of a 16-colour Workbench (a 616x224
+ * ScrollRaster: 12 ms a plane on a 14 MHz A1200) until the next full
+ * clear. Nothing is cleared: every row was drawn with all the mask's
+ * planes, so a plane none of its looks uses holds the background's bits
+ * there, as the planes outside the mask do - only the mask shrinks, for
+ * the next scrolls and draws (were it done before this draw, a changed
+ * span drawn without a plane its old letters used would leave them).
+ * Looked at only while the mask holds more than plain text needs, at
+ * every full redraw and draw that scrolled - after a look that found
+ * colours still on show, not at the next two scrolls (a look at all the
+ * cells is ~3 ms, a scroll 12 ms a plane). Not with pictures, panes, the scratchpad or a panel
+ * over the rows (their own pens and areas). */
+static void planes_fit(BOOL full)
 {
     static const VtCell empty = { 0, 0 };
-    UBYTE need = 0, drop;
+    static int skip;
+    UBYTE need = 0;
     UWORD st;
     int r, x, w;
     if (pbase < 0 || npanes > 1 || fshown)
         return;
     pp_pens(&empty, FALSE, &st, &need);     /* blanks, the rows' tails */
+    if (!(pmask & ~need))
+        return;
+    if (!full && skip > 0) {
+        skip--;                         /* colours were on show just now */
+        return;
+    }
+    skip = 2;
     for (r = 0; r < rows; r++) {
         const VtCell *line = vt_line(vt, r, back, &w);
         UWORD kp = 0;                   /* the default look: counted */
@@ -3057,15 +3071,10 @@ static void planes_fit(void)
                 kp = line[x].pen;
                 pp_pens(&line[x], FALSE, &st, &need);
             }
-        if ((pmask & ~need) == 0)
+        if (!(pmask & ~need))
             return;                     /* nothing to give up */
     }
-    drop = pmask & ~need;
-    if (!drop)
-        return;
-    SetWriteMask(rp, drop);
-    apen(defbg);                        /* (its pen is pbase: no plane) */
-    RectFill(rp, cpane->fx0, oy, area_right(), oy + rows * ch - 1);
+    skip = 0;
     pmask &= need;
     SetWriteMask(rp, pmask);
 }
@@ -3118,8 +3127,6 @@ static void refresh_pane(void)
             if (chg.all || back > 0 || chg.dirty[r] || (r >= y0 && r <= y1))
                 paint_row(r);
     } else if (chg.all || back > 0) {
-        if (!xp)
-            planes_fit();
         for (r = 0; r < rows; r++)
             draw_row(r);
     } else {
@@ -3151,7 +3158,8 @@ static void refresh_pane(void)
     if (xp) {
         xfer_panel();                   /* over the last rows again */
         find_bar();
-    }
+    } else if (chg.all || back > 0 || chg.scroll_n)
+        planes_fit(chg.all || back > 0);
 }
 
 /* What came from the host, as it came (escape codes and all: a BBS
