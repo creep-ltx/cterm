@@ -10,6 +10,14 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**0.3b47 (2026-10-15): speed on a stock A1200 + 8 MB fast** (a helper, details in
+docs/extras-speed.md): conbench SYNC REPS 3 SCALE 1, 76x28, cycle-exact: 0.3b41 17.69 s, 0.3b45
+17.95 (the extras cost +1.7%), now **15.02 s against CCON 1.2.8's 15.67**; 030/50 18.89 -> 15.93.
+Letters in 68020 inline asm, CSI m straight to sgr, one-multiply pen hash, LF/CR in a few stores,
+painter pens per look, the margin painted with the row, the plane mask fitted after each draw
+(scrolls 12.7 instead of 43 ms after colour). Pixel-identical (grabs, vtsame 192 runs, pptest).
+Bench: tests/stock/bench.sh start|stop|run|ab|tests|prof on rig ctspeed, port 1254.
+
 **0.3b44 (2026-10-15, FS-UAE only; NOT yet on the A1200): the extras, built by three helpers
 in worktrees and merged** - details, traps and what is verified in docs/extras-links.md,
 docs/extras-pics.md, docs/extras-ftp.md:
