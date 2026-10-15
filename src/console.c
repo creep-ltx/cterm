@@ -1382,6 +1382,21 @@ void con_shell_info(struct Con *c, char *dir, int dsz, char *prog, int psz)
             if (n >= psz) n = psz - 1;
             memcpy(prog, b + 1, n); prog[n] = 0;
         }
+        {   /* csh (0.1b9+) keeps the running program's whole line in its
+             * local variable _CMDLINE: the arguments too */
+            struct LocalVar *lv;
+            for (lv = (struct LocalVar *)pr->pr_LocalVars.mlh_Head;
+                 lv->lv_Node.ln_Succ;
+                 lv = (struct LocalVar *)lv->lv_Node.ln_Succ)
+                if ((lv->lv_Node.ln_Type & 0x7F) == LV_VAR && lv->lv_Node.ln_Name &&
+                    !strcmp(lv->lv_Node.ln_Name, "_CMDLINE") && lv->lv_Value &&
+                    lv->lv_Len > 0) {
+                    n = lv->lv_Len < (ULONG)psz ? (int)lv->lv_Len : psz - 1;
+                    memcpy(prog, lv->lv_Value, n);
+                    prog[n] = 0;
+                    break;
+                }
+        }
     }
     Permit();
     {   /* the Shell itself waiting: no program */

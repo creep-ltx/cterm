@@ -491,7 +491,9 @@ keys can be changed (Settings, the Keys tab, or the `[panes]` part of
 - **Saved layouts** (Panes/Save layout..., Open layout..., in
   `ENVARC:CTerm/Layouts`): every workspace's panes, where their dividers
   are, their tabs and the scratchpad, each tab as what starts it again - a
-  Shell in its drawer with the program that ran in it, or a host. Panes/
+  Shell in its drawer with the program that ran in it (with its arguments
+  when the tab's shell is csh 0.1b9 or later, which keeps the running
+  command's whole line; other shells give the name only), or a host. Panes/
   Open this layout at start: CTerm opens with it (its first Shell takes
   the first pane).
 - **Gaps** (Settings, Screen tab, "Gap between panes", 0 to 32

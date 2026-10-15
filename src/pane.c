@@ -1346,13 +1346,18 @@ static BOOL resize_mode(void)
 char startlayout[200];                  /* prefs layout=: opened at the start */
 char lastlayout[200];                   /* the one saved or opened last */
 
+/* s in quotes; a " or \ in it with a \ before (a command line's own
+ * quotes: "Work:My Prog" args) - lr_word takes them off again */
 static void lw_str(BPTR f, const char *s)
 {
-    char q[208];
+    char q[520];
     int o = 0;
     q[o++] = '"';
-    for (; *s && o < (int)sizeof q - 3; s++)
-        if (*s != '"' && *s != '\n')
+    for (; *s && o < (int)sizeof q - 4; s++)
+        if (*s == '"' || *s == '\\') {
+            q[o++] = '\\';
+            q[o++] = *s;
+        } else if (*s != '\n')
             q[o++] = *s;
     q[o++] = '"';
     q[o] = 0;
@@ -1362,7 +1367,7 @@ static void lw_str(BPTR f, const char *s)
 /* what starts tab t again */
 static void lw_spec(BPTR f, struct Tab *t)
 {
-    char dir[200], prog[120];
+    char dir[200], prog[250];
     if (t && !t->t_local && (t->t_bookname[0] || t->t_dialhost[0])) {
         FPuts(f, (STRPTR)"host ");
         lw_str(f, t->t_bookname[0] ? t->t_bookname : t->t_dialhost);
@@ -1496,9 +1501,21 @@ static char *lr_word(char **p)
     while (*s == ' ' || *s == '\t')
         s++;
     if (*s == '"') {
-        w = ++s;
-        while (*s && *s != '"' && *s != '\n')
-            s++;
+        char *d;
+        w = d = ++s;                    /* \" and \\: lw_str's */
+        while (*s && *s != '"' && *s != '\n') {
+            if (*s == '\\' && (s[1] == '"' || s[1] == '\\'))
+                s++;
+            *d++ = *s++;
+        }
+        if (d < s) {                    /* the word ended short: its end */
+            char c = *s;
+            *d = 0;
+            if (c == '"')
+                s++;
+            *p = s;
+            return w;
+        }
     } else {
         w = s;
         while (*s && *s != ' ' && *s != '\t' && *s != '\n')

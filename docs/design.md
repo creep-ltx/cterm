@@ -55,10 +55,12 @@ see CShell/docs/design.md); when it is in, con_shell_info can read it for saved 
   in a csh tab: csh takes `*` as a file pattern - the test's, not CTerm's.)
 - (done in 0.3b41, INSTALLED and tested on the A1200 2026-10-14 (CTerm-0.3b40.bak, CTerm.keys-0.3b40.bak kept): `show1`-`show9` default to LA+Ctrl+1-9, the user's choice; a keys file
   without the KEYMARK comment gets them once where free, then is written with the mark.)
-- A saved layout keeps a program's NAME only (cli_CommandName), not its arguments: Ahiru comes
-  back in its own default drawer. Idea: csh keeps the running command's whole line in a local
-  variable of its process (e.g. `_CMDLINE`) and con_shell_info reads it from the process's
-  pr_LocalVars; other shells keep the name.
+- **Done 0.3b46 (2026-10-15, FS-UAE with csh 0.1b9):** a saved layout keeps the program's whole
+  line: con_shell_info reads csh's local variable `_CMDLINE` (LV_VAR in the Shell process's
+  pr_LocalVars, under Forbid; set by csh 0.1b9+ while a program from the prompt runs), else
+  cli_CommandName as before. Layout words keep `"` and `\` as `\"` `\\` (lw_str/lr_word), so a
+  quoted name (`"Work:My Prog" args`) comes back whole. Verified: `Wait 30 SEC` saved with its
+  arguments; a hand-written `"Echo \"quoted words\" ok"` opened and ran right.
 - Backed up to the NAS: remote `nas` = /mnt/nas/home/Code/CTerm.git (since 2026-10-14).
 - Proposed, NOT wanted for now (user, 2026-10-14): i3's tabbed container inside a split (LA+W
   tabbed pane with its own tab row, LA+E back to split, every tab in exactly one pane). The user
