@@ -478,6 +478,7 @@ void pics_all(void);                    /* every tab: the setting */
 int pics_decode(const uint8_t *file, long len, uint32_t **argb, int *w,
                 int *h);
 void pics_decode_free(uint32_t *argb);
+long pics_inflate(const uint8_t *in, long n, uint8_t *out, long max);
 BOOL pics_pens(const UBYTE *rgb, int n, int x, int y, UBYTE *out);
 void pics_tidy(void);                   /* no picture left: it goes */
 

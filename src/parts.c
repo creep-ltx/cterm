@@ -572,6 +572,17 @@ void pics_decode_free(uint32_t *argb)
         QP->decode_free((ULONG *)argb);
 }
 
+long pics_inflate(const uint8_t *in, long n, uint8_t *out, long max)
+{
+    long r;
+    if (!part_load(&pq))
+        return -1;
+    pq.depth++;
+    r = QP->inflate(in, n, out, max);
+    pq.depth--;
+    return r;
+}
+
 BOOL pics_pens(const UBYTE *rgb, int n, int x, int y, UBYTE *out)
 {
     if (!part_load(&pq))

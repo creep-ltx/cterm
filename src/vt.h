@@ -117,7 +117,7 @@ const char *vt_title(Vt *vt, int *changed);
 char *vt_take_clip(Vt *vt, int *len);
 int vt_take_bell(Vt *vt);
 
-/* ---- pictures (sixel, iTerm2's inline files) ----
+/* ---- pictures (sixel, iTerm2's inline files, kitty's graphics) ----
  * A picture is cut into tiles of a cell each; a cell showing one holds
  * VT_PIC_CP(id, row, col) instead of a letter, so pictures scroll, go
  * into the history and are erased as text is. The pixels are kept here,
@@ -137,24 +137,39 @@ typedef struct {
     int w, h;                   /* in pixels */
     int cw, ch;                 /* the cell it was cut into */
     uint8_t *rgb;               /* w*h pixels: R, G, B */
+    /* as it was made: its size, the cell it was cut for (its box in cells
+     * is ow/ocw x oh/och, rounded up), and its pixels while rgb holds a
+     * copy scaled to a new letter size (NULL: rgb is them) */
+    int ow, oh, ocw, och;
+    uint8_t *orgb;
+    /* kitty's: the image's id and number (i=, I=), 0 none; kept: a
+     * transmitted image, kept for a later a=p while no cell shows it */
+    uint32_t kid, knum;
+    uint8_t kitty, kept;
 } VtPic;
 
 /* Pictures understood (on) or swallowed; cap: bytes they may hold. */
 void vt_set_pictures(Vt *vt, int on, long cap);
 /* A cell in pixels (for placing pictures, CSI 14/16 t), and the colour
- * of pixels a picture leaves unset (the background). */
+ * of pixels a picture leaves unset (the background). A new cell size
+ * scales the pictures to it (their boxes in cells stay; the pixels as
+ * they came are kept), within the cap; where it does not fit, a picture
+ * is shown as it is, cut at its box. */
 void vt_set_cell_px(Vt *vt, int cw, int ch, uint32_t bg);
 /* The picture a picture cell shows (NULL: gone); its tile's top left
  * pixel is (VT_PIC_TX(cp) * pic->cw, VT_PIC_TY(cp) * pic->ch). */
 const VtPic *vt_pic(const Vt *vt, uint32_t cp);
 long vt_pic_bytes(const Vt *vt);
 int vt_pic_count(const Vt *vt);
-/* Set by the host: a whole image file (iTerm2's PNG, JPEG, GIF) into
+/* Set by the host: a whole image file (iTerm2's PNG, JPEG, GIF; kitty's PNG) into
  * 0xAARRGGBB pixels (opaque), which vt_decode_free gives back. 0: not
  * a picture. NULL: such files are swallowed. */
 extern int (*vt_decode)(const uint8_t *file, long len, uint32_t **argb,
                         int *w, int *h);
 extern void (*vt_decode_free)(uint32_t *argb);
+/* Set by the host: zlib data (kitty's o=z) unpacked into out, at most max
+ * bytes: how many, or -1 (broken, or more than max). NULL: refused. */
+extern long (*vt_inflate)(const uint8_t *in, long n, uint8_t *out, long max);
 /* Pixel memory (pictures, files coming in): the host's own way, so it
  * goes back to the system when a picture goes. NULL: malloc and free. */
 extern void *(*vt_palloc)(long n);

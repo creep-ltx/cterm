@@ -105,6 +105,7 @@ static int ppm_decode(const uint8_t *f, long len, uint32_t **argb, int *w, int *
     return 1;
 }
 static void ppm_free(uint32_t *p) { free(p); }
+long zinflate(const uint8_t *in, long n, uint8_t *out, long max);  /* inflate.c */
 
 #define GEN "python3 tests/pictures/mksixel.py "
 
@@ -299,6 +300,281 @@ int main(void)
             }
     CHECK(c == 4, "reflow: all four tiles");
     free(s);
+
+    /* ---- sixel's aspect: P1 (none: 2:1, 7-9: 1:1) and "Pan;Pad ---- */
+    {
+        static const struct { const char *args; int h; const char *msg; } as[] = {
+            { "aspect 16 12 0 none", 24, "sixel: no P1, no raster: 2:1" },
+            { "aspect 16 12 7 none", 12, "sixel: P1=7: 1:1" },
+            { "aspect 16 12 2 none", 60, "sixel: P1=2: 5:1" },
+            { "aspect 16 12 0 '2;1'", 24, "sixel: raster 2;1 (Pv=12 rows of 2)" },
+            { "aspect 16 12 0 '1;1'", 12, "sixel: raster 1;1 says again" },
+            { "aspect 16 12 9 '3;1'", 36, "sixel: raster 3;1 over P1=9" },
+        };
+        char cmd[128];
+        int i;
+        for (i = 0; i < (int)(sizeof as / sizeof as[0]); i++) {
+            const VtPic *p;
+            feed(v, "\x1b[H\x1b[2J\x1b[3J");
+            snprintf(cmd, sizeof cmd, GEN "%s", as[i].args);
+            s = slurp(cmd, &n);
+            feedn(v, s, n);
+            p = vt_pic(v, cell(v, 0, 0, 0));
+            CHECK(p && p->w == 16 && p->h == as[i].h, as[i].msg);
+            if (p && as[i].h == 24)     /* each sixel row two pixel rows */
+                CHECK(pix(v, 0, 0, 0, 0) == 0xFFFFFF && pix(v, 0, 0, 0, 11) == 0xFFFFFF &&
+                      pix(v, 0, 1, 7, 15) == 0 && pix(v, 1, 1, 7, 7) == 0,
+                      "sixel 2:1: the pixels doubled down");
+            free(s);
+        }
+    }
+
+    /* ---- iTerm2's MultipartFile: as one File= ---- */
+    feed(v, "\x1b[H\x1b[2J\x1b[3J");
+    s = slurp("python3 tests/pictures/mksixel.py multipart /tmp/pic_test.ppm 'width=2' 50", &n);
+    feedn(v, s, n);
+    vt_cursor(v, &x, &y, &vis);
+    {
+        const VtPic *p = vt_pic(v, cell(v, 0, 0, 0));
+        CHECK(p && p->w == 16 && p->h == 16 && x == 0 && y == 1,
+              "MultipartFile: as File=, 2 cells, the cursor below");
+        CHECK(pix(v, 0, 0, 0, 0) == 0xFFFFFF && pix(v, 0, 1, 7, 0) == 0x000000,
+              "MultipartFile: pixels");
+    }
+    free(s);
+    feed(v, "\x1b[H\x1b[2J\x1b]1337;MultipartFile=inline=1\x07"
+            "\x1b]1337;FilePart=AAAA\x07X\x1b]1337;FileEnd\x07Y");
+    CHECK(cell(v, 0, 0, 0) == 'X' && cell(v, 0, 1, 0) == 'Y' && vt_pic_bytes(v) == 0,
+          "MultipartFile: text between, a broken one: nothing");
+
+    /* ---- inflate.c against Python's zlib: stored, fixed and dynamic
+     * blocks (levels 0, 1, 9), several blocks ---- */
+    {
+        static const int lv[3] = { 0, 1, 9 };
+        int i;
+        for (i = 0; i < 3; i++) {
+            char cmd[400];
+            long zn, rn, got;
+            char *z, *raw;
+            uint8_t *out;
+            static const char data[] = "import random,sys;random.seed(5);"
+                "d=bytes(random.choice(b'abcdefgh  \\n') for _ in range(150000))+bytes(range(256))*40;";
+            snprintf(cmd, sizeof cmd, "python3 -c \"%s import zlib;sys.stdout.buffer.write(zlib.compress(d,%d))\"",
+                     data, lv[i]);
+            z = slurp(cmd, &zn);
+            snprintf(cmd, sizeof cmd, "python3 -c \"%s sys.stdout.buffer.write(d)\"", data);
+            raw = slurp(cmd, &rn);
+            out = malloc(rn + 16);
+            got = zinflate((uint8_t *)z, zn, out, rn);
+            CHECK(rn > 150000 && got == rn && !memcmp(out, raw, rn), "inflate: as zlib's");
+            CHECK(zinflate((uint8_t *)z, zn, out, rn - 1) == -1, "inflate: more than max: -1");
+            CHECK(zinflate((uint8_t *)z, zn / 2, out, rn) == -1, "inflate: cut short: -1");
+            free(z);
+            free(raw);
+            free(out);
+        }
+    }
+
+    /* ---- kitty's graphics ---- */
+    {
+        Vt *k = vt_new(20, 6, 100);
+        const VtPic *p, *q;
+        char kc[256];
+        vt_inflate = zinflate;
+        vt_set_pictures(k, 1, 1L << 20);
+        vt_set_cell_px(k, 8, 16, 0x102030);
+        /* icat's question, then DA1: the answer comes first */
+        reply_is(k, "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c",
+                 "\x1b_Gi=31;OK\x1b\\\x1b[?62;4;22c", "kitty: a=q answered before DA1");
+        CHECK(vt_pic_count(k) == 0 && vt_pic_bytes(k) == 0, "kitty: a=q shows nothing");
+        reply_is(k, "\x1b_Gi=32,s=1,v=1,a=q,t=f,f=24;L3RtcC94\x1b\\",
+                 "\x1b_Gi=32;EBADF:only data in the code (t=d)\x1b\\",
+                 "kitty: a file (t=f) refused");
+        reply_is(k, "\x1b_Gi=33,s=1,v=1,a=q,f=24,o=z;AAAA\x1b\\",
+                 "\x1b_Gi=33;EINVAL:broken zlib data\x1b\\", "kitty: broken zlib");
+        /* a=T f=24 with an id: OK, 2x2 cells, the cursor below */
+        s = slurp(GEN "kitty a=T,i=5 24 16 32", &n);
+        feed(k, "\x1b[2;3H");
+        reply_is(k, s, "\x1b_Gi=5;OK\x1b\\", "kitty: a=T,i=5 OK");
+        vt_cursor(k, &x, &y, &vis);
+        p = vt_pic(k, cell(k, 1, 2, 0));
+        CHECK(p && p->w == 16 && p->h == 32 && VT_IS_PIC(cell(k, 2, 3, 0)) &&
+              !VT_IS_PIC(cell(k, 1, 4, 0)) && x == 2 && y == 3,
+              "kitty f=24: 2x2 cells at the cursor, the cursor below");
+        CHECK(pix(k, 1, 2, 0, 0) == 0xFFFFFF && pix(k, 1, 2, 2, 5) == 0xFFFF00 &&
+              pix(k, 2, 3, 7, 15) == 0x000000, "kitty f=24: pixels");
+        CHECK(p && p->kept && vt_pic_count(k) == 1, "kitty: kept by its id, shown itself");
+        free(s);
+        /* f=32, zlib'ed, in chunks of 64; no id: no answer; the last bar
+         * see-through: the background */
+        feed(k, "\x1b[H\x1b[2J\x1b[3J");
+        s = slurp(GEN "kitty a=T 32 16 16 64 z", &n);
+        reply_is(k, s, "", "kitty: no id, no answer");
+        p = vt_pic(k, cell(k, 0, 0, 0));
+        CHECK(p && p->w == 16 && p->h == 16 && pix(k, 0, 0, 0, 0) == 0xFFFFFF &&
+              pix(k, 0, 1, 0, 3) == 0xFF00FF && pix(k, 0, 1, 2, 3) == 0xFF0000 &&
+              pix(k, 0, 1, 7, 7) == 0x102030,
+              "kitty f=32 o=z in chunks: pixels, alpha over the background");
+        free(s);
+        /* the same in chunks of 4 as it comes in pieces of 37 */
+        feed(k, "\x1b[H\x1b[2J\x1b[3J");
+        s = slurp(GEN "kitty a=T 32 16 16 4 z", &n);
+        feedn(k, s, n);
+        CHECK(VT_IS_PIC(cell(k, 0, 1, 0)) && pix(k, 0, 1, 0, 3) == 0xFF00FF,
+              "kitty: tiny chunks");
+        free(s);
+        /* a=t keeps it unseen; a=p shows it, c x r cells (stretched);
+         * first d=A: i=5 is no longer kept */
+        feed(k, "\x1b_Ga=d,d=A\x1b\\");
+        feed(k, "\x1b[H\x1b[2J\x1b[3J");
+        s = slurp(GEN "kitty a=t,i=7 24 16 32", &n);
+        reply_is(k, s, "\x1b_Gi=7;OK\x1b\\", "kitty: a=t OK");
+        free(s);
+        CHECK(cell(k, 0, 0, 0) == 0 && vt_pic_count(k) == 1 &&
+              vt_pic_bytes(k) == 16 * 32 * 3, "kitty: a=t kept, not shown");
+        reply_is(k, "\x1b_Ga=p,i=7,c=4,r=1\x1b\\", "\x1b_Gi=7;OK\x1b\\", "kitty: a=p OK");
+        p = vt_pic(k, cell(k, 0, 0, 0));
+        CHECK(p && p->w == 32 && p->h == 16 && VT_IS_PIC(cell(k, 0, 3, 0)) &&
+              !VT_IS_PIC(cell(k, 0, 4, 0)) && !VT_IS_PIC(cell(k, 1, 0, 0)),
+              "kitty: a=p c=4 r=1: 4x1 cells");
+        CHECK(pix(k, 0, 0, 0, 0) == 0xFFFFFF && pix(k, 0, 3, 7, 15) == 0,
+              "kitty: a=p stretched pixels");
+        feed(k, "\r\n");
+        reply_is(k, "\x1b_Ga=p,i=7,x=8,y=0,w=8,h=16\x1b\\", "\x1b_Gi=7;OK\x1b\\",
+                 "kitty: a=p a part");
+        vt_cursor(k, &x, &y, &vis);
+        p = vt_pic(k, cell(k, 1, 0, 0));
+        CHECK(p && p->w == 8 && p->h == 16 && pix(k, 1, 0, 0, 0) == 0xFF00FF,
+              "kitty: a=p x,y,w,h: its part (magenta's bar first)");
+        reply_is(k, "\x1b_Ga=p,i=7,C=1\x1b\\", "\x1b_Gi=7;OK\x1b\\", "kitty: a=p C=1");
+        {
+            int x2, y2;
+            vt_cursor(k, &x2, &y2, &vis);
+            CHECK(x2 == x && y2 == y && VT_IS_PIC(cell(k, y, 0, 0)) &&
+                  vt_pic(k, cell(k, y, 0, 0))->kept, "kitty: C=1 the cursor stays; itself shown");
+        }
+        reply_is(k, "\x1b_Ga=p,i=99\x1b\\", "\x1b_Gi=99;ENOENT:no such image\x1b\\",
+                 "kitty: a=p of none");
+        reply_is(k, "\x1b_Ga=p,i=99,q=2\x1b\\", "", "kitty: q=2 quiet");
+        reply_is(k, "\x1b_Ga=p,i=7,q=1\x1b\\", "", "kitty: q=1 no OK");
+        /* deleted: d=i its pictures (kept), d=I the kept one too */
+        feed(k, "\x1b_Ga=d,d=i,i=7\x1b\\");
+        for (r = 0, c = 0; r < 6; r++)
+            for (x = 0; x < 20; x++)
+                c += VT_IS_PIC(cell(k, r, x, 0));
+        CHECK(c == 0 && vt_pic_count(k) == 1, "kitty: d=i: none shown, kept");
+        reply_is(k, "\x1b_Ga=p,i=7\x1b\\", "\x1b_Gi=7;OK\x1b\\", "kitty: shown again");
+        feed(k, "\x1b_Ga=d,d=I,i=7\x1b\\");
+        CHECK(vt_pic_count(k) == 0 && vt_pic_bytes(k) == 0, "kitty: d=I: all gone");
+        reply_is(k, "\x1b_Ga=p,i=7\x1b\\", "\x1b_Gi=7;ENOENT:no such image\x1b\\",
+                 "kitty: d=I: no longer kept");
+        /* d=a: kitty's on the screen go, a sixel stays */
+        feed(k, "\x1b[H\x1b[2J\x1b[3J");
+        s = slurp(GEN "bars 16 16", &n);
+        feedn(k, s, n);
+        free(s);
+        s = slurp(GEN "kitty a=T,q=2 24 16 16", &n);
+        feedn(k, s, n);
+        free(s);
+        CHECK(VT_IS_PIC(cell(k, 0, 0, 0)) && VT_IS_PIC(cell(k, 1, 0, 0)), "two pictures");
+        feed(k, "\x1b_Ga=d\x1b\\");
+        CHECK(VT_IS_PIC(cell(k, 0, 0, 0)) && !VT_IS_PIC(cell(k, 1, 0, 0)) &&
+              vt_pic_count(k) == 1, "kitty: d=a: kitty's gone, the sixel stays");
+        /* d=c at the cursor's cell, d=p at a cell */
+        feed(k, "\x1b[H\x1b[2J\x1b[3J");
+        s = slurp(GEN "kitty a=T,C=1 24 16 16", &n);
+        feedn(k, s, n);
+        feed(k, "\x1b_Ga=d,d=p,x=2,y=1\x1b\\");
+        CHECK(!VT_IS_PIC(cell(k, 0, 0, 0)), "kitty: d=p at cell 2;1");
+        feedn(k, s, n);
+        feed(k, "\x1b_Ga=d,d=c\x1b\\");
+        CHECK(!VT_IS_PIC(cell(k, 0, 0, 0)), "kitty: d=c at the cursor");
+        free(s);
+        /* f=100: a file through the decoder (the tests': a PPM) */
+        feed(k, "\x1b[H\x1b[2J\x1b[3J");
+        s = slurp(GEN "kittyfile a=T,i=9,c=2 /tmp/pic_test.ppm 100", &n);
+        reply_is(k, s, "\x1b_Gi=9;OK\x1b\\", "kitty f=100 OK");
+        p = vt_pic(k, cell(k, 0, 0, 0));
+        CHECK(p && p->w == 16 && p->h == 16 && pix(k, 0, 0, 0, 0) == 0xFFFFFF,
+              "kitty f=100: c=2 in shape");
+        free(s);
+        /* the same id again: the new one kept */
+        s = slurp(GEN "kitty a=t,i=9 24 8 8", &n);
+        feedn(k, s, n);
+        free(s);
+        feed(k, "\x1b[5;1H\x1b_Ga=p,i=9\x1b\\");
+        p = vt_pic(k, cell(k, 4, 0, 0));
+        CHECK(p && p->w == 8 && p->h == 8, "kitty: an id sent again: the new image");
+        /* I= alone: an id given back */
+        feed(k, "\x1b[H\x1b[2J\x1b[3J");
+        s = slurp(GEN "kitty a=t,I=3 24 8 8", &n);
+        reply_is(k, s, "\x1b_Gi=1073741825,I=3;OK\x1b\\", "kitty: I= gets an id");
+        free(s);
+        reply_is(k, "\x1b_Ga=p,I=3\x1b\\", "\x1b_Gi=1073741825,I=3;OK\x1b\\", "kitty: a=p by I=");
+        /* nonsense: swallowed, no text, no picture */
+        feed(k, "\x1b[H\x1b[2J\x1b[3J\x1b_Gzz,a=Q,=,,;;;\x1b\\A\x1b_Hello\x1b\\B"
+                "\x1b_Ga=T,f=24,s=99999,v=1;AAAA\x1b\\C\x1b_Ga=T,f=7;AAAA\x1b\\D");
+        CHECK(cell(k, 0, 0, 0) == 'A' && cell(k, 0, 1, 0) == 'B' &&
+              cell(k, 0, 2, 0) == 'C' && cell(k, 0, 3, 0) == 'D' && cell(k, 0, 4, 0) == 0,
+              "kitty: nonsense swallowed");
+        /* too big for the cap: refused, nothing kept */
+        vt_set_pictures(k, 1, 10000);
+        s = slurp(GEN "kitty a=T,i=4 24 64 64", &n);
+        snprintf(kc, sizeof kc, "%s", "");
+        reply_is(k, s, "\x1b_Gi=4;ENOMEM:too big\x1b\\", "kitty: over the cap: ENOMEM");
+        free(s);
+        feed(k, "\x1b[H\x1b[2J\x1b[3J\x1b_Ga=d,d=A\x1b\\");
+        CHECK(vt_pic_bytes(k) == 0, "kitty: all memory back");
+        /* pictures off: swallowed, not answered */
+        vt_set_pictures(k, 0, 1L << 20);
+        reply_is(k, "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\Z", "", "kitty off: no answer");
+        CHECK(cell(k, 0, 0, 0) == 'Z', "kitty off: swallowed");
+
+        /* ---- a new letter size: the pictures scaled to it ---- */
+        vt_set_pictures(k, 1, 1L << 20);
+        feed(k, "\x1b[H\x1b[2J\x1b[3J");
+        s = slurp(GEN "bars 16 32", &n);
+        feedn(k, s, n);
+        free(s);
+        vt_set_cell_px(k, 16, 32, 0x102030);
+        p = vt_pic(k, cell(k, 0, 0, 0));
+        CHECK(p && p->w == 32 && p->h == 64 && p->cw == 16 && p->orgb &&
+              vt_pic_bytes(k) == 16 * 32 * 3 + 32 * 64 * 3,
+              "new size 16x32: scaled 2x, the pixels as they came kept");
+        CHECK(pix(k, 0, 0, 0, 0) == 0xFFFFFF && pix(k, 0, 0, 5, 0) == 0xFFFF00 &&
+              pix(k, 1, 1, 15, 31) == 0 && pix(k, 1, 1, 0, 0) == 0xFF00FF,
+              "new size: the bars twice as wide");
+        printf("memory: 16x32 picture %ld bytes at 8x16, %ld at 16x32\n",
+               16L * 32 * 3, vt_pic_bytes(k));
+        vt_set_cell_px(k, 8, 8, 0x102030);    /* half as tall: in shape */
+        p = vt_pic(k, cell(k, 0, 0, 0));
+        CHECK(p && p->w == 8 && p->h == 16 && vt_pic_bytes(k) == 16 * 32 * 3 + 8 * 16 * 3,
+              "new size 8x8: in shape inside its box (8x16)");
+        vt_set_cell_px(k, 8, 16, 0x102030);
+        p = vt_pic(k, cell(k, 0, 0, 0));
+        CHECK(p && p->w == 16 && p->h == 32 && !p->orgb && vt_pic_bytes(k) == 16 * 32 * 3 &&
+              pix(k, 1, 1, 7, 15) == 0, "back: the pixels as they came, the copy gone");
+        /* no room for the copy: its own pixels, cut at the new cell */
+        vt_set_pictures(k, 1, 16 * 32 * 3 + 100);
+        vt_set_cell_px(k, 16, 32, 0x102030);
+        p = vt_pic(k, cell(k, 0, 0, 0));
+        q = vt_pic(k, cell(k, 1, 1, 0));
+        CHECK(p && p == q && p->w == 16 && p->cw == 16 && vt_pic_count(k) == 1 &&
+              pix(k, 0, 0, 15, 31) == 0x000000 && pix(k, 0, 1, 0, 0) == 0xFE000000,
+              "no room: as it is, cut at the new cell (nothing dropped)");
+        vt_set_cell_px(k, 8, 16, 0x102030);
+        vt_set_pictures(k, 1, 1L << 20);
+        /* through the history too */
+        feed(k, "\r\n\r\n\r\n\r\n\r\n\r\n");
+        vt_set_cell_px(k, 16, 32, 0x102030);
+        p = NULL;
+        for (r = 0; r < 6 && !p; r++)
+            if (VT_IS_PIC(cell(k, r, 0, vt_history(k))))
+                p = vt_pic(k, cell(k, r, 0, vt_history(k)));
+        CHECK(p && p->w == 32, "a picture in the history scaled too");
+        vt_inflate = NULL;
+        vt_free(k);
+    }
 
     /* img2sixel's own output, when it is there */
     if (!system("which img2sixel >/dev/null 2>&1")) {
