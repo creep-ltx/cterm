@@ -475,7 +475,7 @@ static Object *page_text(void)
     r_add(g, r_chooser(S_CHARS, charlabels, chars_now()), "Characters");
     r_add(g, r_check(S_PCFONT, "The IBM VGA font in PC BBS mode", pcfont),
           NULL);
-    r_add(g, r_check(S_PICS, "Pictures in the terminal (sixel, iTerm2)",
+    r_add(g, r_check(S_PICS, "Pictures in the terminal (sixel, iTerm2, kitty)",
                      pics), NULL);
     r_add(g, r_check(S_OWNPROG, "Full-screen Amiga programs get their own "
                      "screen", ownprog), NULL);

@@ -2417,6 +2417,10 @@ static COLD void kitty_end(Vt *v)
     const char *err = NULL;
     VtPic *p = NULL;
     v->fi = NULL;
+    if (KV(f, 'U') && (a == 'T' || a == 'p')) {
+        err = "EINVAL:no unicode placeholders";  /* (tmux's way): its */
+        a = a == 'T' ? 't' : 0;         /* characters show as they are */
+    }
     if (a == 't' || a == 'T' || a == 'q')
         p = kitty_image(v, f, &err);
     pfree(f->buf);

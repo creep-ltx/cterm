@@ -517,6 +517,15 @@ int main(void)
         CHECK(cell(k, 0, 0, 0) == 'A' && cell(k, 0, 1, 0) == 'B' &&
               cell(k, 0, 2, 0) == 'C' && cell(k, 0, 3, 0) == 'D' && cell(k, 0, 4, 0) == 0,
               "kitty: nonsense swallowed");
+        /* unicode placeholders (U=1): refused, not shown; kept by its id */
+        feed(k, "\x1b[H\x1b[2J\x1b[3J");
+        s = slurp(GEN "kitty a=T,U=1,i=40 24 8 8", &n);
+        reply_is(k, s, "\x1b_Gi=40;EINVAL:no unicode placeholders\x1b\\", "kitty: U=1 refused");
+        free(s);
+        CHECK(!VT_IS_PIC(cell(k, 0, 0, 0)), "kitty: U=1 not shown");
+        reply_is(k, "\x1b_Ga=p,i=40,U=1\x1b\\", "\x1b_Gi=40;EINVAL:no unicode placeholders\x1b\\",
+                 "kitty: a=p U=1 refused");
+        reply_is(k, "\x1b_Ga=p,i=40\x1b\\", "\x1b_Gi=40;OK\x1b\\", "kitty: then shown without U");
         /* too big for the cap: refused, nothing kept */
         vt_set_pictures(k, 1, 10000);
         s = slurp(GEN "kitty a=T,i=4 24 64 64", &n);
