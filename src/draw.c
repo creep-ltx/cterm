@@ -2815,6 +2815,7 @@ static void redraw_pane(void)
     update_knob();
     if (T->t_xfer)
         xfer_panel();
+    find_bar();
 }
 
 /* The whole window afresh: the tab bar, every pane, what is between. */
@@ -2929,6 +2930,7 @@ void repair_damage(void)
         update_knob();
         if (T->t_xfer)
             xfer_panel();
+        find_bar();
     }
     pane_use(apane);
     T = keep;
@@ -2995,7 +2997,7 @@ static void refresh_pane(void)
         return;
     if (chg.scroll_n && float_over(cpane))
         chg.all = 1;                    /* a blit would carry what is under the scratchpad */
-    xp = T->t_xfer && !T->t_fkind;
+    xp = (T->t_xfer && !T->t_fkind) || find_prompt(T);
     if (xp)
         chg.all = 1;                    /* a scroll would carry the panel */
     rp_forget();
@@ -3051,8 +3053,10 @@ static void refresh_pane(void)
         update_knob();
         PF_ADD(pf_knob, tk);
     }
-    if (xp)
+    if (xp) {
         xfer_panel();                   /* over the last rows again */
+        find_bar();
+    }
 }
 
 /* What came from the host, as it came (escape codes and all: a BBS
@@ -3114,6 +3118,30 @@ static void kb(char *out, ULONG v)
 }
 
 static void xfer_panel_(void);
+
+/* Find in history's line, over the last row of T's pane while it lasts
+ * (as less's prompt): the title is not seen in full screen. */
+void find_bar(void)
+{
+    const char *s = find_prompt(T);
+    struct Pane *p = pane_of(T), *was = cpane;
+    int y0;
+    if (!s || !p || !win || rows < 2)
+        return;
+    if (p != was)
+        pane_use(p);
+    y0 = oy + (rows - 1) * ch;
+    rp_forget();
+    SetWriteMask(rp, 0xFF);
+    SetDrMd(rp, JAM1);
+    apen(mix(defbg, deffg, 20));
+    RectFill(rp, ox, y0, ox + cols * cw - 1, y0 + ch - 1);
+    apen(deffg);
+    ptext(ox + 2, y0 + (ch > font->tf_YSize ? (ch - font->tf_YSize) / 2 : 0),
+          s, cols * cw - 4);
+    if (p != was)
+        pane_use(was);
+}
 
 /* T's transfer panel, over the last rows of its pane (if in one). */
 void xfer_panel(void)

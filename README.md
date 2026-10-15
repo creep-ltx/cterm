@@ -604,8 +604,8 @@ cannot read it.
 
 Edit/Find in history... (Right Amiga+H) searches the tab's history and
 screen for what you type, from the newest line back; capitals or not does
-not matter. The title shows what you typed; the match is marked and
-brought into view.
+not matter. What you typed shows on the pane's last line (and in the
+title), also in full screen; the match is marked and brought into view.
 
 | Key | What it does |
 |---|---|

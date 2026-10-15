@@ -69,15 +69,23 @@ BOOL find_active(void)
     return finding;
 }
 
+static char fprompt[100];
+
+const char *find_prompt(struct Tab *t)
+{
+    return finding && t == ftab && t == shown ? fprompt : NULL;
+}
+
 static void find_title(BOOL missed)
 {
-    char t[100];
+    char *t = fprompt;
     if (!flen && flast[0])
         sprintf(t, "find: _  (the find key again: \"%.20s\")", (char *)flast);
     else
         sprintf(t, "find: %s_%s  (Return older, Shift+Return newer, Esc)",
                 (char *)ftext, missed ? " - not found" : "");
     title_prompt(t);
+    find_bar();                         /* also where full screen shows it */
 }
 
 /* Is the text at line L, column c? */
@@ -101,7 +109,7 @@ static void find_show(int L, int c)
 {
     int h = vt_history(vt), top = h - back, b;
     sel_clear();
-    if (L < top || L >= top + rows) {
+    if (L < top || L >= top + rows - 1) {   /* (the last row: the find line) */
         b = h - (L - rows / 2);
         scroll_view(b);                 /* (kept within the history) */
         top = h - back;
@@ -150,6 +158,14 @@ static void find_end(void)
     if (flen)
         strcpy((char *)flast, (char *)ftext);
     title_prompt(NULL);
+    if (shown == ftab && pane_of(ftab)) {
+        struct Pane *was = cpane;       /* the text under the find line */
+        pane_use(pane_of(ftab));
+        draw_cursor(FALSE);
+        draw_row(rows - 1);
+        draw_cursor(TRUE);
+        pane_use(was);
+    }
 }
 
 void find_start(void)

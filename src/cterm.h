@@ -643,6 +643,8 @@ void title_hint(const char *s);         /* in the title a moment */
 void title_prompt(const char *s);       /* in the title till NULL (find) */
 /* find.c: searching the history; links */
 BOOL find_active(void);
+const char *find_prompt(struct Tab *t); /* its line while finding in t, or NULL */
+void find_bar(void);                    /* draw.c: that line over T's last row */
 void find_start(void);
 void find_key(UWORD k);
 BOOL link_click(int r, int c);
