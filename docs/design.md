@@ -12,6 +12,10 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**0.3b52 (2026-10-16): Latin Extended-A with a bitmap font** (TODO.md, found by the tui.library
+session): draw.c fallback() gives U+0100-017F without accents (latinA[], tui.library's table:
+Łódź -> Lodz) and € E, ™ T, … ., ≈ ~, ∞ 8; they were '?'.
+
 **0.3b51 (2026-10-16): a screen that did not open is no longer saved** (TODO.md had it): every
 fallback to Workbench goes through screen_fallback() (screen.c), which keeps the asked-for
 screen in asked_mode/asked_full; save_prefs writes those. switch_display clears them.

@@ -10,19 +10,7 @@ made to happen again), *read* (from the source), *suspect* (looks wrong, not che
 
 ## Open bugs
 
-### 1. Bitmap font: accented letters beyond Latin-1 and € show as ?
-
-*Verified 2026-10-16* (FS-UAE a1200-32-mui5, CTerm 0.3b50 on its own 256-colour screen, an
-Amiga bitmap font), found by the tui.library session (projects-ad). Small, not urgent.
-
-- `Łódź Škoda €` sent as UTF-8 shows as `?ód? ?koda ?`. With a bitmap font CTerm draws
-  everything beyond Latin-1 itself (is_special()), and src/draw.c fallback() has quotes,
-  dashes, ticks and stars but no Latin Extended-A letters and no €.
-- Fix idea: in fallback(), U+0100-017F as the letter without its accent, and a few more
-  (€ E, ™ T, … ., ≈ ~, ∞ 8, arrows < > ^ v). tui.library has the same table for plain
-  consoles, ready to copy: ~/Projects/CUtils/Libs/tui/src/core.c, `latinA[]` and fallback().
-- To see it: `printf 'Łódź Škoda €\n'` from Linux over ssh/telnet into a CTerm tab with an Amiga
-  font, or tui.library's `tuitest` (CUtils/Libs/tui/build/tuitest).
+None known.
 
 ## Notes for testing
 

@@ -759,10 +759,27 @@ static BOOL draw_shape(ULONG cp, int x, int y)
     return FALSE;
 }
 
+/* Latin Extended-A (U+0100-017F) without its accents: Ł L, š s, ő o...
+ * (the same table as tui.library's, CUtils Libs/tui/src/core.c) */
+static const char latinA[] =
+    "AaAaAaCcCcCcCcDd" "DdEeEeEeEeEeGgGg" "GgGgHhHhIiIiIiIi" "IiIiJjKkkLlLlLlL"
+    "lLlNnNnNnnNnOoOo" "OoOoRrRrRrSsSsSs" "SsTtTtTtUuUuUuUu" "UuUuWwYyYZzZzZzs";
+
 /* Everything else outside Latin-1: the nearest Latin-1 character. */
 static UBYTE fallback(ULONG cp)
 {
+    if (cp >= 0x100 && cp < 0x180)
+        return (UBYTE)latinA[cp - 0x100];
     switch (cp) {
+    case 0x20AC: return 'E';                             /* € */
+    case 0x2122: return 'T';                             /* ™ */
+    case 0x2026: return '.';                             /* … */
+    case 0x2248: return '~';                             /* ≈ */
+    case 0x221E: return '8';                             /* ∞ */
+    case 0x2190: return '<';
+    case 0x2192: return '>';
+    case 0x2191: return '^';
+    case 0x2193: return 'v';
     case 0x2018: case 0x2019: case 0x201B: case 0x2032: return '\'';
     case 0x201C: case 0x201D: case 0x201E: case 0x2033: return '"';
     case 0x2010: case 0x2011: case 0x2012: case 0x2013: case 0x2014:
