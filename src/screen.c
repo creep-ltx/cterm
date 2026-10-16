@@ -390,7 +390,7 @@ BOOL open_display(void)
                   IDCMP_INACTIVEWINDOW | IDCMP_MOUSEBUTTONS |
                   IDCMP_EXTENDEDMOUSE;
     if (scrmode == SCR_OWN && !ownscr && !open_own_screen())
-        scrmode = SCR_WB;
+        screen_fallback();
     if (scrmode == SCR_WB) {
         fullscreen = FALSE;
         scr = LockPubScreen(NULL);
@@ -570,6 +570,18 @@ void close_display(int keep_screen)
         close_own_screen(keep_screen == FALSE);
 }
 
+/* Workbench for now, because the screen asked for did not open; the
+ * choice itself is kept (asked_mode) and saved. */
+void screen_fallback(void)
+{
+    if (asked_mode < 0 && scrmode == SCR_OWN) {
+        asked_mode = SCR_OWN;
+        asked_full = fullscreen;
+    }
+    scrmode = SCR_WB;
+    fullscreen = FALSE;
+}
+
 void switch_display(void)
 {
     if (setwin)
@@ -580,14 +592,14 @@ void switch_display(void)
                 want_depth == owndepth;
     want_switch = FALSE;
     close_display(keep);
+    asked_mode = -1;                    /* a new choice */
     scrmode = want_mode;
     owndepth = want_depth;
     fullscreen = want_full;
     scrollbar = want_bar;
     if (!open_display()) {
         close_display(FALSE);
-        scrmode = SCR_WB;
-        fullscreen = FALSE;
+        screen_fallback();
         open_display();
     }
     tell_sizes();

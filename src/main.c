@@ -641,13 +641,14 @@ static void save_prefs_(char *buf)
         numstr_cat(buf, fontsize);
     }
     strcat(buf, "\nscreen=");
-    if (scrmode == SCR_WB)
+    if ((asked_mode >= 0 ? asked_mode : scrmode) == SCR_WB)
         strcat(buf, "wb");
     else {
         strcat(buf, "own");
         numstr_cat(buf, owndepth);
     }
-    strcat(buf, "\nfull="); strcat(buf, fullscreen ? "1" : "0");
+    strcat(buf, "\nfull=");
+    strcat(buf, (asked_mode >= 0 ? asked_full : fullscreen) ? "1" : "0");
     strcat(buf, "\nscrollbar="); strcat(buf, scrollbar ? "1" : "0");
     strcat(buf, "\nutf8="); strcat(buf, saved_utf8 ? "1" : "0");
     strcat(buf, "\ntheme="); strcat(buf, themes[theme].name);

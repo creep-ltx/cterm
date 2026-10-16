@@ -324,8 +324,7 @@ static void do_show(void)
     hidden = FALSE;
     if (!open_display()) {
         close_display(FALSE);
-        scrmode = SCR_WB;
-        fullscreen = FALSE;
+        screen_fallback();
         if (!open_display()) {
             close_display(FALSE);
             hidden = TRUE;              /* no window: the AppIcon stays */

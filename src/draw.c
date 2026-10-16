@@ -147,6 +147,11 @@ ULONG mix(ULONG a, ULONG b, int pct)              /* pct of b into a */
  * ==================================================================== */
 
 int scrmode = SCR_WB, owndepth = 8;
+/* the screen asked for when it could not be had: a fallback to Workbench
+ * is for this run only, so save_prefs writes this, not the fallback
+ * (else one failed own screen kept every later start on Workbench) */
+int asked_mode = -1;
+BOOL asked_full;
 ULONG ownmode = INVALID_ID;      /* the own screen's mode; INVALID_ID:
                                            the Workbench's, at owndepth */
 LONG ownw, ownh;                 /* its size; 0: the mode's own */
