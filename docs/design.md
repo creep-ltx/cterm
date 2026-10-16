@@ -10,6 +10,12 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**0.3b49 (2026-10-16):** ▲ ▼ ◀ (U+25B2/25BC/25C0 and their small and hollow forms) drawn by
+draw_shape with a bitmap font (they were '?'; ctop's sort marks). tests/rig.sh NOCSH=1: the ROM
+Shell only. Seen with csh 0.1b11 as BootShell: `CTerm FROM script` whose script ends in EndCLI ->
+AN_FileReclosed (#0700000E) in the tab's Shell: csh closes the input Execute() gave it; the ROM
+Shell does not (CTerm's child_entry closes it after Execute returns) - csh's to fix, reported.
+
 **0.3b48 (2026-10-16): Quit asked again while a program will not end** (old Maki 0.1b2 spun on
 a Read of 0): quit_all tells the stuck tabs again (EOF + Ctrl-C), says so in the tab and names the
 program in the title ("quitting: waiting for X to end"); the window cannot go while a raw program

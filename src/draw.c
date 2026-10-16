@@ -701,6 +701,18 @@ static BOOL draw_shape(ULONG cp, int x, int y)
         for (i = 0; i <= r; i++)
             RF(cx - r / 2, cy - (r - i), cx - r / 2 + i, cy + (r - i));
         return TRUE;
+    case 0x25C0: case 0x23F4: case 0x25C2: case 0x25C4:  /* ◀ */
+        for (i = 0; i <= r; i++)
+            RF(cx + r / 2 - i, cy - (r - i), cx + r / 2, cy + (r - i));
+        return TRUE;
+    case 0x25B2: case 0x25B4: case 0x25B3: case 0x25B5:  /* ▲ (meters, ctop) */
+        for (i = 0; i <= r; i++)
+            RF(cx - i, cy - r / 2 + i, cx + i, cy - r / 2 + i);
+        return TRUE;
+    case 0x25BC: case 0x25BE: case 0x25BD: case 0x25BF:  /* ▼ */
+        for (i = 0; i <= r; i++)
+            RF(cx - (r - i), cy - r / 2 + i, cx + (r - i), cy - r / 2 + i);
+        return TRUE;
     case 0x276F: case 0x203A: case 0x276D:               /* ❯ */
         for (i = 0; i <= r; i++) {
             RF(cx - r / 2 + i, cy - r + i, cx - r / 2 + i + 1,
