@@ -1,5 +1,5 @@
 # rig.sh - sourced by the tests' uae.sh scripts: a private FS-UAE on the
-# shared clean test Amigas (~/UAE/TestMachines, `amiga-test`, README there).
+# shared clean test Amigas (the `amiga-test` tool, README there).
 # The caller sets RIG (the instance name), PORT (its wasabid) and may set
 # CONF=030 (the 68030/50 with 32 MB more), SSL=1 (AmiSSL 5 in SYS:T/amissl,
 # Assign LIBS: SYS:T/amissl ADD), BOOK=1 (the test FTP/SFTP places and the
@@ -7,10 +7,11 @@
 # Pictures), EXTRA (FS-UAE lines, one per line). The machine is Workbench
 # 3.2.1 + MUI 5 on an A1200 with 8 MB fast RAM (68EC020), its volume named
 # AmigaOS3.2 as the tests expect. This tree's CTerm, CTermSSH, Parts/ and
-# Protocols/ go into SYS:T/CT/ (put), csh as the system Shell (L:csh + useshell) when ~/Projects/CShell/csh
-# is built (NOCSH=1: the ROM Shell only, on a fresh copy). Each rig its own emulator in its own systemd scope (2 GB at
+# Protocols/ go into SYS:T/CT/ (put), csh as the system Shell (L:csh + useshell) when the CShell repo's csh
+# ($CSHELL_DIR, default ../CShell next to this repo) is built (NOCSH=1: the ROM Shell only, on a fresh copy). Each rig its own emulator in its own systemd scope (2 GB at
 # most); stop ends that one only.
 D=$(cd "$(dirname "$0")/../.." && pwd)
+CSHELL_DIR=${CSHELL_DIR:-$D/../CShell}
 M=a1200-32-mui5
 [ "$CONF" = 030 ] && RIG=$RIG-030
 A=(--as "$RIG" --port "$PORT" --label AmigaOS3.2)
@@ -31,11 +32,11 @@ put() {
   # at the top of S:User-Startup points "shell" and the BootShell at it -
   # so CTerm's tabs are csh themselves and no SHELL=csh is wanted
   rm -f "$H/C/csh" "$H/C/csh.uaem"
-  if [ -z "$NOCSH" ] && [ -f "$HOME/Projects/CShell/csh" ] && [ -f "$HOME/Projects/CShell/useshell" ]; then
+  if [ -z "$NOCSH" ] && [ -f "$CSHELL_DIR/csh" ] && [ -f "$CSHELL_DIR/useshell" ]; then
     mkdir -p "$H/L"
-    cp "$HOME/Projects/CShell/csh" "$H/L/csh"
+    cp "$CSHELL_DIR/csh" "$H/L/csh"
     printf -- '--p-rw-d %s 00:00:00.00 \n' "$(date +%F)" > "$H/L/csh.uaem"
-    cp "$HOME/Projects/CShell/useshell" "$H/C/useshell"
+    cp "$CSHELL_DIR/useshell" "$H/C/useshell"
     grep -q '^C:useshell L:csh' "$H/S/User-Startup" ||
       sed -i '1i C:useshell L:csh' "$H/S/User-Startup"
   fi

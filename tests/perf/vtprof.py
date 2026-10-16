@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """vtprof.py TEST - per-function 68020 instruction counts of the emulator
 for one conbench item (vamos trace of vtbench TEST 24 minus TEST 8)."""
-import sys, subprocess, re, bisect, collections
+import sys, subprocess, re, bisect, collections, os
+# Bebbo's m68k-amigaos-gcc: set AMIGA to where it is installed, otherwise it is
+# looked for in the usual places (/opt/amiga, then ~/opt/amiga).
+AMIGA = os.environ.get('AMIGA') or next((d for d in ('/opt/amiga', os.path.expanduser('~/opt/amiga'))
+                                         if os.path.isdir(d)), '/opt/amiga')
 t = sys.argv[1]
-nm = subprocess.run([f'/home/creep/opt/amiga/bin/m68k-amigaos-nm', '-n', '/tmp/vtbench'],
+nm = subprocess.run([f'{AMIGA}/bin/m68k-amigaos-nm', '-n', '/tmp/vtbench'],
                     capture_output=True, text=True).stdout
 syms = []
 for l in nm.splitlines():
@@ -11,9 +15,9 @@ for l in nm.splitlines():
     if len(p) == 3 and p[1] in 'tT':
         syms.append((int(p[0], 16), p[2]))
 # vt.c's static functions: from the object file, placed by vt_write
-vo = subprocess.run(['/home/creep/opt/amiga/bin/m68k-amigaos-gcc', '-O2', '-m68020', '-noixemul',
+vo = subprocess.run([f'{AMIGA}/bin/m68k-amigaos-gcc', '-O2', '-m68020', '-noixemul',
                      '-fomit-frame-pointer', '-Iinclude', '-c', 'src/vt.c', '-o', '/tmp/vt.o'])
-onm = subprocess.run(['/home/creep/opt/amiga/bin/m68k-amigaos-nm', '-n', '/tmp/vt.o'],
+onm = subprocess.run([f'{AMIGA}/bin/m68k-amigaos-nm', '-n', '/tmp/vt.o'],
                      capture_output=True, text=True).stdout
 osy = [(int(l.split()[0], 16), l.split()[2]) for l in onm.splitlines()
        if len(l.split()) == 3 and l.split()[1] in 'tT']

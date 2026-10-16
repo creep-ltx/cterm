@@ -6,9 +6,10 @@
 # 16-colour Workbench). Keys come over wasabi, as a person would press
 # them. Needs: cage, wf-recorder, fs-uae, ffmpeg.
 set -u
-out=${1:-$HOME/Projects/CTerm/demo/CTerm-tour-uae.mp4}
-H="$HOME/FS-UAE/Hard Drives/AmigaOS3.2"; export WASABI_HOST=127.0.0.1
 D=$(cd "$(dirname "$0")/../.." && pwd)
+FSUAE_DIR=${FSUAE_DIR:-$HOME/FS-UAE}   # FS-UAE's own folder
+out=${1:-$D/demo/CTerm-tour-uae.mp4}
+H="$FSUAE_DIR/Hard Drives/AmigaOS3.2"; export WASABI_HOST=127.0.0.1
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 if pgrep -x fs-uae >/dev/null; then
   echo "film.sh: an emulator is already running (another session?) - not starting" >&2
@@ -17,7 +18,7 @@ fi
 cp "$D/CTerm" "$H/T/CTerm"; cp "$D/CTermTour" "$H/T/CTermTour"
 printf 'SYS:T/CTermTour SECS 0 LINES 500 RACEWIN "CON:0/12/640/244/CON: the Amiga'"'"'s own console/CLOSE"\nEndCLI\n' > "$H/S/xtour"
 before=$(ls "$XDG_RUNTIME_DIR" | grep -E '^wayland-[0-9]+$' | sort)
-(cd ~/FS-UAE && WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
+(cd "$FSUAE_DIR" && WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
    WLR_HEADLESS_OUTPUTS=1 SDL_VIDEODRIVER=wayland setsid cage -- \
    fs-uae "$D/tests/stock/A1200-Stock-fast.fs-uae" --zoom=640x512 --keep_aspect=1 \
    --scanlines=0 --fullscreen=1 >/tmp/film-cage.log 2>&1 &)

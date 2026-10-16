@@ -1,7 +1,7 @@
 # CTerm — design
 
 A modern terminal for AmigaOS 3.2, in C. Replaces the Amiga E CTerm in
-`~/Projects/AmigaTools/cterm` (which hands its window to `CON:`/`CCON:`
+the AmigaTools repo's `cterm` (which hands its window to `CON:`/`CCON:`
 and so gets only console.device's ANSI). This one does its own
 VT100/xterm emulation. Decided 2026-10-09.
 
@@ -81,7 +81,7 @@ docs/extras-pics.md, docs/extras-ftp.md:
 stays in its own repo (a change another needs: a note in its design.md, or a message). FS-UAE on
 port 1240 (tests/files/uae.sh) is shared: own RAM: names, never stop/restart it without asking
 the others. Since 2026-10-15 every tests/*/uae.sh runs on the shared clean test Amigas
-(~/UAE/TestMachines, `amiga-test`, README there) through tests/rig.sh: Workbench 3.2.1 + MUI 5,
+(the test machines, `amiga-test`, README there) through tests/rig.sh: Workbench 3.2.1 + MUI 5,
 A1200 + 8 MB fast (CONF=030: 68030/50, 32 MB more), volume AmigaOS3.2:, copies in
 ~/.cache/amiga-test/<rig>; ports files 1240, panes 1246, serial 1248, pictures 1250; csh
 seeded into C: when CShell's is built. `reset` gives a rig a fresh copy. The A1200: message the others before installing, rebooting or restarting wasabid.
@@ -107,7 +107,7 @@ see CShell/docs/design.md); when it is in, con_shell_info can read it for saved 
   cli_CommandName as before. Layout words keep `"` and `\` as `\"` `\\` (lw_str/lr_word), so a
   quoted name (`"Work:My Prog" args`) comes back whole. Verified: `Wait 30 SEC` saved with its
   arguments; a hand-written `"Echo \"quoted words\" ok"` opened and ran right.
-- Backed up to the NAS: remote `nas` = /mnt/nas/home/Code/CTerm.git (since 2026-10-14).
+- Backed up to the NAS: remote `nas` = CTerm.git on the NAS (since 2026-10-14).
 - Proposed, NOT wanted for now (user, 2026-10-14): i3's tabbed container inside a split (LA+W
   tabbed pane with its own tab row, LA+E back to split, every tab in exactly one pane). The user
   is happy with one view per workspace (LA+P panes / LA+T tabs, kept per workspace).
@@ -210,13 +210,13 @@ together):** a new Shell tab can start a shell of the person's after S:Shell-Sta
 `shell=` in CTerm.prefs (Settings, Files tab, "A new Shell tab ... Then runs"), or `SHELL/K`
 for one run (not saved). The command is the next line of the tab's Execute() string (3.2 runs
 each line), so the ROM Shell stays under it: `exit` in csh gives the ROM Shell back, `EndCLI`
-closes the tab. Made for CShell's csh (~/Projects/CShell); tried in FS-UAE and on the A1200
+closes the tab. Made for CShell's csh (the CShell repo, ../CShell); tried in FS-UAE and on the A1200
 from RAM:CT (`RAM:CT/CTerm SHELL RAM:csh`).
 
 **Installed:** 0.3b31 on the A1200 (CTerm; parts 0.3b30; CTermSSH 0.3b27) (Work:Utils/CTerm: CTerm, CTermSSH,
 CTermTour, Parts/, Protocols/, Rexx/, Pictures/, Fonts/) and on both
-hand-test emulator drives (~/FS-UAE/Hard Drives/AmigaOS3.2 and
-AmigaOS3.2-030, drawer SYS:CTerm; configs ~/FS-UAE/Configurations/
+hand-test emulator drives (FS-UAE's Hard Drives/AmigaOS3.2 and
+AmigaOS3.2-030, drawer SYS:CTerm; FS-UAE's configs Configurations/
 A1200-Stock.fs-uae and A1200-030-50.fs-uae; the user starts them on the
 desktop through `systemd-run --user` with SDL Wayland - see
 Knowledge/amiga/toolchain-and-testing.md). `make deploy` installs all
@@ -289,7 +289,7 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    Mono Regular + Bold are in Work:Utils/CTerm/Fonts on the A1200 (not
    in the repo; OFL); set as the user's font on 2026-10-11 (truetype=1, ttsize=16; the old prefs in ENVARC:CTerm.prefs.before-noto).
 1e. **Braille drawn by CTerm (0.3b27)** for the terminal programs
-   (~/Projects/Ideas/terminal-programs.md): U+2800-28FF is is_special
+   (the ideas notes, terminal-programs.md): U+2800-28FF is is_special
    (as lines and blocks, in TrueType too); draw_braille puts 2 x 4
    square dots on the cell grid (dot = min(cw/4, ch/8), at least 1 px),
    in the planar special path and make_cell (RTG and planar painters).
@@ -1550,7 +1550,7 @@ In the order the user and I agreed (2026-10-10):
     SFTP: the browser on /tmp/sftptest1, F5 down 3,000,000 bytes md5-identical,
     F5 up a 10 KB file md5-identical, the "on the host: y/n/g" question.
     Note: ENVARC:CTerm/known_hosts on the A1200 now holds the test server's
-    key for 192.168.68.117:2390; if /tmp is wiped the server gets a new key
+    key for the PC's test server, port 2390; if /tmp is wiped the server gets a new key
     and CTerm warns in red - remove that line then.
   - still not tried on the A1200: password and keyboard-interactive logins; a changed
     host key needing "yes"; known_hosts past 4 KB; Hydra/Ymodem/Xmodem;
@@ -1745,7 +1745,7 @@ buffer takes the last memory.
 
 ## Reuse
 
-AmiClaude (`~/Projects/AmiClaude/amiga/amiclaude.c`), all proven on the
+AmiClaude (the AmiClaude repo, `amiga/amiclaude.c`), all proven on the
 A1200 on 2026-10-09:
 - own public screen with themed `SA_Pens`;
 - full screen;
