@@ -1299,6 +1299,15 @@ static ULONG *pp_glyph(ULONG cp, UWORD st)
     return PP_BLOCK(pph[h].slot);
 }
 
+/* At the end: the painter's glyph store (6 KB with topaz 8: it was
+ * never given back, so every CTerm run left it behind) */
+void painter_free(void)
+{
+    pp_free();
+    pp_font = NULL;
+    ppon = FALSE;
+}
+
 /* For this screen and font? (painter_setup) */
 static void pp_setup(void)
 {

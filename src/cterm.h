@@ -532,6 +532,7 @@ void draw_cursor(BOOL on);
 void cache_free(void);
 void painter_setup(void);
 void painter_forget(void);
+void painter_free(void);              /* at the end: the glyph store */
 void add_scroller(void);
 void update_knob(void);
 int tabbar_h(void);

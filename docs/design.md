@@ -10,6 +10,17 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**0.3b50 (2026-10-16): 6,160 bytes of fast RAM lost on every run, fixed** (found by the csh
+session: Avail FLUSH before and after 5 start/quit). The planar painter's glyph store (ppaint.c's
+pp_bits + pp_blk: 256 slots x 3 x 8 bytes with topaz 8, +16 for the two AllocVecs) was freed only
+when the painter was set up again, never at the end: painter_free() in the teardown. Old - at
+least since 0.3b30. Found by: Avail FLUSH per run (a control without CTerm lost 0); every build
+since 0.3b43 lost the same; an AllocVec tracker (LEAKCHK, file+line) found nothing because
+ppaint.c does not include cterm.h; an early-stop switch (return at start: 0; window opened and
+closed, no main loop: 6160); then builds with one setup step left out each - only without
+painter_setup() + the first redraw was nothing lost. Tool: /tmp scripts, recorded in
+Knowledge/amiga/memory-low-and-measuring.md.
+
 **0.3b49 (2026-10-16):** ▲ ▼ ◀ (U+25B2/25BC/25C0 and their small and hollow forms) drawn by
 draw_shape with a bitmap font (they were '?'; ctop's sort marks). tests/rig.sh NOCSH=1: the ROM
 Shell only. Seen with csh 0.1b11 as BootShell: `CTerm FROM script` whose script ends in EndCLI ->

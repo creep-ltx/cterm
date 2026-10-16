@@ -1926,6 +1926,7 @@ static int cterm_main(int argc, char **argv)
     close_display(FALSE);
     if (ownfont) CloseFont(ownfont);
     cache_free();
+    painter_free();                     /* the glyph store */
     if (rowbuf) FreeVec(rowbuf);
     backdrop_free();
     if (bgsrc) FreeVec(bgsrc);
