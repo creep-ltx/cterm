@@ -8,26 +8,9 @@ are found, with how to make them happen again.
 How each entry was found: *verified* (made to happen), *seen* (happened once, not yet
 made to happen again), *read* (from the source), *suspect* (looks wrong, not checked).
 
-### 1. wget's progress line repeats in a Workbench window
+## Open bugs
 
-*Verified 2026-10-16.* Filed in CUtils TODO.md (entry 4): in a window started with
-`COLS 80 ROWS 20` each `\r` redraw of a line exactly as wide as the window came out on a
-new line; on CTerm's own full screen it redraws in place. If wget's width is right, the
-fault is CTerm's wrap at the last column (a VT100 holds the wrap until the next character).
-
-## Notes for testing
-
-- **Driving the screen menus with wasabi:** `wasabi ui menu "View/Screen/Workbench window"` on
-  CTerm's full-screen (backdrop) window is "picked" but CTerm stays on its own screen, with
-  0.3b50 and 0.3b51 alike. Not looked into: CTerm, or how wasabi picks menus in a backdrop window.
-- In ENV:CTerm.prefs, `mode=` is the **hex** display id, then width and height
-  (`mode=00029004,640,512`); a decimal id silently gives a Workbench window (before 0.3b51
-  CTerm then also saved screen=wb).
-- `screen=own8` + `full=1` gives a 256-colour full screen on an AGA test machine; the
-  Nord theme looks like the A1200's setup. CUtils' screenshots were made this way
-  (CUtils docs/guide/README.md).
-
-### Bitmap font: accented letters beyond Latin-1 and € show as ?
+### 1. Bitmap font: accented letters beyond Latin-1 and € show as ?
 
 *Verified 2026-10-16* (FS-UAE a1200-32-mui5, CTerm 0.3b50 on its own 256-colour screen, an
 Amiga bitmap font), found by the tui.library session (projects-ad). Small, not urgent.
@@ -40,3 +23,15 @@ Amiga bitmap font), found by the tui.library session (projects-ad). Small, not u
   consoles, ready to copy: ~/Projects/CUtils/Libs/tui/src/core.c, `latinA[]` and fallback().
 - To see it: `printf 'Łódź Škoda €\n'` from Linux over ssh/telnet into a CTerm tab with an Amiga
   font, or tui.library's `tuitest` (CUtils/Libs/tui/build/tuitest).
+
+## Notes for testing
+
+- **Driving the screen menus with wasabi:** `wasabi ui menu "View/Screen/Workbench window"` on
+  CTerm's full-screen (backdrop) window is "picked" but CTerm stays on its own screen, with
+  0.3b50 and 0.3b51 alike. Not looked into: CTerm, or how wasabi picks menus in a backdrop window.
+- In ENV:CTerm.prefs, `mode=` is the **hex** display id, then width and height
+  (`mode=00029004,640,512`); a decimal id silently gives a Workbench window (before 0.3b51
+  CTerm then also saved screen=wb).
+- `screen=own8` + `full=1` gives a 256-colour full screen on an AGA test machine; the
+  Nord theme looks like the A1200's setup. CUtils' screenshots were made this way
+  (CUtils docs/guide/README.md).
