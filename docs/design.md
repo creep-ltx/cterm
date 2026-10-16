@@ -325,8 +325,9 @@ on RTG, panes/dwindle/gaps on RTG, name lookup + Esc, ARexx.
    when switching own screen 16 colours + full screen to "Own screen,
    like Workbench" by the menu, maybe after CTermTour (number not noted).
 3. Not yet tried on real hardware: RTS/CTS and carrier detect with a real
-   modem/cable; an ssh login and SFTP on the A1200; Hydra/Ymodem/Xmodem
-   on the A1200; a real BBS on the internet.
+   modem/cable; Hydra/Ymodem/Xmodem on the A1200; a real BBS on the
+   internet. ssh and SFTP on the A1200: done 2026-10-16 (0.3b50, see
+   "ssh on the A1200" below).
 4. Smaller: inactive pane borders are dim (mix 25%) - fine for now;
    kitty pictures only swallowed; ARexx has no PANE DWINDLE / GAPS yet;
    the file browser's key bar shows no shifted labels.
@@ -1530,8 +1531,18 @@ In the order the user and I agreed (2026-10-10):
 
 - **After the audit of 2026-10-10** (Knowledge/amiga/cterm-audit-2026-10-10.md;
   every finding fixed, commits b6f36fc..cefd2fd). Left open:
-  - not yet tried on the A1200: an ssh login (password, keyboard-interactive,
-    a key) - it now uses CTerm's own wiping allocator in libssh2; a changed
+  - **ssh on the A1200, 2026-10-16 (0.3b50, verified):** the PC's firewall lets
+    only the A1200 in on ports 2390-2399 (ufw rule the user added), and
+    `SSHD_ADDR=<PC's LAN address> SSHD_PORT=2390 tests/ssh/test-sshd.sh start`
+    serves there. Tried: a new host's fingerprint question (y + Return; it
+    matched ssh-keygen -lf), a key login (`KEY RAM:key`, CTerm's wiping
+    allocator), the zsh prompt in colour, 158x119 sent to the host, exit;
+    SFTP: the browser on /tmp/sftptest1, F5 down 3,000,000 bytes md5-identical,
+    F5 up a 10 KB file md5-identical, the "on the host: y/n/g" question.
+    Note: ENVARC:CTerm/known_hosts on the A1200 now holds the test server's
+    key for 192.168.68.117:2390; if /tmp is wiped the server gets a new key
+    and CTerm warns in red - remove that line then.
+  - still not tried on the A1200: password and keyboard-interactive logins; a changed
     host key needing "yes"; known_hosts past 4 KB; Hydra/Ymodem/Xmodem;
     two transfers at once (the second refused); the own-screen visitor
     question at quit; ghost letters on a planar screen during a transfer;
