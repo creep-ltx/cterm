@@ -7,6 +7,8 @@ VT100/xterm emulation. Decided 2026-10-09.
 
 ## Start here: where CTerm is (2026-10-11 evening, 0.3b24)
 
+**Open bugs: [TODO.md](../TODO.md)** at the top of the repo. Read it first, fix from the top, add what you find.
+
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
