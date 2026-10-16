@@ -14,7 +14,9 @@ across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
 **0.3b52 (2026-10-16): Latin Extended-A with a bitmap font** (TODO.md, found by the tui.library
 session): draw.c fallback() gives U+0100-017F without accents (latinA[], tui.library's table:
-Łódź -> Lodz) and € E, ™ T, … ., ≈ ~, ∞ 8; they were '?'.
+Łódź -> Lodz) and € E, ™ T, … ., ≈ ~, ∞ 8; they were '?'. **Installed on the A1200** 2026-10-16
+(Work:Utils/CTerm/CTerm, 0.3b50 kept as CTerm-0.3b50.bak; Parts/ unchanged, PART_VERSION 16): seen
+right there with MicroKnight 8 on the RTG screen.
 
 **0.3b51 (2026-10-16): a screen that did not open is no longer saved** (TODO.md had it): every
 fallback to Workbench goes through screen_fallback() (screen.c), which keeps the asked-for
