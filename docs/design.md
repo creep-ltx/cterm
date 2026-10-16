@@ -12,6 +12,10 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**0.3b51 (2026-10-16): a screen that did not open is no longer saved** (TODO.md had it): every
+fallback to Workbench goes through screen_fallback() (screen.c), which keeps the asked-for
+screen in asked_mode/asked_full; save_prefs writes those. switch_display clears them.
+
 **0.3b50 (2026-10-16): 6,160 bytes of fast RAM lost on every run, fixed** (found by the csh
 session: Avail FLUSH before and after 5 start/quit). The planar painter's glyph store (ppaint.c's
 pp_bits + pp_blk: 256 slots x 3 x 8 bytes with topaz 8, +16 for the two AllocVecs) was freed only
