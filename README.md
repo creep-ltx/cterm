@@ -1003,3 +1003,7 @@ downloads the AmiSSL SDK and libssh2 (third_party/fetch.sh) and builds
 libssh2. `make test` checks the emulator core on Linux.
 `tests/serial/` tests serial calls in FS-UAE (its serial port on a TCP
 socket) against a pretend Hayes modem on the PC: see `fakemodem.py`.
+
+## License
+
+MIT, see [LICENSE](LICENSE). A few borrowed files (the Hydra file transfer code, the fonts, the libssh2 patch) keep their own licences, listed there.
