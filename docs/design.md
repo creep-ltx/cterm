@@ -12,6 +12,14 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**0.3b53 (2026-10-17): character widths from utf8.library** (AmigaLibs/utf8, Unicode 16): vt.c's
+cp_width asks the host through `vt_width` (main.c u8width) for U+0300 and up, which opens
+LIBS:utf8.library on the first such character (load on demand); without it (or -1) vt.c's own
+table as before. tui.library 0.5 asks the same library and has the same table when it is missing,
+so programs and the terminal agree on every width (wide characters are two cells in tui now).
+The build needs `../AmigaLibs/utf8/include` (Makefile CFLAGS). Tested in FS-UAE with tui's
+widetest; PC tests unchanged (they leave vt_width NULL). **Not yet on the A1200** (it runs 0.3b52).
+
 **0.3b52 (2026-10-16): Latin Extended-A with a bitmap font** (TODO.md, found by the tui.library
 session): draw.c fallback() gives U+0100-017F without accents (latinA[], tui.library's table:
 Łódź -> Lodz) and € E, ™ T, … ., ≈ ~, ∞ 8; they were '?'. **Installed on the A1200** 2026-10-16

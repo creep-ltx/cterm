@@ -341,9 +341,20 @@ static void dirty_all(Vt *v)
     v->any_dirty = 1;
 }
 
+/* The host's widths (CTerm: utf8.library's, Unicode 16), for U+0300 and
+ * up: 0, 1 or 2, or -1 for the table below (also NULL). tui.library asks the same
+ * library, and has the same table when it is missing, so programs and
+ * the terminal agree on every character. */
+int (*vt_width)(uint32_t c);
+
 /* How many cells a character takes: 0 (a combining mark), 1 or 2. */
 static int cp_width(uint32_t c)
 {
+    if (c >= 0x300 && vt_width) {
+        int w = vt_width(c);
+        if (w >= 0)
+            return w;
+    }
     /* the common ones first: Latin-1, and box lines, blocks, arrows and
      * symbols (U+2100-2E7F) - one or two compares, not twenty */
     if (c < 0x300 || (c >= 0x2100 && c < 0x2E80))

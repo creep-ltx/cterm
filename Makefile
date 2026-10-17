@@ -5,7 +5,7 @@ CC      = $(HOME)/opt/amiga/bin/m68k-amigaos-gcc
 # -fbbb=-: Bebbo's own optimizer pass off for all of CTerm (it was for
 # keymap.c only): 0.3b39's click into a pane under the scratchpad never
 # reached pane_activate with it on - seen on the A1200, gone with it off.
-CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -fbbb=- -Wall -Wno-pointer-sign -Iinclude
+CFLAGS  = -O2 -m68020 -noixemul -fomit-frame-pointer -fbbb=- -Wall -Wno-pointer-sign -Iinclude -I../AmigaLibs/utf8/include
 
 all: CTerm CTermSSH protocols parts test
 

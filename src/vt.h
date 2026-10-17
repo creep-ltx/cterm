@@ -60,6 +60,9 @@ Vt *vt_new(int cols, int rows, int scrollback);
 /* Set by the host: may the history take n more bytes for a new line?
  * 0: it stops growing there (until a clear). NULL: always. */
 extern int (*vt_room)(long n);
+/* the host's character widths for U+0300 and up (0, 1, 2; -1 or NULL:
+ * vt.c's own table) */
+extern int (*vt_width)(uint32_t c);
 void vt_free(Vt *vt);
 void vt_resize(Vt *vt, int cols, int rows);
 

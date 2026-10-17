@@ -36,6 +36,7 @@
  *   askwin.c   a line asked in a small window (PhoneBook, Files)
  */
 #include "cterm.h"
+#include <proto/utf8.h>
 
 void __chkabort(void);
 static void title_update(void);
@@ -139,6 +140,7 @@ struct Library *AslBase = NULL;
 struct Library *DiskfontBase = NULL;
 struct Library *TTEngineBase = NULL;
 struct Library *CyberGfxBase = NULL;
+struct Library *Utf8Base = NULL;   /* widths; opened on the first wide-ish character */
 
 void __chkabort(void) {}
 #define SCROLLBACK   2000
@@ -1490,6 +1492,23 @@ ULONG history_lines(void)
     return part / (82 * sizeof(VtCell));
 }
 
+/* Character widths from utf8.library (Unicode 16, the same tui.library
+ * uses), opened when the first character from U+0300 up needs one (load
+ * on demand); without it -1: vt.c's own table, which tui.library also
+ * has, so the two agree either way. */
+static int u8width(uint32_t c)
+{
+    static int tried;
+    LONG w;
+    if (!tried) {
+        tried = 1;
+        Utf8Base = OpenLibrary("utf8.library", 0);
+    }
+    if (!Utf8Base) return -1;
+    w = Utf8CharWidth(c);
+    return w < 0 ? 1 : (int)w;
+}
+
 /* The emulator's question before each new history line (only while a
  * history grows, at most its length per tab). Free memory is counted
  * every 64th line or when what was left last time is used up: AvailMem
@@ -1832,6 +1851,7 @@ static int cterm_main(int argc, char **argv)
     ML("book");
     con_timer_init();
     vt_room = hist_room;
+    vt_width = u8width;
     vt_decode = pics_decode;            /* iTerm2's files: Parts/Pictures */
     vt_decode_free = pics_decode_free;
     vt_inflate = pics_inflate;          /* kitty's zlib'ed pixels: the same */
@@ -1939,6 +1959,7 @@ static int cterm_main(int argc, char **argv)
     close_tt();
     if (TTEngineBase) CloseLibrary(TTEngineBase);
     if (CyberGfxBase) CloseLibrary(CyberGfxBase);
+    if (Utf8Base) CloseLibrary(Utf8Base);
     con_timer_free();
     if (DiskfontBase) CloseLibrary(DiskfontBase);
     if (AslBase) CloseLibrary(AslBase);
