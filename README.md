@@ -1006,4 +1006,4 @@ socket) against a pretend Hayes modem on the PC: see `fakemodem.py`.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). A few borrowed files (the Hydra file transfer code, the fonts, the libssh2 patch) keep their own licences, listed there.
+MIT, see [LICENSE](LICENSE). A few borrowed files (the Hydra file transfer code, the fonts, the libssh2 patch) keep their own licences, listed in [THIRD-PARTY.md](THIRD-PARTY.md).
