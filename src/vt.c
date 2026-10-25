@@ -62,6 +62,7 @@ struct Vt {
     int autowrap, origin, insert, lnm, cursor_on, app_cursor, app_keypad;
     int bracketed, reverse, utf8;
     int keysahead;                  /* ?7727: keys typed ahead stay keys (a shell editing its own line) */
+    int zbit;                       /* OSC 7728;N: Ctrl-Z signals bit N to the break task (csh 0.1b15) */
     int mouse, mouse_sgr;               /* 9, 1000, 1002, 1003; SGR form */
     int focus, sync;                    /* 1004 focus reports; 2026 */
     int cshape, cblink;                 /* DECSCUSR: 0 block, 1 underline,
@@ -2833,6 +2834,14 @@ static void osc_done(Vt *v)
         osc_link(v, v->osc + i + 1);
     else if (v->osc[i] == ';' && n == 1337)
         osc_1337(v, i + 1);             /* iTerm2's picture in pieces */
+    else if (v->osc[i] == ';' && n == 7728) {
+        /* csh while a pipe runs: Ctrl-Z is its signal N (16-31; the
+         * console checks), nothing when N is empty (0) */
+        int b = 0;
+        for (i++; v->osc[i] >= '0' && v->osc[i] <= '9'; i++)
+            if (b < 100) b = b * 10 + (v->osc[i] - '0');
+        v->zbit = b;
+    }
 }
 
 /* ---- control characters ------------------------------------------- */
@@ -4079,6 +4088,7 @@ int vt_app_cursor(const Vt *v) { return v->app_cursor; }
 int vt_app_keypad(const Vt *v) { return v->app_keypad; }
 int vt_bracketed_paste(const Vt *v) { return v->bracketed; }
 int vt_keys_ahead(const Vt *v) { return v->keysahead; }
+int vt_zbit(const Vt *v) { return v->zbit; }
 int vt_alt_screen(const Vt *v) { return v->alt; }
 int vt_reverse_video(const Vt *v) { return v->reverse; }
 int vt_mouse(const Vt *v, int *sgr) { *sgr = v->mouse_sgr; return v->mouse; }

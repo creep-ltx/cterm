@@ -243,6 +243,7 @@ void term_write(void *t, const UBYTE *b, LONG n)
 /* the tab's own size: its pane's */
 int term_cols(void *t) { return vt_cols(((struct Tab *)t)->t_vt); }
 int term_keys_ahead(void *t) { term_sync(t); return vt_keys_ahead(((struct Tab *)t)->t_vt); }
+int term_zbit(void *t) { term_sync(t); return vt_zbit(((struct Tab *)t)->t_vt); }
 int term_rows(void *t) { return vt_rows(((struct Tab *)t)->t_vt); }
 int term_cursor_x(void *t)
 {

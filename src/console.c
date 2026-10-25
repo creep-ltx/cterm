@@ -784,6 +784,21 @@ void con_keys(struct Con *c, const UBYTE *b, LONG n)
             send_break(c, SIGBREAKF_CTRL_C << (b[i] - 3));
             return;
         }
+    /* Ctrl-Z while csh waits for a pipe (it said OSC 7728;N): signal N to
+     * the break task, csh - not input. Only a user bit (16-31), only to a
+     * task that still exists. */
+    if (!c->rawmode)
+        for (i = 0; i < n; i++)
+            if (b[i] == 26) {
+                int z = term_zbit(c->user);
+                if (z >= 16 && z <= 31) {
+                    Forbid();
+                    if (task_alive(c->breaktask))
+                        Signal(c->breaktask, 1UL << z);
+                    Permit();
+                    return;
+                }
+            }
     if (c->rawmode) {
         push_input(c, b, n);
         serve(c);

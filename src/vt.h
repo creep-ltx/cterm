@@ -105,6 +105,7 @@ int vt_app_cursor(const Vt *vt);    /* DECCKM: arrows send ESC O A */
 int vt_app_keypad(const Vt *vt);
 int vt_bracketed_paste(const Vt *vt);
 int vt_keys_ahead(const Vt *vt);   /* CSI ?7727 h: keys typed ahead stay keys (csh) */
+int vt_zbit(const Vt *vt);         /* OSC 7728;N: Ctrl-Z's signal bit, 0 = none (csh) */
 int vt_alt_screen(const Vt *vt);
 /* The local console went raw (1) or cooked (0): a raw program's first
  * whole-screen draw gets the alternate screen until it is cooked again. */

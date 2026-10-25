@@ -63,5 +63,6 @@ int term_cursor_y(void *tab);
 int term_cols(void *tab);
 int term_rows(void *tab);
 int term_keys_ahead(void *tab);         /* the shell asked: typed-ahead keys stay keys */
+int term_zbit(void *tab);               /* OSC 7728: Ctrl-Z's signal bit (16-31), else none */
 
 #endif
