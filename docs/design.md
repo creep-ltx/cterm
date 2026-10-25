@@ -16,7 +16,7 @@ across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 names a signal; Ctrl-Z typed while the tab's console is not raw sends it to the break task
 (console.c con_keys, user bits 16-31 only, task_alive). csh 0.1b15 sends it while it waits for a
 pipe (it knows CTerm by ID_CTRM); Ctrl-Z then gives the prompt back with the pipe as a job.
-Verified in FS-UAE 3.2.1. Not on the A1200 yet.
+Verified in FS-UAE 3.2.1; INSTALLED on the A1200 2026-10-25 (CTerm-0.3b54.bak kept), Ctrl-Z checked there.
 
 **0.3b54 (2026-10-25, INSTALLED on the A1200 as Work:Utils/CTerm/CTerm, CTerm-0.3b53.bak kept; the user asked): CHANGE_SIGNAL takes every non-task as a port** (src/console.c): a
 process's own pr_MsgPort has ln_Type 0 on 3.2, so the old NT_MSGPORT test ignored the Shell
