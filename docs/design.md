@@ -12,6 +12,10 @@ VT100/xterm emulation. Decided 2026-10-09.
 **The version string is in src/ver.c** (linked first, not through -flto: in the data it fell
 across 128 KB of the file and C:Version showed "CTm 0.3b33"). Bump it there.
 
+**0.3b54 (2026-10-25): CHANGE_SIGNAL takes every non-task as a port** (src/console.c): a
+process's own pr_MsgPort has ln_Type 0 on 3.2, so the old NT_MSGPORT test ignored the Shell
+pointing Ctrl-C back at itself. Same fix as CCON 1.3.1b2 (Knowledge amiga/amigados-handlers.md).
+
 **0.3b53 (2026-10-17): character widths from utf8.library** (AmigaLibs/utf8, Unicode 16): vt.c's
 cp_width asks the host through `vt_width` (main.c u8width) for U+0300 and up, which opens
 LIBS:utf8.library on the first such character (load on demand); without it (or -1) vt.c's own

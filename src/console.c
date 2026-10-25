@@ -1105,14 +1105,18 @@ void con_handle(struct Con *c, ULONG sigs)
              * seen on 3.2.3: 0x5C past the process), not a task: Signal()
              * on a port writes into its message list. Take its task;
              * answer with what was given before. */
+            /* A task or process is kept as it is; anything else is a port.
+             * A process's own pr_MsgPort has ln_Type 0 on 3.2, not
+             * NT_MSGPORT (CCON's tests/ccsig, FS-UAE 3.2.1 and the A1200,
+             * 2026-10-25): checking for NT_MSGPORT ignored the Shell
+             * pointing the break back at itself. */
             struct Node *n = (struct Node *)p->dp_Arg2;
             LONG old = c->breakarg;
             if (n) {
-                if (n->ln_Type == NT_MSGPORT &&
-                    (((struct MsgPort *)n)->mp_Flags & PF_ACTION) == PA_SIGNAL)
-                    c->breaktask = ((struct MsgPort *)n)->mp_SigTask;
-                else if (n->ln_Type == NT_TASK || n->ln_Type == NT_PROCESS)
+                if (n->ln_Type == NT_TASK || n->ln_Type == NT_PROCESS)
                     c->breaktask = (struct Task *)n;
+                else if ((((struct MsgPort *)n)->mp_Flags & PF_ACTION) == PA_SIGNAL)
+                    c->breaktask = ((struct MsgPort *)n)->mp_SigTask;
                 c->breakarg = p->dp_Arg2;
             }
             ReplyPkt(p, DOSTRUE, old);
